@@ -6,7 +6,7 @@ use lazy_domain::{
     ConversationId, EventSeq, MessageDocument, MessageId, OperationId, Timestamp, UserId,
     WorkspaceRole,
 };
-use lazy_protocol::{ApiError, Workspace};
+use lazy_protocol::{ApiError, BrowsedChannel, Conversation, ConversationUserState, Workspace};
 use serde::{Deserialize, Serialize};
 
 use crate::cache::ContentCache;
@@ -198,4 +198,65 @@ impl RequestError {
     pub(crate) fn is_unauthenticated(&self) -> bool {
         matches!(self, Self::Rejected(error) if error.code == lazy_protocol::ErrorCode::Unauthenticated)
     }
+}
+
+/// Which management action an [`ActionState`] belongs to. Each kind has one state at a time, so a
+/// dialog can show progress and errors for exactly the thing it started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActionKind {
+    CreateChannel,
+    /// Opening (finding or creating) a direct or group conversation.
+    OpenConversation,
+    /// Loading the directory of public channels.
+    Browse,
+    Join(ConversationId),
+    Leave(ConversationId),
+    AddMembers(ConversationId),
+    RemoveMember(ConversationId, UserId),
+    /// Renaming, or changing the topic or description.
+    UpdateConversation(ConversationId),
+    Archive(ConversationId),
+    Unarchive(ConversationId),
+    SetFavorite(ConversationId),
+}
+
+/// Progress of one management action. Read with `ClientCore::action`; changes arrive as
+/// `Change::ActionChanged`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ActionState {
+    /// Nothing started, finished successfully, or dismissed.
+    #[default]
+    Idle,
+    /// A request is in flight, or its outcome is being reconciled with the server.
+    InFlight,
+    /// Failed, with a message suitable for showing in the dialog. Starting the action again, or
+    /// `Input::DismissAction`, clears it.
+    Failed(String),
+}
+
+/// What a management request returned, reported by the runtime in `Input::ActionResult`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionOutcome {
+    /// The conversation after join, update, archive, unarchive, or add members.
+    Conversation(Conversation),
+    /// The person's state after favorite.
+    UserState(ConversationUserState),
+    /// The public channel directory.
+    Browse(Vec<BrowsedChannel>),
+    /// The request succeeded and returned nothing to apply (leave, remove member).
+    Done,
+}
+
+/// The sidebar sections, each already ordered for display.
+///
+/// Every conversation the person belongs to appears in exactly one section: favorites first
+/// (whatever their kind), then the rest split into channels and people.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Sidebar {
+    /// Favorite conversations of any kind, ordered by title.
+    pub favorites: Vec<ConversationId>,
+    /// Other channels, ordered by name.
+    pub channels: Vec<ConversationId>,
+    /// Other direct and group conversations, most recently active first.
+    pub direct_and_group: Vec<ConversationId>,
 }

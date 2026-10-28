@@ -28,6 +28,11 @@ impl RootView {
         }
     }
 
+    /// The signed-in shell, once there is one.
+    pub fn shell(&self) -> Option<&Entity<ShellView>> {
+        self.shell.as_ref()
+    }
+
     fn splash(theme: &Theme, headline: &str, detail: Option<String>) -> gpui::Div {
         div()
             .size_full()

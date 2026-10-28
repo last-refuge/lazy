@@ -159,6 +159,19 @@ pub fn request_fingerprint(
     Ok(hasher.finalize().into())
 }
 
+/// Fingerprint of a command other than a send, stored with its receipt. `tag` names the command
+/// and each part is length-prefixed, so different commands or different splits of the same bytes
+/// never collide.
+pub fn command_fingerprint(tag: &str, parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(tag.as_bytes());
+    for part in parts {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part);
+    }
+    hasher.finalize().into()
+}
+
 fn fill_random(buffer: &mut [u8]) -> Result<(), AppError> {
     getrandom::fill(buffer).map_err(|e| AppError::internal(format!("no system randomness: {e}")))
 }
@@ -236,6 +249,18 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn command_fingerprints_separate_commands_and_part_boundaries() {
+        let base = command_fingerprint("create_channel", &[b"ab", b"c"]);
+        assert_eq!(base, command_fingerprint("create_channel", &[b"ab", b"c"]));
+        assert_ne!(
+            base,
+            command_fingerprint("open_conversation", &[b"ab", b"c"])
+        );
+        assert_ne!(base, command_fingerprint("create_channel", &[b"a", b"bc"]));
+        assert_ne!(base, command_fingerprint("create_channel", &[b"abc"]));
     }
 
     #[test]

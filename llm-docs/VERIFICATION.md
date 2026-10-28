@@ -1,12 +1,12 @@
 # Verification record
 
-Outcomes of checking the Phase 1 MVP, recorded as **measured** (a number from a defined run), **observed** (seen working, not benchmarked), **failed** (found broken, with what happened), or **unverified** (not checked; do not assume it works). Taken on 2026-10-28 on Linux (Hyprland/Wayland, one 5120×2160 output at 1.25× scale), Rust 1.99.0, PostgreSQL 18.6, GPUI at Zed revision `e5bdd01c`.
+Outcomes of checking the Phase 1 MVP and, in the last section, Phase 2 slice 2A, recorded as **measured** (a number from a defined run), **observed** (seen working, not benchmarked), **failed** (found broken, with what happened), or **unverified** (not checked; do not assume it works). Taken on 2026-10-28 on Linux (Hyprland/Wayland, one 5120×2160 output at 1.25× scale), Rust 1.99.0, PostgreSQL 18.6, GPUI at Zed revision `e5bdd01c`.
 
 ## Measured
 
 | Check | Result |
 | --- | --- |
-| `cargo test --workspace` | 348 passed, 0 failed, 1 ignored (the real-keyring test, run separately) across 31 suites |
+| `cargo test --workspace` | 525 passed, 0 failed, 1 ignored (the real-keyring test, run separately) across 42 suites |
 | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets` | no differences, no warnings |
 | Messaging end-to-end suite (`crates/lazy-e2e/tests/messaging.rs`, 8 tests) repeated | 30 of 30 runs passed |
 | GUI end-to-end test (`crates/lazy-e2e/tests/gui.rs`) repeated | 10 of 10 runs passed, no leaked databases |
@@ -71,3 +71,31 @@ While trying to see the running app, I took one screenshot of a screen region co
 - No caret blink in the composer. Double-click-drag selects by character, not word.
 - Event-log retention defaults to 30 days and keeps the newest 1,000 events; receipts are kept indefinitely.
 - Registration is open to anyone who can reach the server; the first registrant becomes the workspace owner. There is no rate limiting.
+
+## Phase 2, slice 2A: conversations and read state
+
+**Measured.** `cargo test --workspace`: 518 passed, 0 failed. Server: 98 tests (79 integration, 19 unit), including a stress test with 400 messages, concurrent senders, a running pruner, and membership churn while 32 subscribers are connected; the author confirmed a deliberate leak mutation fails the stress test and 5 of 7 delivery tests. Client: 80 new core scenarios, 3 new transport tests, and a simulation extended with read state that passed 150,000 cases (two injected bugs confirmed its checks bite). UI: 147 tests. Conversation end-to-end suite (`crates/lazy-e2e/tests/conversations.rs`, 5 tests) passed 30 of 30 runs; the older messaging suite 15 of 15 and the GUI test 5 of 5 after the contract change. The unread-count query on a 100,000-message conversation: 4 buffers, 0.04 ms (the first version scanned all 100,000 rows).
+
+**Observed, with real clients against the real server and Postgres:**
+- Creating a public channel, browsing it from another account, joining, chatting, leaving (member counts update for the other side); a new account belongs to the default channel only; nobody can leave or archive the default channel.
+- A private channel is invisible in browsing until the creator adds someone; the person added sees it appear and its earlier history.
+- **Removal while offline.** A member's network drops, they are removed and the channel keeps talking, and on reconnect they learn they were removed, are told so, and never see what followed. After a restart nothing about the channel returns from their local cache. (The server's own tests check the same at the protocol level: no message events reach a removed subscriber on replay.)
+- Direct conversations: opening the same one twice, or both people opening it at the same instant, yields exactly one; titles read naturally for each side; adding a person opens a different group with no history while the original stays intact; a person added to the group never sees the earlier direct conversation.
+- Read state across two devices of one account: unread counts accumulate on both, reading on one clears both, the person's own messages never count as unread, messages that arrive while they watch the bottom never pile up, and a favorite set on one device appears on the other.
+- Archiving keeps history readable, a send into an archived channel is refused with a visible failed row, unarchiving reopens it, and a taken channel name is refused with an explanation.
+- Offscreen renders of the new UI (sidebar with Favorites, Channels, Direct messages, unread and mention badges, "New messages" divider, header actions, every dialog, the archived and empty-workspace states, and the create-channel dialog at the 640×480 minimum) were looked at and corrected.
+
+**Failed, and fixed (found by the forks' tests):** the details dialog's "Add people" never opened because the dialog dropped its own subscription on close; word selection could split a grapheme cluster and undo/redo could restore a caret mid-cluster (both found by a property test that then passed 12 of 12 repeats); a stale mark-read answer can leave the unread count briefly off until the next state event corrects it (documented, not a defect in the rules).
+
+**Failed after the slice, and fixed (reported from real use):**
+- **Text typed into any input was unreadable when the system theme changed after the window opened** (dark brown text on a dark brown box). Every text input took its colors from the theme once, at creation, while everything around it re-read the theme on each render, so a window that opened believing the system was light and then learned it was dark kept light-theme text on dark-theme boxes. Reproduced offscreen (`screens` scene 23), fixed by deriving an input's style from the live theme on every render, and covered by four regression tests that fail when the fix is disabled.
+- **An existing profile showed "the content cache was unreadable".** A cache saved before this slice could not be parsed by the new code and was reported as corruption. The cache now records its protocol version; one from an older version is discarded silently, damage is still reported, a newer one is left untouched. Three tests.
+- **A running server lost its database** when I stopped the shared dev Postgres at the end of a verification run. Tests now use a separate instance (`scripts/test.sh`, port 54330); the dev instance is never stopped or reset by test runs.
+
+**Unverified:**
+- The new dialogs and menus have no screen-reader labels, and their focus rings and hover states have not been looked at on a real display.
+- Real IME in the new dialogs' text fields.
+- Switching the system between light and dark while the app runs, on a real compositor: the fix is verified by installing the other theme in a headless window, not by an actual system change.
+- Window-activation reporting: the test window never reports itself active, so only the initial report is proven.
+- "Add people" to a channel lists everyone in the workspace, because the client has no member list for a channel yet.
+- The server and client rules for what leave and remove return are accepted as any success status; the contract does not pin them.

@@ -5,15 +5,16 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use axum::body::Bytes;
 use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use lazy_client_core::{
-    CachedTimeline, CachedWorkspace, ContentCache, Effect, Input, JournalEntry, RequestError,
-    SocketEvent,
+    ActionKind, ActionOutcome, CachedTimeline, CachedWorkspace, ContentCache, Effect, Input,
+    JournalEntry, RequestError, SocketEvent,
 };
 use lazy_client_runtime::{
     BackoffPolicy, MemoryStorage, Runtime, RuntimeConfig, SecretVault, SecureStorage,
@@ -24,9 +25,11 @@ use lazy_domain::{
     MessageId, OperationId, Timestamp, UserId, Username, WorkspaceId, WorkspaceRole,
 };
 use lazy_protocol::{
-    ApiError, BootstrapResponse, ClientFrame, Conversation, ErrorCode, Event, EventEnvelope,
-    LoginRequest, Message, OperationStatus, PROTOCOL_VERSION, SendMessageRequest,
-    SendMessageResponse, ServerFrame, SessionResponse, SessionToken, User, Workspace,
+    AddMembersRequest, ApiError, BootstrapResponse, BrowseChannelsResponse, BrowsedChannel,
+    ClientFrame, Conversation, ConversationResponse, ConversationUserState, CreateChannelRequest,
+    ErrorCode, Event, EventEnvelope, LoginRequest, Message, OpenConversationRequest,
+    OperationStatus, PROTOCOL_VERSION, SendMessageRequest, SendMessageResponse, ServerFrame,
+    SessionResponse, SessionToken, UpdateConversationRequest, User, UserStateResponse, Workspace,
     WorkspaceBootstrap,
 };
 use tempfile::TempDir;
@@ -41,9 +44,31 @@ enum SendBehavior {
     Malformed,
 }
 
+/// What the conversation-management routes of the stub do with the next request.
+#[derive(Clone, Copy)]
+enum ApiBehavior {
+    Ok,
+    /// Success with an empty JSON object, where the route usually answers `204 No Content`.
+    OkWithJson,
+    NameTaken,
+    Forbidden,
+    ServerError,
+}
+
+/// A request to one of the conversation-management routes.
+#[derive(Clone, Debug)]
+struct Call {
+    method: String,
+    path: String,
+    body: serde_json::Value,
+}
+
 struct Stub {
     user: User,
     workspace: WorkspaceId,
+    /// Every request to the conversation-management routes, oldest first.
+    calls: Mutex<Vec<Call>>,
+    api_plan: Mutex<VecDeque<ApiBehavior>>,
     logins: AtomicUsize,
     sends: AtomicUsize,
     status_calls: AtomicUsize,
@@ -86,6 +111,8 @@ impl Stub {
             snapshot_required_on_first_session: AtomicBool::new(false),
             active_sessions: AtomicUsize::new(0),
             afters: Mutex::new(Vec::new()),
+            calls: Mutex::new(Vec::new()),
+            api_plan: Mutex::new(VecDeque::new()),
         })
     }
 
@@ -107,6 +134,24 @@ impl Stub {
             revision: 1,
             seq: EventSeq::new(seq).unwrap(),
         }
+    }
+}
+
+/// A public channel the stub reports.
+fn conversation(workspace: WorkspaceId, name: &str) -> Conversation {
+    Conversation {
+        id: ConversationId::generate(),
+        workspace_id: workspace,
+        kind: lazy_domain::ConversationKind::Channel,
+        name: Some(ChannelName::parse(name).unwrap()),
+        topic: None,
+        description: None,
+        visibility: ChannelVisibility::Public,
+        archived: false,
+        is_default: false,
+        created_by: None,
+        participants: Vec::new(),
+        member_count: 1,
     }
 }
 
@@ -147,14 +192,8 @@ async fn bootstrap(State(s): State<Arc<Stub>>, headers: HeaderMap) -> Response {
                 name: "Stub".into(),
             },
             role: WorkspaceRole::Member,
-            conversations: vec![Conversation {
-                id: ConversationId::generate(),
-                workspace_id: s.workspace,
-                name: ChannelName::parse("general").unwrap(),
-                topic: None,
-                visibility: ChannelVisibility::Public,
-                archived: false,
-            }],
+            conversations: vec![conversation(s.workspace, "general")],
+            user_state: Vec::new(),
             members: vec![s.user.clone()],
             head: EventSeq::new(10).unwrap(),
         }],
@@ -311,6 +350,70 @@ async fn serve_socket(stub: Arc<Stub>, mut socket: WebSocket) {
     }
 }
 
+/// Stands in for every conversation-management route: records the request and answers with a
+/// canned success, or with the failure the test asked for.
+async fn conversation_api(
+    State(stub): State<Arc<Stub>>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    stub.record(uri.path(), &headers);
+    let call = Call {
+        method: method.to_string(),
+        path: uri.path().to_owned(),
+        body: serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+    };
+    stub.calls.lock().unwrap().push(call);
+    let behavior = stub
+        .api_plan
+        .lock()
+        .unwrap()
+        .pop_front()
+        .unwrap_or(ApiBehavior::Ok);
+    let failure = |status: StatusCode, code: ErrorCode| {
+        (status, Json(ApiError::new(code, "no"))).into_response()
+    };
+    match behavior {
+        ApiBehavior::NameTaken => return failure(StatusCode::CONFLICT, ErrorCode::NameTaken),
+        ApiBehavior::Forbidden => return failure(StatusCode::FORBIDDEN, ErrorCode::Forbidden),
+        ApiBehavior::ServerError => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        ApiBehavior::Ok | ApiBehavior::OkWithJson => {}
+    }
+    let segments: Vec<&str> = uri.path().trim_matches('/').split('/').collect();
+    let last = segments.last().copied().unwrap_or_default();
+    let canned = || {
+        Json(ConversationResponse {
+            conversation: conversation(stub.workspace, "design"),
+        })
+    };
+    match (method.as_str(), last) {
+        ("GET", "browse") => Json(BrowseChannelsResponse {
+            channels: vec![BrowsedChannel {
+                conversation: conversation(stub.workspace, "design"),
+                joined: false,
+            }],
+        })
+        .into_response(),
+        ("PUT", "favorite") | ("POST", "read") => Json(UserStateResponse {
+            state: ConversationUserState {
+                conversation_id: ConversationId::generate(),
+                favorite: true,
+                last_read: EventSeq::new(7).unwrap(),
+                unread_count: 2,
+                mention_count: 0,
+            },
+        })
+        .into_response(),
+        ("POST", "leave") | ("DELETE", _) => match behavior {
+            ApiBehavior::OkWithJson => Json(serde_json::json!({})).into_response(),
+            _ => StatusCode::NO_CONTENT.into_response(),
+        },
+        _ => canned().into_response(),
+    }
+}
+
 fn router(stub: Arc<Stub>) -> Router {
     Router::new()
         .route("/v1/auth/login", post(login))
@@ -321,6 +424,7 @@ fn router(stub: Arc<Stub>) -> Router {
         )
         .route("/v1/operations/{operation_id}", get(operation_status))
         .route("/v1/realtime", get(realtime))
+        .fallback(conversation_api)
         .with_state(stub)
 }
 
@@ -1016,14 +1120,7 @@ fn sample_cache(cursor: i64, messages: usize) -> ContentCache {
         id: WorkspaceId::generate(),
         name: "Cached workspace".into(),
     };
-    let conversation = Conversation {
-        id: ConversationId::generate(),
-        workspace_id: workspace.id,
-        name: ChannelName::parse("general").unwrap(),
-        topic: None,
-        visibility: ChannelVisibility::Public,
-        archived: false,
-    };
+    let conversation = conversation(workspace.id, "general");
     let timeline = CachedTimeline {
         conversation: conversation.id,
         messages: (0..messages)
@@ -1049,6 +1146,7 @@ fn sample_cache(cursor: i64, messages: usize) -> ContentCache {
             members: vec![me],
             cursor: EventSeq::new(cursor).unwrap(),
             timelines: vec![timeline],
+            user_state: Vec::new(),
         }],
     }
 }
@@ -1294,5 +1392,524 @@ fn unavailable_secure_storage_is_reported_and_nothing_is_silently_unprotected() 
     assert_eq!(operation, entry.operation_id);
     let files: Vec<_> = std::fs::read_dir(client.profile.path()).unwrap().collect();
     assert!(files.is_empty(), "nothing was written unencrypted");
+    client.shutdown();
+}
+
+// ----- Conversation management -----
+
+fn last_call(server: &Server) -> Call {
+    server
+        .stub
+        .calls
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .expect("the stub saw a request")
+}
+
+fn call_count(server: &Server) -> usize {
+    server.stub.calls.lock().unwrap().len()
+}
+
+/// Runs one effect and returns the input it produced and the request the stub saw.
+fn run_effect(
+    client: &mut Client,
+    server: &Server,
+    effect: Effect,
+    matches: impl Fn(&Input) -> bool,
+) -> (Input, Call) {
+    client.execute(vec![effect]);
+    let input = client.expect("the effect's result", matches);
+    (input, last_call(server))
+}
+
+fn action_result(kind: ActionKind) -> impl Fn(&Input) -> bool {
+    move |input| matches!(input, Input::ActionResult { kind: k, .. } if *k == kind)
+}
+
+#[test]
+fn every_conversation_request_uses_its_documented_route_method_and_body() {
+    let server = Server::start();
+    let (mut client, _) = Client::start(&server);
+    client.login();
+    let workspace = server.stub.workspace;
+    let conversation = ConversationId::generate();
+    let user = UserId::generate();
+    let ok = |input: &Input| -> bool {
+        match input {
+            Input::ActionResult { result, .. } => result.is_ok(),
+            Input::ConversationCommandResult { result, .. } => result.is_ok(),
+            Input::MarkReadResult { result, .. } => result.is_ok(),
+            _ => false,
+        }
+    };
+
+    // Create a channel.
+    let operation = OperationId::generate();
+    let (input, call) = run_effect(
+        &mut client,
+        &server,
+        Effect::CreateChannel {
+            workspace,
+            request: CreateChannelRequest {
+                operation_id: operation,
+                name: ChannelName::parse("design").unwrap(),
+                visibility: ChannelVisibility::Private,
+                topic: Some("pixels".into()),
+                description: None,
+            },
+        },
+        |i| matches!(i, Input::ConversationCommandResult { .. }),
+    );
+    assert!(ok(&input));
+    assert!(
+        matches!(&input, Input::ConversationCommandResult { operation: o, .. } if *o == operation)
+    );
+    assert_eq!(
+        (call.method.as_str(), call.path.as_str()),
+        (
+            "POST",
+            format!("/v1/workspaces/{workspace}/channels").as_str()
+        )
+    );
+    assert_eq!(call.body["operation_id"], operation.to_string());
+    assert_eq!(call.body["name"], "design");
+    assert_eq!(call.body["visibility"], "private");
+    assert_eq!(call.body["topic"], "pixels");
+    assert!(call.body["description"].is_null());
+
+    // Open a conversation.
+    let operation = OperationId::generate();
+    let (input, call) = run_effect(
+        &mut client,
+        &server,
+        Effect::OpenConversation {
+            workspace,
+            request: OpenConversationRequest {
+                operation_id: operation,
+                participants: vec![user],
+            },
+        },
+        |i| matches!(i, Input::ConversationCommandResult { .. }),
+    );
+    assert!(ok(&input));
+    assert_eq!(call.method, "POST");
+    assert_eq!(
+        call.path,
+        format!("/v1/workspaces/{workspace}/conversations")
+    );
+    assert_eq!(
+        call.body["participants"],
+        serde_json::json!([user.to_string()])
+    );
+
+    // Browse.
+    let (input, call) = run_effect(
+        &mut client,
+        &server,
+        Effect::BrowseChannels { workspace },
+        action_result(ActionKind::Browse),
+    );
+    let Input::ActionResult {
+        result: Ok(ActionOutcome::Browse(channels)),
+        ..
+    } = input
+    else {
+        panic!("expected the directory");
+    };
+    assert_eq!(channels.len(), 1);
+    assert_eq!(
+        (call.method.as_str(), call.path.as_str()),
+        (
+            "GET",
+            format!("/v1/workspaces/{workspace}/channels/browse").as_str()
+        )
+    );
+
+    // Join, archive, unarchive: POST with no body, answered with the conversation.
+    for (effect, kind, action) in [
+        (
+            Effect::JoinChannel { conversation },
+            ActionKind::Join(conversation),
+            "join",
+        ),
+        (
+            Effect::ArchiveConversation { conversation },
+            ActionKind::Archive(conversation),
+            "archive",
+        ),
+        (
+            Effect::UnarchiveConversation { conversation },
+            ActionKind::Unarchive(conversation),
+            "unarchive",
+        ),
+    ] {
+        let (input, call) = run_effect(&mut client, &server, effect, action_result(kind));
+        assert!(
+            matches!(
+                input,
+                Input::ActionResult {
+                    result: Ok(ActionOutcome::Conversation(_)),
+                    ..
+                }
+            ),
+            "{action}"
+        );
+        assert_eq!(call.method, "POST", "{action}");
+        assert_eq!(
+            call.path,
+            format!("/v1/conversations/{conversation}/{action}")
+        );
+        assert!(call.body.is_null(), "{action} sends no body");
+    }
+
+    // Leave: POST, answered with no content.
+    let (input, call) = run_effect(
+        &mut client,
+        &server,
+        Effect::LeaveChannel { conversation },
+        action_result(ActionKind::Leave(conversation)),
+    );
+    assert!(matches!(
+        input,
+        Input::ActionResult {
+            result: Ok(ActionOutcome::Done),
+            ..
+        }
+    ));
+    assert_eq!(
+        (call.method.as_str(), call.path.as_str()),
+        (
+            "POST",
+            format!("/v1/conversations/{conversation}/leave").as_str()
+        )
+    );
+
+    // Add members.
+    let (input, call) = run_effect(
+        &mut client,
+        &server,
+        Effect::AddMembers {
+            conversation,
+            request: AddMembersRequest {
+                user_ids: vec![user],
+            },
+        },
+        action_result(ActionKind::AddMembers(conversation)),
+    );
+    assert!(matches!(
+        input,
+        Input::ActionResult {
+            result: Ok(ActionOutcome::Conversation(_)),
+            ..
+        }
+    ));
+    assert_eq!(
+        call.path,
+        format!("/v1/conversations/{conversation}/members")
+    );
+    assert_eq!(call.body["user_ids"], serde_json::json!([user.to_string()]));
+
+    // Remove a member: DELETE.
+    let (input, call) = run_effect(
+        &mut client,
+        &server,
+        Effect::RemoveMember { conversation, user },
+        action_result(ActionKind::RemoveMember(conversation, user)),
+    );
+    assert!(matches!(
+        input,
+        Input::ActionResult {
+            result: Ok(ActionOutcome::Done),
+            ..
+        }
+    ));
+    assert_eq!(
+        (call.method.as_str(), call.path.as_str()),
+        (
+            "DELETE",
+            format!("/v1/conversations/{conversation}/members/{user}").as_str()
+        )
+    );
+
+    // Update: PATCH, an empty string clears, an absent field is left alone.
+    let (input, call) = run_effect(
+        &mut client,
+        &server,
+        Effect::UpdateConversation {
+            conversation,
+            request: UpdateConversationRequest {
+                name: Some(ChannelName::parse("renamed").unwrap()),
+                topic: Some(String::new()),
+                description: None,
+            },
+        },
+        action_result(ActionKind::UpdateConversation(conversation)),
+    );
+    assert!(matches!(
+        input,
+        Input::ActionResult {
+            result: Ok(ActionOutcome::Conversation(_)),
+            ..
+        }
+    ));
+    assert_eq!(
+        (call.method.as_str(), call.path.as_str()),
+        (
+            "PATCH",
+            format!("/v1/conversations/{conversation}").as_str()
+        )
+    );
+    assert_eq!(call.body["name"], "renamed");
+    assert_eq!(call.body["topic"], "");
+    assert!(call.body["description"].is_null());
+
+    // Favorite: PUT.
+    let (input, call) = run_effect(
+        &mut client,
+        &server,
+        Effect::SetFavorite {
+            conversation,
+            favorite: true,
+        },
+        action_result(ActionKind::SetFavorite(conversation)),
+    );
+    assert!(matches!(
+        input,
+        Input::ActionResult {
+            result: Ok(ActionOutcome::UserState(_)),
+            ..
+        }
+    ));
+    assert_eq!(
+        (call.method.as_str(), call.path.as_str()),
+        (
+            "PUT",
+            format!("/v1/conversations/{conversation}/favorite").as_str()
+        )
+    );
+    assert_eq!(call.body, serde_json::json!({"favorite": true}));
+
+    // Mark read: POST with the position.
+    let (input, call) = run_effect(
+        &mut client,
+        &server,
+        Effect::MarkRead {
+            conversation,
+            up_to: EventSeq::new(7).unwrap(),
+        },
+        |i| matches!(i, Input::MarkReadResult { .. }),
+    );
+    let Input::MarkReadResult {
+        conversation: c,
+        up_to,
+        result: Ok(state),
+    } = input
+    else {
+        panic!("expected the resulting state");
+    };
+    assert_eq!(
+        (c, up_to.get(), state.last_read.get()),
+        (conversation, 7, 7)
+    );
+    assert_eq!(
+        (call.method.as_str(), call.path.as_str()),
+        (
+            "POST",
+            format!("/v1/conversations/{conversation}/read").as_str()
+        )
+    );
+    assert_eq!(call.body, serde_json::json!({"up_to": 7}));
+
+    // Every request carried the session.
+    assert!(
+        server
+            .stub
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(path, _)| path.starts_with("/v1/workspaces")
+                || path.starts_with("/v1/conversations"))
+            .all(|(_, auth)| auth.as_deref() == Some("Bearer tok-1"))
+    );
+    client.shutdown();
+}
+
+#[test]
+fn conversation_failures_are_classified_and_mutations_are_never_repeated() {
+    let server = Server::start();
+    let (mut client, _) = Client::start(&server);
+    client.login();
+    let workspace = server.stub.workspace;
+    let conversation = ConversationId::generate();
+    let create = |name: &str| Effect::CreateChannel {
+        workspace,
+        request: CreateChannelRequest {
+            operation_id: OperationId::generate(),
+            name: ChannelName::parse(name).unwrap(),
+            visibility: ChannelVisibility::Public,
+            topic: None,
+            description: None,
+        },
+    };
+    let command_result = |i: &Input| matches!(i, Input::ConversationCommandResult { .. });
+
+    // A name already in use is a definitive refusal, naming the code the core turns into words.
+    server
+        .stub
+        .api_plan
+        .lock()
+        .unwrap()
+        .push_back(ApiBehavior::NameTaken);
+    let before = call_count(&server);
+    let (input, _) = run_effect(&mut client, &server, create("taken"), command_result);
+    let Input::ConversationCommandResult {
+        result: Err(RequestError::Rejected(error)),
+        ..
+    } = input
+    else {
+        panic!("expected a rejection");
+    };
+    assert_eq!(error.code, ErrorCode::NameTaken);
+
+    // A server failure leaves the outcome of a create unknown, and is not tried again by the
+    // runtime: the core asks the server instead.
+    server
+        .stub
+        .api_plan
+        .lock()
+        .unwrap()
+        .push_back(ApiBehavior::ServerError);
+    let before_failure = call_count(&server);
+    let (input, _) = run_effect(&mut client, &server, create("flaky"), command_result);
+    assert!(matches!(
+        input,
+        Input::ConversationCommandResult {
+            result: Err(RequestError::Unknown(_)),
+            ..
+        }
+    ));
+    assert_eq!(
+        call_count(&server),
+        before_failure + 1,
+        "exactly one attempt"
+    );
+    assert!(call_count(&server) > before);
+
+    // Management mutations are classified the same way and also attempted once.
+    server
+        .stub
+        .api_plan
+        .lock()
+        .unwrap()
+        .push_back(ApiBehavior::Forbidden);
+    let before_join = call_count(&server);
+    let (input, _) = run_effect(
+        &mut client,
+        &server,
+        Effect::JoinChannel { conversation },
+        action_result(ActionKind::Join(conversation)),
+    );
+    assert!(
+        matches!(input, Input::ActionResult { result: Err(RequestError::Rejected(e)), .. } if e.code == ErrorCode::Forbidden)
+    );
+    server
+        .stub
+        .api_plan
+        .lock()
+        .unwrap()
+        .push_back(ApiBehavior::ServerError);
+    let (input, _) = run_effect(
+        &mut client,
+        &server,
+        Effect::ArchiveConversation { conversation },
+        action_result(ActionKind::Archive(conversation)),
+    );
+    assert!(matches!(
+        input,
+        Input::ActionResult {
+            result: Err(RequestError::Unknown(_)),
+            ..
+        }
+    ));
+    assert_eq!(call_count(&server), before_join + 2, "one attempt each");
+
+    // Reading the directory is safe to repeat, so a failure is retried.
+    server
+        .stub
+        .api_plan
+        .lock()
+        .unwrap()
+        .extend([ApiBehavior::ServerError, ApiBehavior::ServerError]);
+    let before_browse = call_count(&server);
+    let (input, _) = run_effect(
+        &mut client,
+        &server,
+        Effect::BrowseChannels { workspace },
+        action_result(ActionKind::Browse),
+    );
+    assert!(matches!(
+        input,
+        Input::ActionResult {
+            result: Ok(ActionOutcome::Browse(_)),
+            ..
+        }
+    ));
+    assert_eq!(
+        call_count(&server),
+        before_browse + 3,
+        "two failures, then success"
+    );
+
+    // Leaving and removing succeed whatever the body, as long as the status is a success.
+    server
+        .stub
+        .api_plan
+        .lock()
+        .unwrap()
+        .push_back(ApiBehavior::OkWithJson);
+    let (input, _) = run_effect(
+        &mut client,
+        &server,
+        Effect::LeaveChannel { conversation },
+        action_result(ActionKind::Leave(conversation)),
+    );
+    assert!(matches!(
+        input,
+        Input::ActionResult {
+            result: Ok(ActionOutcome::Done),
+            ..
+        }
+    ));
+    client.shutdown();
+}
+
+#[test]
+fn mark_read_failures_are_reported_for_the_core_to_handle() {
+    let server = Server::start();
+    let (mut client, _) = Client::start(&server);
+    client.login();
+    let conversation = ConversationId::generate();
+    server
+        .stub
+        .api_plan
+        .lock()
+        .unwrap()
+        .push_back(ApiBehavior::ServerError);
+    let (input, _) = run_effect(
+        &mut client,
+        &server,
+        Effect::MarkRead {
+            conversation,
+            up_to: EventSeq::new(3).unwrap(),
+        },
+        |i| matches!(i, Input::MarkReadResult { .. }),
+    );
+    assert!(matches!(
+        input,
+        Input::MarkReadResult { up_to, result: Err(RequestError::Unknown(_)), .. } if up_to.get() == 3
+    ));
     client.shutdown();
 }

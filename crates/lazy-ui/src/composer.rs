@@ -7,7 +7,7 @@
 
 use gpui::{
     Context, Entity, FocusHandle, Focusable, FontWeight, IntoElement, Render, Subscription, Window,
-    div, prelude::*, px,
+    div, prelude::*,
 };
 use lazy_client_core::{Change, Input};
 use lazy_domain::ConversationId;
@@ -20,17 +20,7 @@ use crate::theme::Theme;
 
 /// A text-input style that takes its colors and metrics from the theme.
 pub fn input_style(theme: &Theme) -> TextInputStyle {
-    TextInputStyle {
-        text_color: theme.colors.text,
-        placeholder_color: theme.colors.text_faint,
-        selection_color: theme.colors.selection,
-        caret_color: theme.colors.caret,
-        font_size: theme.type_scale.body,
-        line_height: theme.type_scale.line_height_body,
-        padding_x: px(0.),
-        padding_y: px(0.),
-        caret_width: px(1.5),
-    }
+    TextInputStyle::from_theme(theme)
 }
 
 pub struct Composer {
@@ -43,14 +33,12 @@ pub struct Composer {
 
 impl Composer {
     pub fn new(model: Entity<AppModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let theme = *Theme::get(cx);
         let input = cx.new(|cx| {
             TextInput::new(
                 TextInputOptions::new("Message")
                     .accessible_label("Message")
                     .max_lines(8)
-                    .max_bytes(MAX_TEXT_BYTES)
-                    .style(input_style(&theme)),
+                    .max_bytes(MAX_TEXT_BYTES),
                 cx,
             )
         });
@@ -84,6 +72,19 @@ impl Composer {
         composer
     }
 
+    /// Puts the caret in the composer, for after a dialog has moved the person to a conversation.
+    pub fn focus_input(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let handle = self.input.focus_handle(cx);
+        window.focus(&handle, cx);
+    }
+
+    /// Whether the selected conversation accepts posts: it exists and is not archived.
+    fn can_post(&self, cx: &Context<Self>) -> bool {
+        self.conversation
+            .and_then(|id| self.model.read(cx).core().conversation(id))
+            .is_some_and(|conversation| !conversation.archived)
+    }
+
     fn selected(&self, cx: &Context<Self>) -> Option<ConversationId> {
         self.model.read(cx).core().selected_conversation()
     }
@@ -95,7 +96,7 @@ impl Composer {
             .conversation
             .map(|id| self.model.read(cx).core().draft(id).to_owned())
             .unwrap_or_default();
-        let enabled = self.conversation.is_some();
+        let enabled = self.can_post(cx);
         self.input.update(cx, |input, cx| {
             input.set_text(&draft, cx);
             input.set_enabled(enabled, cx);
@@ -113,6 +114,15 @@ impl Composer {
             return;
         }
         for change in changes {
+            if let Change::ConversationStateChanged { conversation } = *change
+                && Some(conversation) == self.conversation
+            {
+                // Archiving (or unarchiving) toggles whether the composer accepts input.
+                let enabled = self.can_post(cx);
+                self.input
+                    .update(cx, |input, cx| input.set_enabled(enabled, cx));
+                cx.notify();
+            }
             if let Change::DraftChanged { conversation } = *change
                 && Some(conversation) == self.conversation
             {
@@ -152,85 +162,108 @@ impl Composer {
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *Theme::get(cx);
-        let focused = self.input.read(cx).is_focused(window);
+        let focused = self.input.read(cx).is_focused(window) && self.can_post(cx);
         let has_text = !self.input.read(cx).text().trim().is_empty();
-        let can_send = has_text && self.conversation.is_some();
-        let channel = self
-            .conversation
-            .and_then(|id| self.model.read(cx).core().conversation(id))
-            .map(|conversation| conversation.name.to_string());
+        let can_post = self.can_post(cx);
+        let can_send = has_text && can_post;
+        let hint = self.conversation.map(|id| {
+            let core = self.model.read(cx).core();
+            let title = core.conversation_title(id);
+            let is_channel = core
+                .conversation(id)
+                .is_some_and(|c| c.kind == lazy_domain::ConversationKind::Channel);
+            if !can_post {
+                format!(
+                    "{} is archived. You can read it, but not post.",
+                    if is_channel {
+                        format!("#{title}")
+                    } else {
+                        title
+                    }
+                )
+            } else if is_channel {
+                format!("Message #{title} · Enter to send, Shift+Enter for a new line")
+            } else {
+                format!("Message {title} · Enter to send, Shift+Enter for a new line")
+            }
+        });
 
-        div()
-            .flex_none()
-            .px_5()
-            .pb_4()
-            .pt_2()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .rounded(theme.radii.medium)
-                    .bg(theme.colors.surface_raised)
-                    .border_1()
-                    .border_color(if focused { theme.colors.focus_ring } else { theme.colors.border_strong })
-                    .child(div().w_full().child(self.input.clone()))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(theme.type_scale.small)
-                                    .text_color(theme.colors.text_faint)
-                                    .child(match channel {
-                                        Some(name) => format!("Message #{name} · Enter to send, Shift+Enter for a new line"),
-                                        None => "Select a conversation to write".to_owned(),
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id("send-message")
-                                    .debug_selector(|| "send-message".into())
-                                    .track_focus(&self.send_focus)
-                                    .border_1()
-                                    .border_color(gpui::transparent_black())
-                                    .focus_visible(|style| style.border_color(theme.colors.focus_ring))
-                                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+        div().flex_none().px_5().pb_4().pt_2().child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .px_3()
+                .py_2()
+                .rounded(theme.radii.medium)
+                .bg(if can_post {
+                    theme.colors.surface_raised
+                } else {
+                    theme.colors.surface_hover
+                })
+                .border_1()
+                .border_color(if focused {
+                    theme.colors.focus_ring
+                } else {
+                    theme.colors.border_strong
+                })
+                .child(div().w_full().child(self.input.clone()))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(theme.type_scale.small)
+                                .text_color(theme.colors.text_faint)
+                                .child(match hint {
+                                    Some(text) => text,
+                                    None => "Select a conversation to write".to_owned(),
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id("send-message")
+                                .debug_selector(|| "send-message".into())
+                                .track_focus(&self.send_focus)
+                                .border_1()
+                                .border_color(gpui::transparent_black())
+                                .focus_visible(|style| style.border_color(theme.colors.focus_ring))
+                                .on_key_down(cx.listener(
+                                    |this, event: &gpui::KeyDownEvent, _, cx| {
                                         if keyboard::is_activation(event) {
                                             this.submit(cx);
                                             cx.stop_propagation();
                                         }
-                                    }))
-                                    .flex_none()
-                                    .ml_3()
-                                    .px_3()
-                                    .py_1()
-                                    .rounded(theme.radii.small)
-                                    .text_size(theme.type_scale.small)
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .when(can_send, |button| {
-                                        button
-                                            .cursor_pointer()
-                                            .bg(theme.colors.accent)
-                                            .text_color(theme.colors.on_accent)
-                                            .hover(|style| style.bg(theme.colors.accent_hover))
-                                            .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
-                                    })
-                                    .when(!can_send, |button| {
-                                        button
-                                            .bg(theme.colors.surface_hover)
-                                            .text_color(theme.colors.text_faint)
-                                    })
-                                    .child("Send"),
-                            ),
-                    ),
-            )
+                                    },
+                                ))
+                                .flex_none()
+                                .ml_3()
+                                .px_3()
+                                .py_1()
+                                .rounded(theme.radii.small)
+                                .text_size(theme.type_scale.small)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .when(can_send, |button| {
+                                    button
+                                        .cursor_pointer()
+                                        .bg(theme.colors.accent)
+                                        .text_color(theme.colors.on_accent)
+                                        .hover(|style| style.bg(theme.colors.accent_hover))
+                                        .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
+                                })
+                                .when(!can_send, |button| {
+                                    button
+                                        .bg(theme.colors.surface_hover)
+                                        .text_color(theme.colors.text_faint)
+                                })
+                                .child("Send"),
+                        ),
+                ),
+        )
     }
 }

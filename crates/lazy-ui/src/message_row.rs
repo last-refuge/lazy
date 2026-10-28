@@ -86,6 +86,8 @@ pub struct RowProps<'a> {
     pub theme: &'a Theme,
     /// Called when the person asks to retry a failed message.
     pub on_retry: RetryHandler,
+    /// Draw the "New messages" divider above this row.
+    pub new_messages_divider: bool,
     /// Tab stop for the retry button of a failed message; kept by the timeline so focus survives
     /// redraws.
     pub retry_focus: Option<FocusHandle>,
@@ -334,16 +336,49 @@ pub fn render_message_row(props: RowProps<'_>) -> AnyElement {
         .child(content)
         .child(toolbar);
 
+    let divider = props
+        .new_messages_divider
+        .then(|| new_messages_divider(theme));
     match &props.layout.day_separator {
         Some(label) => div()
             .flex()
             .flex_col()
             .w_full()
             .child(day_separator(label, theme))
+            .children(divider)
+            .child(row)
+            .into_any_element(),
+        None if divider.is_some() => div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .children(divider)
             .child(row)
             .into_any_element(),
         None => div().w_full().child(row).into_any_element(),
     }
+}
+
+/// The line marking where unread messages begin.
+fn new_messages_divider(theme: &Theme) -> AnyElement {
+    div()
+        .debug_selector(|| "new-messages-divider".into())
+        .flex()
+        .items_center()
+        .gap_3()
+        .px_5()
+        .pt_3()
+        .pb_1()
+        .child(div().h(px(1.)).flex_1().bg(theme.colors.accent))
+        .child(
+            div()
+                .text_size(theme.type_scale.small)
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.colors.accent)
+                .child("New messages"),
+        )
+        .child(div().h(px(1.)).flex_1().bg(theme.colors.accent))
+        .into_any_element()
 }
 
 #[cfg(test)]

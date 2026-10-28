@@ -6,7 +6,7 @@ The product plan is in [llm-docs/PLAN.md](llm-docs/PLAN.md), the phased work bre
 
 ## Status
 
-The first MVP covers Phase 1 of the implementation plan: create an account or sign in, open the `#general` channel, send messages with durable and idempotent delivery, receive messages from other clients in realtime, page older history, and recover after disconnects and restarts. Channels beyond `#general`, threads, reactions, search, attachments, integrations, and huddles are later phases.
+The first MVP covers Phase 1 of the implementation plan, and Phase 2 is under way (slice 2A is done: channels, direct and group messages, favorites, and unread counts): create an account or sign in, open the `#general` channel, send messages with durable and idempotent delivery, receive messages from other clients in realtime, page older history, and recover after disconnects and restarts. Editing and formatting messages, reactions and emoji, mentions, threads, search, attachments, integrations, and huddles are later.
 
 The server, the client core and runtime, and the message-delivery guarantees are covered by automated tests, including fault injection (see [llm-docs/VERIFICATION.md](llm-docs/VERIFICATION.md)). **The desktop window itself has not been looked at on a real display by the developer**, so how it renders, feels, and handles real input methods is exactly what this first run is for. Please note anything that looks or behaves wrong.
 
@@ -40,6 +40,8 @@ Profiles live in `.dev/profiles/<name>`. Delete a profile directory to start fre
 
 ## What to try, and what to look for
 
+New in slice 2A: create a channel from the **+** next to Channels, browse and join channels from the same menu, start a direct or group message from the **+** next to Direct messages, star a conversation to pin it under Favorites, and use **Details** in a channel's header to set its topic, add people, leave, or archive it. Unread conversations are bold with a count, and a "New messages" line marks where you left off. Removing someone else from a channel has no button yet; it is covered by the automated tests.
+
 Covered by automated tests, so surprises here are bugs worth reporting:
 
 - Send a message in one window and watch it arrive in the other. Send several quickly: they arrive in the order you sent them.
@@ -63,7 +65,8 @@ Known gaps (by design for this MVP) are listed at the end of [llm-docs/VERIFICAT
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets
-cargo test --workspace            # the dev database must be running: scripts/dev-db.sh start
+scripts/test.sh                   # runs the workspace tests on a separate Postgres (port 54330),
+                                  # so a server you are running by hand is never disturbed
 cargo run -p lazy-ui --example screens -- .dev/screens   # render the real views offscreen to PNGs
 ```
 

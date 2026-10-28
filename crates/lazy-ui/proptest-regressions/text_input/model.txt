@@ -5,3 +5,5 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc db7a5f0e700684662edde5a9e78944945db04a5d3ef04b785dbc9b8517aa4d8a # shrinks to ops = [Commit("\n"), Replace(1, 1, "word\n"), Mark("👨\u{200d}👩🇨", None), Replace(0, 9, "🇨"), Delete(Forward, Grapheme)]
+cc 6cbf7d3f7a1e96e8b33505e8522f140f103c41ffe6189f372b23802cbdef1516 # shrinks to ops = [Paste("🇨\u{301}"), Paste("🇨🇨"), SelectWord(0)]
+cc 0b7a849ef558cf39ef8aee428f5e42fe4b87f49f4ed9877b8419acfe893b56b8 # shrinks to ops = [Insert("e\u{301}"), SelectAll, Mark("e\u{301}", Some((1, 0))), Mark("", None)]

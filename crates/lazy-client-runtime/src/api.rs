@@ -95,6 +95,51 @@ impl Api {
         finish(request.send().await).await
     }
 
+    pub(crate) async fn put<T: DeserializeOwned, B: Serialize + ?Sized>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, RequestError> {
+        let request = self.with_auth(
+            self.http.put(self.url(path)).json(body),
+            self.token().as_ref(),
+        );
+        finish(request.send().await).await
+    }
+
+    pub(crate) async fn patch<T: DeserializeOwned, B: Serialize + ?Sized>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, RequestError> {
+        let request = self.with_auth(
+            self.http.patch(self.url(path)).json(body),
+            self.token().as_ref(),
+        );
+        finish(request.send().await).await
+    }
+
+    /// `POST` with no body, answered with JSON.
+    pub(crate) async fn post_empty<T: DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<T, RequestError> {
+        let request = self.with_auth(self.http.post(self.url(path)), self.token().as_ref());
+        finish(request.send().await).await
+    }
+
+    /// `POST` with no body, where any success status counts and the body, if any, is ignored.
+    pub(crate) async fn post_unit(&self, path: &str) -> Result<(), RequestError> {
+        let request = self.with_auth(self.http.post(self.url(path)), self.token().as_ref());
+        finish_unit(request.send().await).await
+    }
+
+    /// `DELETE`, where any success status counts and the body, if any, is ignored.
+    pub(crate) async fn delete_unit(&self, path: &str) -> Result<(), RequestError> {
+        let request = self.with_auth(self.http.delete(self.url(path)), self.token().as_ref());
+        finish_unit(request.send().await).await
+    }
+
     /// Revokes a session. Uses the given token because the client's own token is already cleared.
     pub(crate) async fn logout(&self, token: &SessionToken) -> Result<(), RequestError> {
         let request = self.with_auth(
@@ -147,10 +192,28 @@ async fn finish<T: DeserializeOwned>(
         return serde_json::from_slice(&bytes)
             .map_err(|e| RequestError::Unknown(format!("malformed response: {e}")));
     }
-    match serde_json::from_slice::<ApiError>(&bytes) {
+    Err(classify_failure(status, &bytes))
+}
+
+/// Like [`finish`] for requests whose success carries nothing to apply: any 2xx status counts,
+/// whatever the body (`204 No Content`, or JSON the client has no use for).
+async fn finish_unit(
+    response: Result<reqwest::Response, reqwest::Error>,
+) -> Result<(), RequestError> {
+    let response = response.map_err(|e| RequestError::Unknown(describe(&e)))?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let bytes = response.bytes().await.unwrap_or_default();
+    Err(classify_failure(status, &bytes))
+}
+
+fn classify_failure(status: reqwest::StatusCode, bytes: &[u8]) -> RequestError {
+    match serde_json::from_slice::<ApiError>(bytes) {
         Ok(error) if status.is_client_error() && error.code.is_definitive_rejection() => {
-            Err(RequestError::Rejected(error))
+            RequestError::Rejected(error)
         }
-        _ => Err(RequestError::Unknown(format!("server returned {status}"))),
+        _ => RequestError::Unknown(format!("server returned {status}")),
     }
 }

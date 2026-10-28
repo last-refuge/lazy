@@ -31,13 +31,15 @@ async fn subscribers_get_replay_then_caught_up_then_live_events(pool: PgPool) {
     let mut ws = app.connect_ws(&grace).await;
     ws.subscribe(app.workspace_id, EventSeq::ZERO).await;
     let (replayed, caught_up) = ws.replay().await;
-    // ada joined (1), three messages (2..=4), grace joined (5).
+    // ada joined the workspace (1) and #general (2), three messages (3..=5), then grace did
+    // both (6, 7). Grace is a member of #general now, so she receives all of it.
     let positions: Vec<i64> = replayed.iter().map(|e| e.seq.get()).collect();
-    assert_eq!(positions, vec![1, 2, 3, 4, 5]);
-    assert_eq!(caught_up.get(), 5);
+    assert_eq!(positions, vec![1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(caught_up.get(), 7);
     assert!(matches!(replayed[0].event, Event::MemberJoined { .. }));
-    assert_eq!(message_text(&replayed[1]), "one");
-    assert_eq!(message_text(&replayed[3]), "three");
+    assert!(matches!(replayed[1].event, Event::MemberAdded { .. }));
+    assert_eq!(message_text(&replayed[2]), "one");
+    assert_eq!(message_text(&replayed[4]), "three");
 
     // Live: a message, with the sender's operation id so its sender can reconcile.
     let operation = OperationId::generate();
@@ -45,7 +47,7 @@ async fn subscribers_get_replay_then_caught_up_then_live_events(pool: PgPool) {
     assert!(sent.status().is_success());
     match ws.next().await {
         ServerFrame::Event(envelope) => {
-            assert_eq!(envelope.seq.get(), 6);
+            assert_eq!(envelope.seq.get(), 8);
             assert_eq!(envelope.workspace_id, app.workspace_id);
             match envelope.event {
                 Event::MessageCreated {
@@ -65,11 +67,22 @@ async fn subscribers_get_replay_then_caught_up_then_live_events(pool: PgPool) {
     let hopper = app.register("hopper").await;
     match ws.next().await {
         ServerFrame::Event(envelope) => {
-            assert_eq!(envelope.seq.get(), 7);
+            assert_eq!(envelope.seq.get(), 9);
             match envelope.event {
                 Event::MemberJoined { user } => assert_eq!(user, hopper.user),
                 other => panic!("unexpected event {other:?}"),
             }
+        }
+        other => panic!("unexpected frame {other:?}"),
+    }
+    // ...followed by their arrival in #general, which grace shares.
+    match ws.next().await {
+        ServerFrame::Event(envelope) => {
+            assert_eq!(envelope.seq.get(), 10);
+            assert!(matches!(
+                envelope.event,
+                Event::MemberAdded { user_id, .. } if user_id == hopper.user.id
+            ));
         }
         other => panic!("unexpected frame {other:?}"),
     }
@@ -84,7 +97,10 @@ async fn nothing_is_lost_or_duplicated_while_clients_connect_mid_stream(pool: Pg
     const SENDERS: usize = 8;
     const PER_SENDER: usize = 50;
     const REGISTRATIONS: usize = 4;
-    const EXPECTED: usize = SENDERS * PER_SENDER + REGISTRATIONS;
+    const CHURN_ROUNDS: usize = 25;
+    // The watchers are members of #general only. They see each message, and each registration
+    // (two events: joining the workspace, then #general). They must see none of the churn below.
+    const EXPECTED: usize = SENDERS * PER_SENDER + 2 * REGISTRATIONS;
     const OLD_EVENTS: usize = 300;
     const KEEP_NEWEST: u32 = 50;
 
@@ -94,6 +110,11 @@ async fn nothing_is_lost_or_duplicated_while_clients_connect_mid_stream(pool: Pg
     for index in 0..SENDERS {
         senders.push(app.register(&format!("sender{index}")).await);
     }
+    // A private channel whose membership churns for the whole run. The owner stays in it; the
+    // churner is added and removed over and over; the watchers are never in it.
+    let owner = senders[0].clone();
+    let churner = senders[1].clone();
+    let churn = app.create_channel(&owner, "churn", "private").await.id;
     // History that has aged out of the retention window, so the pruner has real work to do while
     // everything below happens. Subscribers start at `baseline`, so their cursors stay valid.
     for n in 0..OLD_EVENTS {
@@ -120,6 +141,30 @@ async fn nothing_is_lost_or_duplicated_while_clients_connect_mid_stream(pool: Pg
                 tokio::time::sleep(Duration::from_millis(2)).await;
             }
             passes
+        })
+    };
+
+    // The churner's own live connection, which must receive each of its removals exactly once and
+    // nothing about the channel after the last one. It stops when the end-of-run marker arrives.
+    let churner_stream = {
+        let mut ws = app.connect_ws(&churner).await;
+        ws.subscribe(app.workspace_id, baseline).await;
+        tokio::spawn(async move {
+            let mut seen = Vec::new();
+            loop {
+                match ws.next().await {
+                    ServerFrame::Event(envelope) => {
+                        let done = matches!(&envelope.event,
+                            Event::MemberJoined { user } if user.username.as_str() == "stressmarker");
+                        seen.push(envelope);
+                        if done {
+                            return seen;
+                        }
+                    }
+                    ServerFrame::CaughtUp { .. } => {}
+                    other => panic!("unexpected frame {other:?}"),
+                }
+            }
         })
     };
 
@@ -164,6 +209,54 @@ async fn nothing_is_lost_or_duplicated_while_clients_connect_mid_stream(pool: Pg
             assert!(response.status().is_success());
         }));
     }
+    // Membership churn: add, post, remove, post.
+    writers.push({
+        let http = app.http.clone();
+        let base = app.server.base_url.clone();
+        let (owner, churner) = (owner.clone(), churner.clone());
+        tokio::spawn(async move {
+            use lazy_protocol::api::paths;
+            for round in 0..CHURN_ROUNDS {
+                let added = http
+                    .post(format!(
+                        "{base}{}",
+                        paths::conversation_action(churn, "members")
+                    ))
+                    .bearer_auth(&owner.token)
+                    .json(&serde_json::json!({"user_ids": [churner.user.id]}))
+                    .send()
+                    .await
+                    .unwrap();
+                assert!(added.status().is_success(), "add: {}", added.status());
+                for phase in ["inside", "outside"] {
+                    let body = SendMessageRequest {
+                        operation_id: OperationId::generate(),
+                        document: MessageDocument::from_plain_text(&format!(
+                            "churn {phase} {round}"
+                        ))
+                        .unwrap(),
+                    };
+                    let sent = http
+                        .post(format!("{base}{}", paths::messages(churn)))
+                        .bearer_auth(&owner.token)
+                        .json(&body)
+                        .send()
+                        .await
+                        .unwrap();
+                    assert!(sent.status().is_success(), "churn send: {}", sent.status());
+                    if phase == "inside" {
+                        let removed = http
+                            .delete(format!("{base}{}", paths::member(churn, churner.user.id)))
+                            .bearer_auth(&owner.token)
+                            .send()
+                            .await
+                            .unwrap();
+                        assert_eq!(removed.status().as_u16(), 204, "remove");
+                    }
+                }
+            }
+        })
+    });
 
     // Subscribers connect after progressively more sends have completed, so they overlap commits
     // in every phase: before, during, and after. The window between a subscriber's replay and its
@@ -196,6 +289,8 @@ async fn nothing_is_lost_or_duplicated_while_clients_connect_mid_stream(pool: Pg
     for writer in writers {
         writer.await.unwrap();
     }
+    // The end of the run, as far as the churner's stream is concerned.
+    app.register("stressmarker").await;
 
     stop_pruning.cancel();
     let passes = pruning.await.unwrap();
@@ -206,24 +301,113 @@ async fn nothing_is_lost_or_duplicated_while_clients_connect_mid_stream(pool: Pg
         .unwrap();
     assert_eq!(app.event_floor().await, baseline);
 
-    let expected = app.log_positions_after(EventSeq::ZERO).await;
+    // The log is gapless from the floor to the head, churn and all.
+    let log = app.log_positions_after(EventSeq::ZERO).await;
     assert_eq!(
-        expected.len(),
-        EXPECTED,
-        "only the new events remain in the log"
-    );
-    assert_eq!(
-        expected,
-        (baseline.get() + 1..=baseline.get() + EXPECTED as i64).collect::<Vec<_>>(),
+        log,
+        (baseline.get() + 1..=app.head().await.get()).collect::<Vec<_>>(),
         "the log itself is gapless"
     );
+
+    // What a #general member who never entered the churn channel may see: workspace events and
+    // #general's. Exactly those, once each, in order, to every subscriber.
+    let visible_to_watchers: Vec<i64> = sqlx::query_scalar(
+        "SELECT seq FROM events WHERE workspace_id = $1 AND seq > $2 AND (audience = 'workspace' \
+         OR (audience = 'members' AND conversation_id = $3)) ORDER BY seq",
+    )
+    .bind(app.workspace_id.as_uuid())
+    .bind(baseline.get())
+    .bind(app.general.as_uuid())
+    .fetch_all(&app.pool)
+    .await
+    .unwrap();
+    // (The end-of-run marker's two events came after every reader had its EXPECTED events.)
+    assert_eq!(visible_to_watchers.len(), EXPECTED + 2);
     for (index, reader) in readers.into_iter().enumerate() {
         let received = reader.await.unwrap();
         assert_eq!(
-            received, expected,
-            "subscriber {index} saw a different stream"
+            received,
+            visible_to_watchers[..EXPECTED],
+            "subscriber {index} saw a different stream, or a leak from the churn channel"
         );
     }
+
+    // The churner: each of its removals exactly once, in order, and nothing about the channel
+    // after the last removal.
+    let stream = churner_stream.await.unwrap();
+    assert!(
+        stream.windows(2).all(|pair| pair[0].seq < pair[1].seq),
+        "positions strictly increase"
+    );
+    let about_churn = |event: &Event| match event {
+        Event::MessageCreated { message, .. } => message.conversation_id == churn,
+        Event::ConversationCreated { conversation }
+        | Event::ConversationUpdated { conversation }
+        | Event::MemberAdded { conversation, .. } => conversation.id == churn,
+        Event::MemberRemoved {
+            conversation_id, ..
+        } => *conversation_id == churn,
+        _ => false,
+    };
+    let removals: Vec<i64> = stream
+        .iter()
+        .filter(|e| matches!(&e.event, Event::MemberRemoved { user_id, .. } if *user_id == churner.user.id))
+        .map(|e| e.seq.get())
+        .collect();
+    let removals_in_log: Vec<i64> = sqlx::query_scalar(
+        "SELECT seq FROM events WHERE kind = 'member_removed' AND conversation_id = $1 AND seq > $2 ORDER BY seq",
+    )
+    .bind(churn.as_uuid())
+    .bind(baseline.get())
+    .fetch_all(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(removals_in_log.len(), CHURN_ROUNDS);
+    assert_eq!(
+        removals, removals_in_log,
+        "every removal reached the person removed, exactly once"
+    );
+    let last_removal = *removals_in_log.last().unwrap();
+    assert!(
+        stream
+            .iter()
+            .filter(|e| about_churn(&e.event))
+            .all(|e| e.seq.get() <= last_removal),
+        "nothing about the channel reached the churner after their last removal"
+    );
+
+    // The owner never left, so a replay shows them the whole history of the churn, in order.
+    let mut owner_ws = app.connect_ws(&owner).await;
+    owner_ws.subscribe(app.workspace_id, baseline).await;
+    let (owner_events, _) = owner_ws.replay().await;
+    let owner_churn: Vec<i64> = owner_events
+        .iter()
+        .filter(|e| about_churn(&e.event))
+        .map(|e| e.seq.get())
+        .collect();
+    let churn_in_log: Vec<i64> = sqlx::query_scalar(
+        "SELECT seq FROM events WHERE conversation_id = $1 AND seq > $2 ORDER BY seq",
+    )
+    .bind(churn.as_uuid())
+    .bind(baseline.get())
+    .fetch_all(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(churn_in_log.len(), CHURN_ROUNDS * 5);
+    assert_eq!(owner_churn, churn_in_log);
+
+    // And a fresh replay for the churner, now outside the channel for good, shows only the
+    // removals.
+    let mut churner_ws = app.connect_ws(&churner).await;
+    churner_ws.subscribe(app.workspace_id, baseline).await;
+    let (churner_events, _) = churner_ws.replay().await;
+    let churner_churn: Vec<&lazy_protocol::EventEnvelope> = churner_events
+        .iter()
+        .filter(|e| about_churn(&e.event))
+        .collect();
+    assert_eq!(churner_churn.len(), CHURN_ROUNDS);
+    assert!(churner_churn.iter().all(|e| matches!(&e.event,
+        Event::MemberRemoved { user_id, .. } if *user_id == churner.user.id)));
     app.server.shutdown().await.unwrap();
 }
 
@@ -423,7 +607,7 @@ async fn subscribing_to_someone_elses_workspace_is_forbidden(pool: PgPool) {
     }
     ws.subscribe(app.workspace_id, EventSeq::ZERO).await;
     let (events, _) = ws.replay().await;
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 2, "ada joining the workspace and #general");
     app.server.shutdown().await.unwrap();
 }
 
@@ -448,7 +632,7 @@ async fn malformed_frames_get_an_error_and_do_not_end_the_connection(pool: PgPoo
     }
     ws.subscribe(app.workspace_id, EventSeq::ZERO).await;
     let (events, _) = ws.replay().await;
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 2, "ada joining the workspace and #general");
     app.server.shutdown().await.unwrap();
 }
 

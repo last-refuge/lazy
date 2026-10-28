@@ -4,23 +4,63 @@
 //! Appending is the heart of the ordering guarantee (llm-docs/DECISIONS.md, D3): [`next_position`]
 //! bumps `workspaces.event_head`, and the row lock it takes is held until the caller's transaction
 //! ends. Positions are therefore assigned in commit order and never leave a gap.
+//!
+//! Every event carries an [`Audience`], written when it is appended and used for both replay and
+//! live delivery. Audiences are always evaluated against *current* membership, so removing
+//! someone from a conversation also withholds everything about it that they had not yet received.
 
 use std::collections::{HashMap, HashSet};
 
-use lazy_domain::{
-    ChannelAccess, ConversationId, EventSeq, OperationId, Timestamp, UserId, WorkspaceId,
-};
+use lazy_domain::{ConversationId, EventSeq, OperationId, Timestamp, UserId, WorkspaceId};
 use lazy_protocol::{Event, EventEnvelope};
 use sqlx::{PgConnection, PgPool};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::db;
 use crate::error::AppError;
 
 /// Postgres `NOTIFY` channel that wakes the dispatcher. The payload is the workspace id; it is
 /// only a hint, and the durable `events` table is the source of truth.
 pub const NOTIFY_CHANNEL: &str = "lazy_events";
+
+/// Who may receive an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Audience {
+    /// Every member of the workspace.
+    Workspace,
+    /// The current members of the event's conversation.
+    Members,
+    /// The current members of the event's conversation, and also this person even if they are not
+    /// (or are no longer) a member. Used for removals, which the removed person must learn of.
+    MembersAndUser(UserId),
+    /// This person only, and only while they are a member of the event's conversation (when it
+    /// has one): their own read position and favorites.
+    User(UserId),
+}
+
+impl Audience {
+    fn to_db(self) -> (&'static str, Option<Uuid>) {
+        match self {
+            Self::Workspace => ("workspace", None),
+            Self::Members => ("members", None),
+            Self::MembersAndUser(user) => ("members_and_user", Some(user.as_uuid())),
+            Self::User(user) => ("user", Some(user.as_uuid())),
+        }
+    }
+
+    fn from_db(audience: &str, target: Option<Uuid>) -> Result<Self, AppError> {
+        let target = target.map(UserId::from_uuid);
+        match (audience, target) {
+            ("workspace", _) => Ok(Self::Workspace),
+            ("members", _) => Ok(Self::Members),
+            ("members_and_user", Some(user)) => Ok(Self::MembersAndUser(user)),
+            ("user", Some(user)) => Ok(Self::User(user)),
+            (other, _) => Err(AppError::internal(format!(
+                "unknown event audience {other:?}"
+            ))),
+        }
+    }
+}
 
 /// An event as stored, with its position.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,6 +70,7 @@ pub struct StoredEvent {
     pub occurred_at: Timestamp,
     /// `None` for workspace-wide events.
     pub conversation_id: Option<ConversationId>,
+    pub audience: Audience,
     pub event: Event,
 }
 
@@ -76,6 +117,7 @@ pub struct NewEvent<'a> {
     /// `None` for workspace-wide events.
     pub conversation_id: Option<ConversationId>,
     pub operation_id: Option<OperationId>,
+    pub audience: Audience,
     pub event: &'a Event,
 }
 
@@ -84,9 +126,11 @@ pub struct NewEvent<'a> {
 pub async fn insert_event(conn: &mut PgConnection, new: NewEvent<'_>) -> Result<(), AppError> {
     let payload = serde_json::to_value(new.event)
         .map_err(|e| AppError::internal(format!("cannot serialize event: {e}")))?;
+    let (audience, target) = new.audience.to_db();
     sqlx::query(
-        "INSERT INTO events (workspace_id, seq, occurred_at, kind, conversation_id, operation_id, payload) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO events \
+             (workspace_id, seq, occurred_at, kind, conversation_id, operation_id, audience, target_user_id, payload) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(new.workspace_id.as_uuid())
     .bind(new.seq.get())
@@ -94,6 +138,8 @@ pub async fn insert_event(conn: &mut PgConnection, new: NewEvent<'_>) -> Result<
     .bind(new.kind)
     .bind(new.conversation_id.map(|id| id.as_uuid()))
     .bind(new.operation_id.map(|id| id.as_uuid()))
+    .bind(audience)
+    .bind(target)
     .bind(sqlx::types::Json(payload))
     .execute(&mut *conn)
     .await?;
@@ -102,6 +148,48 @@ pub async fn insert_event(conn: &mut PgConnection, new: NewEvent<'_>) -> Result<
         .execute(conn)
         .await?;
     Ok(())
+}
+
+/// An event to append once the rest of a transaction's writes are done.
+pub struct PendingEvent {
+    pub kind: &'static str,
+    pub conversation_id: Option<ConversationId>,
+    pub operation_id: Option<OperationId>,
+    pub audience: Audience,
+    pub event: Event,
+}
+
+/// Reserves positions and inserts `events`, in order, returning the positions.
+///
+/// Call this **last** in a transaction, after every other write. It takes the workspace row lock,
+/// which is then held until commit; doing the other work first keeps that lock as short as
+/// possible and, more importantly, means a transaction never waits on another lock (a unique
+/// index, a conversation row) while holding the workspace lock, which would invite deadlock.
+pub async fn append_all(
+    conn: &mut PgConnection,
+    workspace_id: WorkspaceId,
+    events: Vec<PendingEvent>,
+) -> Result<Vec<EventSeq>, AppError> {
+    let mut positions = Vec::with_capacity(events.len());
+    for pending in events {
+        let (seq, occurred_at) = next_position(conn, workspace_id).await?;
+        insert_event(
+            conn,
+            NewEvent {
+                workspace_id,
+                seq,
+                occurred_at,
+                kind: pending.kind,
+                conversation_id: pending.conversation_id,
+                operation_id: pending.operation_id,
+                audience: pending.audience,
+                event: &pending.event,
+            },
+        )
+        .await?;
+        positions.push(seq);
+    }
+    Ok(positions)
 }
 
 /// The newest committed position in a workspace's log, or `None` if the workspace is unknown.
@@ -151,6 +239,8 @@ pub async fn fetch_after(
         Option<i64>,
         Option<OffsetDateTime>,
         Option<Uuid>,
+        Option<String>,
+        Option<Uuid>,
         Option<sqlx::types::Json<serde_json::Value>>,
     );
     // One statement, hence one snapshot. The lateral subquery lets the primary key's index and the
@@ -158,10 +248,10 @@ pub async fn fetch_after(
     // Postgres scan and sort every later event). The outer join always yields the workspace row, so
     // the floor is known even when no events follow the cursor; that row has a NULL `seq`.
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT w.event_floor, e.seq, e.occurred_at, e.conversation_id, e.payload \
+        "SELECT w.event_floor, e.seq, e.occurred_at, e.conversation_id, e.audience, e.target_user_id, e.payload \
          FROM workspaces w \
          LEFT JOIN LATERAL ( \
-             SELECT seq, occurred_at, conversation_id, payload FROM events \
+             SELECT seq, occurred_at, conversation_id, audience, target_user_id, payload FROM events \
              WHERE workspace_id = w.id AND seq > $2 ORDER BY seq LIMIT $3 \
          ) e ON true \
          WHERE w.id = $1 ORDER BY e.seq",
@@ -181,10 +271,13 @@ pub async fn fetch_after(
     let mut scanned = 0;
     let mut scanned_to = after;
     let mut events = Vec::with_capacity(rows.len());
-    for (_, seq, occurred_at, conversation_id, payload) in rows {
-        let (Some(seq), Some(occurred_at), Some(payload)) = (seq, occurred_at, payload) else {
+    for (_, seq, occurred_at, conversation_id, audience, target, payload) in rows {
+        let (Some(seq), Some(occurred_at), Some(audience), Some(payload)) =
+            (seq, occurred_at, audience, payload)
+        else {
             continue;
         };
+        let audience = Audience::from_db(&audience, target)?;
         let seq =
             EventSeq::new(seq).ok_or_else(|| AppError::internal("negative event position"))?;
         scanned += 1;
@@ -195,6 +288,7 @@ pub async fn fetch_after(
                 seq,
                 occurred_at: Timestamp::from(occurred_at),
                 conversation_id: conversation_id.map(ConversationId::from_uuid),
+                audience,
                 event,
             }),
             Err(error) => {
@@ -219,38 +313,61 @@ pub enum Visibility {
     Flags(Vec<bool>),
 }
 
-/// Evaluates the viewer's current access against the database. Conversation access is checked
-/// once per distinct conversation in the batch, not once per event.
+/// Evaluates each event's stored audience against the viewer's **current** membership.
+///
+/// Membership is read from the database once per distinct conversation in the batch, not once per
+/// event, after the batch was read. So a person removed from a conversation stops receiving
+/// everything about it at once, including events that committed before the removal but have not
+/// been delivered, and a person added later receives the conversation's older events when they
+/// replay past them.
+pub fn is_visible(viewer: UserId, event: &StoredEvent, member_of: &HashMap<Uuid, bool>) -> bool {
+    let is_member = |conversation: Option<ConversationId>| {
+        conversation
+            .and_then(|id| member_of.get(&id.as_uuid()).copied())
+            .unwrap_or(false)
+    };
+    match event.audience {
+        Audience::Workspace => true,
+        Audience::Members => is_member(event.conversation_id),
+        Audience::MembersAndUser(user) => viewer == user || is_member(event.conversation_id),
+        Audience::User(user) => {
+            viewer == user && (event.conversation_id.is_none() || is_member(event.conversation_id))
+        }
+    }
+}
+
+/// See [`is_visible`].
 pub async fn visibility(
     pool: &PgPool,
     viewer: UserId,
     workspace_id: WorkspaceId,
     events: &[&StoredEvent],
 ) -> Result<Visibility, AppError> {
-    let role: Option<String> = sqlx::query_scalar(
-        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+    let in_workspace: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2)",
     )
     .bind(workspace_id.as_uuid())
     .bind(viewer.as_uuid())
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await?;
-    let Some(role) = role else {
+    if !in_workspace {
         return Ok(Visibility::NotAMember);
-    };
-    let role = db::role_from_db(&role)?;
+    }
 
+    // Only events whose audience depends on membership need the lookup.
     let conversation_ids: Vec<Uuid> = events
         .iter()
+        .filter(|event| !matches!(event.audience, Audience::Workspace))
         .filter_map(|event| event.conversation_id)
         .map(|id| id.as_uuid())
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
 
-    let mut readable: HashMap<Uuid, bool> = HashMap::with_capacity(conversation_ids.len());
+    let mut member_of: HashMap<Uuid, bool> = HashMap::with_capacity(conversation_ids.len());
     if !conversation_ids.is_empty() {
-        let rows: Vec<(Uuid, String, bool, bool)> = sqlx::query_as(
-            "SELECT c.id, c.visibility, c.archived, (cm.user_id IS NOT NULL) \
+        let rows: Vec<(Uuid, bool)> = sqlx::query_as(
+            "SELECT c.id, (cm.user_id IS NOT NULL) \
              FROM conversations c \
              LEFT JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1 \
              WHERE c.workspace_id = $2 AND c.id = ANY($3)",
@@ -260,23 +377,117 @@ pub async fn visibility(
         .bind(&conversation_ids)
         .fetch_all(pool)
         .await?;
-        for (id, visibility, archived, is_member) in rows {
-            let access = ChannelAccess {
-                workspace_role: Some(role),
-                is_channel_member: is_member,
-                visibility: db::visibility_from_db(&visibility)?,
-                archived,
-            };
-            readable.insert(id, access.can_read());
+        member_of.extend(rows);
+    }
+
+    Ok(Visibility::Flags(
+        events
+            .iter()
+            .map(|event| is_visible(viewer, event, &member_of))
+            .collect(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use lazy_protocol::{Conversation, ConversationUserState};
+
+    use super::*;
+
+    fn stored(audience: Audience, conversation: Option<ConversationId>) -> StoredEvent {
+        // The payload is irrelevant to audience rules; any event will do.
+        let state = ConversationUserState {
+            conversation_id: conversation.unwrap_or_else(ConversationId::generate),
+            favorite: false,
+            last_read: EventSeq::ZERO,
+            unread_count: 0,
+            mention_count: 0,
+        };
+        let _: Option<Conversation> = None;
+        StoredEvent {
+            workspace_id: WorkspaceId::generate(),
+            seq: EventSeq::new(1).unwrap(),
+            occurred_at: Timestamp::now(),
+            conversation_id: conversation,
+            audience,
+            event: Event::UserStateChanged { state },
         }
     }
 
-    let flags = events
-        .iter()
-        .map(|event| match event.conversation_id {
-            None => true,
-            Some(id) => readable.get(&id.as_uuid()).copied().unwrap_or(false),
-        })
-        .collect();
-    Ok(Visibility::Flags(flags))
+    fn membership(entries: &[(ConversationId, bool)]) -> HashMap<Uuid, bool> {
+        entries
+            .iter()
+            .map(|(id, member)| (id.as_uuid(), *member))
+            .collect()
+    }
+
+    #[test]
+    fn audiences_are_evaluated_against_current_membership() {
+        let (me, other) = (UserId::generate(), UserId::generate());
+        let (joined, not_joined) = (ConversationId::generate(), ConversationId::generate());
+        let membership = membership(&[(joined, true), (not_joined, false)]);
+
+        // Workspace events reach everyone.
+        assert!(is_visible(
+            me,
+            &stored(Audience::Workspace, None),
+            &membership
+        ));
+
+        // Members-only events need membership now.
+        assert!(is_visible(
+            me,
+            &stored(Audience::Members, Some(joined)),
+            &membership
+        ));
+        assert!(!is_visible(
+            me,
+            &stored(Audience::Members, Some(not_joined)),
+            &membership
+        ));
+        assert!(
+            !is_visible(
+                me,
+                &stored(Audience::Members, Some(ConversationId::generate())),
+                &membership
+            ),
+            "an unknown conversation is never visible"
+        );
+
+        // A removal reaches its subject even without membership, and nobody else outside.
+        let removal = stored(Audience::MembersAndUser(me), Some(not_joined));
+        assert!(is_visible(me, &removal, &membership));
+        assert!(!is_visible(other, &removal, &membership));
+
+        // Personal state reaches its owner, and only while they are in the conversation.
+        let mine = stored(Audience::User(me), Some(joined));
+        assert!(is_visible(me, &mine, &membership));
+        assert!(!is_visible(other, &mine, &membership));
+        assert!(!is_visible(
+            me,
+            &stored(Audience::User(me), Some(not_joined)),
+            &membership
+        ));
+        assert!(is_visible(
+            me,
+            &stored(Audience::User(me), None),
+            &membership
+        ));
+    }
+
+    #[test]
+    fn audiences_roundtrip_through_their_stored_form() {
+        let user = UserId::generate();
+        for audience in [
+            Audience::Workspace,
+            Audience::Members,
+            Audience::MembersAndUser(user),
+            Audience::User(user),
+        ] {
+            let (kind, target) = audience.to_db();
+            assert_eq!(Audience::from_db(kind, target).unwrap(), audience);
+        }
+        assert!(Audience::from_db("user", None).is_err());
+        assert!(Audience::from_db("everyone", None).is_err());
+    }
 }

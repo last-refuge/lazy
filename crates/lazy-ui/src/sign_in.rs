@@ -7,7 +7,6 @@ use gpui::{
 use lazy_client_core::{Input, SessionPhase};
 
 use crate::app_model::AppModel;
-use crate::composer::input_style;
 use crate::keyboard::{self, FocusNextControl, FocusPrevControl};
 use crate::text_input::{TextInput, TextInputEvent, TextInputOptions};
 use crate::theme::Theme;
@@ -31,7 +30,6 @@ pub struct SignInView {
 
 impl SignInView {
     pub fn new(model: Entity<AppModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let theme = *Theme::get(cx);
         let field = |placeholder: &'static str,
                      label: &'static str,
                      masked: bool,
@@ -42,8 +40,7 @@ impl SignInView {
                         .accessible_label(label)
                         .single_line(true)
                         .masked(masked)
-                        .max_bytes(256)
-                        .style(input_style(&theme)),
+                        .max_bytes(256),
                     cx,
                 )
             })

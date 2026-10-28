@@ -168,15 +168,24 @@ Source: PLAN.md "Product semantics", "Experience and visual design".
 
 Goal: the chat behaviors people expect from Slack, with permissions enforced end to end.
 
+Delivery slices. Each slice is built across server, client, and UI, verified, and left runnable before the next begins:
+
+- **2A Conversations and read state**: tasks 2.1, 2.6, 2.7, and the sidebar, dialogs, unread, and empty-state parts of 2.8. Decisions in `DECISIONS.md` D11.
+- **2B Message lifecycle and rich text**: task 2.2 (edit, delete, formatting, permalinks) and the edit-in-place and hover-action parts of 2.8.
+- **2C Emoji, reactions, mentions, groups**: tasks 2.4 and 2.5.
+- **2D Threads**: task 2.3 and the thread pane.
+- **2E Integration prototype and phase gate**: tasks 2.9, 2.10, 2.11.
+
 - [ ] 2.1 Conversation types
-  - [ ] Public and private channels with topics and descriptions
-  - [ ] Create, join, leave, and membership management
-  - [ ] Private-channel invitations
-  - [ ] Archive and unarchive
-  - [ ] Favorites
-  - [ ] Direct messages
-  - [ ] Group messages; adding participants creates a new conversation following the specified history rules
-  - [ ] Membership removal applied to history, subscriptions, replay, and threads
+  - [X] Public and private channels with topics and descriptions
+  - [X] Create, join, leave, and membership management
+  - [X] Private-channel invitations
+  - [X] Archive and unarchive
+  - [X] Favorites
+  - [X] Direct messages
+  - [X] Group messages; adding participants creates a new conversation following the specified history rules
+  - [X] Membership removal applied to history, subscriptions, and replay
+  - [ ] Membership removal applied to threads (slice 2D)
 - [ ] 2.2 Message lifecycle
   - [ ] Editing with a revision table; a newer revision stays pending while an older one persists
   - [ ] Concurrent-edit handling as specified in Phase 0
@@ -199,26 +208,31 @@ Goal: the chat behaviors people expect from Slack, with permissions enforced end
   - [ ] User groups with membership and group mentions
   - [ ] Define channel-wide mention semantics
 - [ ] 2.6 Read state
-  - [ ] Read cursors per conversation and per thread
-  - [ ] Unread markers and mention counts
-  - [ ] Cross-device read-state sync through events
+  - [X] Read cursors per conversation
+  - [ ] Read cursors per thread (slice 2D)
+  - [X] Unread markers
+  - [ ] Mention counts (slice 2C)
+  - [X] Cross-device read-state sync through events
 - [ ] 2.7 Authorization hardening
-  - [ ] Revoke membership while a client is disconnected; reconnect must not leak history or live events
-  - [ ] Verify private-channel access on replay, history, and thread reads
+  - [X] Revoke membership while a client is disconnected; reconnect must not leak history or live events
+  - [X] Verify private-channel access on replay and history
+  - [ ] Verify private-channel access on thread reads (slice 2D)
   - [ ] Verify edits, deletions, and reaction changes during disconnection
 - [ ] 2.8 UI
-  - [ ] Sidebar sections for channels, direct messages, and favorites, with clear unread indicators
+  - [X] Sidebar sections for channels, direct messages, and favorites, with clear unread indicators
   - [ ] Resizable thread pane; opening a thread preserves the channel's reading position
   - [ ] Hover actions that are keyboard-accessible
   - [ ] Edit in place, reaction chips, and the emoji picker
-  - [ ] Per-conversation draft, selection, and scroll restoration
+  - [X] Per-conversation draft and scroll restoration
+  - [ ] Per-conversation selection restoration
   - [ ] Selection in a document model so copy includes offscreen messages
   - [ ] Empty states and error messages that explain the next action
 - [ ] 2.9 Early integration prototype
   - [ ] Incoming webhook posts into a channel through a bot identity on the normal message path
   - [ ] Record what the prototype shows about bot identity, authorization, and rendering
 - [ ] 2.10 Tests
-  - [ ] Property tests for unread and thread state models
+  - [X] Property tests for the unread state model
+  - [ ] Property tests for the thread state model (slice 2D)
   - [ ] Unicode, emoji, editing, selection, and IME composition tests
   - [ ] End-to-end tests for threads, reactions, and membership changes
 - [ ] 2.11 Phase gate

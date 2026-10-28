@@ -49,7 +49,7 @@ Each workspace has one durable, gapless event log.
 
 ## D6. Local development database (task 0.4)
 
-`scripts/dev-db.sh` runs a project-local Postgres in `.dev/pgdata` on `127.0.0.1:54329` and never touches the system instance. Server code uses runtime-checked SQLx queries, so building does not require a live database.
+`scripts/dev-db.sh` runs a project-local Postgres in `.dev/pgdata` on `127.0.0.1:54329` and never touches the system instance. A second, independent instance (`LAZY_PG_INSTANCE=test`, `.dev/pgdata-test`, port 54330) is used by `scripts/test.sh`, so test runs never share a database or its connection limit with a server someone is running by hand. Server code uses runtime-checked SQLx queries, so building does not require a live database.
 
 ## D7. MVP scope
 
@@ -69,3 +69,21 @@ IBM Plex Sans (regular, italic, semibold, semibold italic) is bundled in `lazy-u
 ## D10. Keyboard operation (task 1.9)
 
 Tab and Shift+Tab move between tab-stop controls through GPUI's focus order; Enter or Space activates a focused control. Tab stops: the composer, Send, Sign out, sidebar channels, a failed message's retry button, and the sign-in form's fields and buttons. The hover Copy button is mouse-only for now.
+
+## D11. Conversations and read state, slice 2A (tasks 2.1, 2.6, 2.7)
+
+The wire types are in `lazy-protocol` (`PROTOCOL_VERSION` 2); the rules are in `lazy-domain::conversation`. Decisions that cut across layers:
+
+**What the sidebar holds.** Bootstrap lists the conversations the caller is a *member* of. Public channels the caller has not joined are found by browsing (`GET .../channels/browse`) and joined explicitly. A new account joins only the default channel (`#general`, `is_default`), not every public channel.
+
+**Who receives which event.** Message events go to a conversation's members only. `MemberAdded` and `MemberRemoved` also go to the person they are about, including a person who was just removed. `UserStateChanged` goes only to its owner. The server stores the audience with each event (workspace, conversation members, or one user) instead of inferring it at delivery time. Replay and live delivery use *current* membership: after removal, nothing further about the conversation reaches the removed person, not even events that committed earlier but had not been delivered. Someone who joins a channel receives its older events when they replay past them; clients ignore events for conversations they do not know yet and fetch history on `MemberAdded`, deduplicating by message id.
+
+**Direct and group conversations.** Two people make a `direct` conversation, three to nine a `group`. Both are private, unnamed, and list their `participants`. Opening is idempotent per exact participant set (`ParticipantSet`). "Adding someone" to a group is opening a *new* group with the larger set: it starts with no history and the old group is untouched. Direct and group conversations cannot be left or archived.
+
+**Channel management** follows `ConversationFacts` (see its tests): any member sets the topic and description and adds people; the creator or an admin renames, archives, unarchives, and removes members; admins can add people to public channels they have not joined but never bypass private channels; nobody leaves, archives, or is removed from the default channel. Archived channels stay readable and cannot be posted to. A name already in use is `name_taken`.
+
+**Read state.** A person's read position in a conversation is a message position (`last_read`, 0 for none). Unread count is messages from *other* people after it. The server computes the baseline in bootstrap. Clients then maintain it incrementally: a message from someone else in a member conversation adds one; a message the person authored moves their read position to that message (the server does the same in the send transaction, without an event); `UserStateChanged` replaces the state (another device read or starred). `MarkRead` only moves forward and is clamped to the conversation's newest message. A client marks a conversation read when it is selected, its window is active, and the newest message is on screen. The timeline shows a "New messages" divider where the read position was when the conversation was opened, and keeps it until the person leaves the conversation.
+
+**Idempotency.** Creating a channel and opening a conversation carry an operation id like sends do, and a lost response is reconciled through the operation status (`conversation_committed`). The other management commands are naturally idempotent (they set a state), so they carry none.
+
+**Favorites** are per person (`ConversationUserState::favorite`) and sync across devices through `UserStateChanged`.

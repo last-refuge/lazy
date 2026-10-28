@@ -19,6 +19,8 @@ pub enum ErrorCode {
     Conflict,
     /// Registration failed because the username is taken.
     UsernameTaken,
+    /// A channel with that name already exists in the workspace.
+    NameTaken,
     PayloadTooLarge,
     RateLimited,
     /// The server failed. The outcome of a mutation may be unknown.
@@ -35,7 +37,7 @@ impl ErrorCode {
             Self::Unauthenticated | Self::InvalidCredentials => 401,
             Self::Forbidden => 403,
             Self::NotFound => 404,
-            Self::Conflict | Self::UsernameTaken => 409,
+            Self::Conflict | Self::UsernameTaken | Self::NameTaken => 409,
             Self::PayloadTooLarge => 413,
             Self::RateLimited => 429,
             Self::Internal => 500,

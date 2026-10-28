@@ -865,3 +865,98 @@ fn masked_double_click_selects_the_whole_field(cx: &mut TestAppContext) {
     });
     assert_eq!(input.read_with(cx, |i, _| i.selection_utf16().0), 0..7);
 }
+
+// ---- Theme following ---------------------------------------------------------------------
+
+mod theme_following {
+    use gpui::WindowAppearance;
+
+    use super::*;
+    use crate::theme::{self, Theme};
+
+    fn text_color(input: &Entity<TextInput>, cx: &VisualTestContext) -> gpui::Hsla {
+        input.read_with(cx, |input, _| input.style.text_color)
+    }
+
+    fn redraw(cx: &mut VisualTestContext) {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn an_input_follows_the_theme_when_the_system_appearance_changes(cx: &mut TestAppContext) {
+        // The window opens while the app believes the system is light...
+        cx.update(|cx| theme::install(cx, WindowAppearance::Light));
+        let (input, _, cx) = setup(cx, TextInputOptions::new("Username"), 400.);
+        redraw(cx);
+        assert_eq!(text_color(&input, cx), Theme::light().colors.text);
+
+        // ...then it turns out to be dark. Typed text must contrast with the dark surface, not
+        // stay the light theme's dark brown (which made text invisible on the dark box).
+        cx.update(|_, cx| theme::install(cx, WindowAppearance::Dark));
+        redraw(cx);
+        assert_eq!(text_color(&input, cx), Theme::dark().colors.text);
+        let (placeholder, caret, selection) = input.read_with(cx, |input, _| {
+            (
+                input.style.placeholder_color,
+                input.style.caret_color,
+                input.style.selection_color,
+            )
+        });
+        let dark = Theme::dark().colors;
+        assert_eq!(
+            (placeholder, caret, selection),
+            (dark.text_faint, dark.caret, dark.selection)
+        );
+
+        // And back again.
+        cx.update(|_, cx| theme::install(cx, WindowAppearance::Light));
+        redraw(cx);
+        assert_eq!(text_color(&input, cx), Theme::light().colors.text);
+    }
+
+    #[gpui::test]
+    fn typed_text_is_shaped_in_the_new_color_after_a_change(cx: &mut TestAppContext) {
+        cx.update(|cx| theme::install(cx, WindowAppearance::Light));
+        let (input, _, cx) = setup(cx, TextInputOptions::new(""), 400.);
+        cx.simulate_input("alice");
+        redraw(cx);
+        cx.update(|_, cx| theme::install(cx, WindowAppearance::Dark));
+        redraw(cx);
+        // The shaped-text cache is keyed by color, so the text is reshaped rather than reused.
+        let shaped_color = input.read_with(cx, |input, _| {
+            input
+                .layout
+                .borrow()
+                .as_ref()
+                .map(|state| state.key.text_color)
+        });
+        assert_eq!(shaped_color, Some(Theme::dark().colors.text));
+        assert_eq!(
+            super::text(&input, cx),
+            "alice",
+            "the text itself is untouched"
+        );
+    }
+
+    #[gpui::test]
+    fn an_explicit_style_opts_out_of_following_the_theme(cx: &mut TestAppContext) {
+        cx.update(|cx| theme::install(cx, WindowAppearance::Light));
+        let fixed = TextInputStyle {
+            text_color: gpui::red(),
+            ..TextInputStyle::default()
+        };
+        let (input, _, cx) = setup(cx, TextInputOptions::new("").style(fixed), 400.);
+        redraw(cx);
+        cx.update(|_, cx| theme::install(cx, WindowAppearance::Dark));
+        redraw(cx);
+        assert_eq!(text_color(&input, cx), gpui::red());
+    }
+
+    #[gpui::test]
+    fn an_input_without_an_installed_theme_keeps_its_default_style(cx: &mut TestAppContext) {
+        let (input, _, cx) = setup(cx, TextInputOptions::new(""), 400.);
+        redraw(cx);
+        assert_eq!(text_color(&input, cx), TextInputStyle::default().text_color);
+    }
+}

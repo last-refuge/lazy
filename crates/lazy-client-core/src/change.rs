@@ -2,7 +2,7 @@
 
 use lazy_domain::ConversationId;
 
-use crate::Effect;
+use crate::{ActionKind, Effect};
 
 /// What changed. Apply the changes of one [`crate::Output`] in order, then read the new state
 /// from the core. A timeline change describes the row list as it was at that point in the
@@ -38,6 +38,18 @@ pub enum Change {
         conversation: ConversationId,
     },
     NoticeChanged,
+    /// A conversation's title, member count, archived flag, favorite flag, unread counts, or
+    /// "New messages" marker changed. Sidebar sections may need re-reading.
+    ConversationStateChanged {
+        conversation: ConversationId,
+    },
+    /// The public channel directory (`browse_results`) changed.
+    BrowseChanged,
+    /// Progress of a management action changed. Read it with `ClientCore::action`.
+    ActionChanged(ActionKind),
+    /// A created channel or an opened direct/group conversation is ready and has been selected.
+    /// Navigate to it.
+    ConversationOpened(ConversationId),
 }
 
 /// Result of [`crate::ClientCore::handle`].

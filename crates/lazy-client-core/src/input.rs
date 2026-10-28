@@ -1,11 +1,12 @@
 //! Everything that can happen to the core: person actions and results reported by the runtime.
 
-use lazy_domain::{ConversationId, OperationId, WorkspaceId};
+use lazy_domain::{ChannelVisibility, ConversationId, EventSeq, OperationId, UserId, WorkspaceId};
 use lazy_protocol::{
-    BootstrapResponse, HistoryPage, OperationStatus, SendMessageResponse, ServerFrame, User,
+    BootstrapResponse, ConversationResponse, ConversationUserState, HistoryPage, OperationStatus,
+    SendMessageResponse, ServerFrame, User,
 };
 
-use crate::model::{RequestError, StartupState};
+use crate::model::{ActionKind, ActionOutcome, RequestError, StartupState};
 
 /// Input to [`crate::ClientCore::handle`].
 #[derive(Debug, Clone)]
@@ -47,6 +48,60 @@ pub enum Input {
     },
     DismissNotice,
 
+    // ----- Conversations and read state (person actions) -----
+    /// Create a channel. Fields are raw text; the core validates them. An empty `topic` or
+    /// `description` means none. Success selects the new channel (`Change::ConversationOpened`).
+    CreateChannel {
+        name: String,
+        visibility: ChannelVisibility,
+        topic: String,
+        description: String,
+    },
+    /// Open (find or create) the direct or group conversation with exactly these other people.
+    /// Opening is idempotent per participant set; success selects it. Adding someone to a group
+    /// is opening a new conversation with the larger set.
+    OpenConversation {
+        participants: Vec<UserId>,
+    },
+    /// Load the directory of public channels into `ClientCore::browse_results`.
+    BrowseChannels,
+    JoinChannel(ConversationId),
+    LeaveChannel(ConversationId),
+    AddMembers {
+        id: ConversationId,
+        users: Vec<UserId>,
+    },
+    RemoveMember {
+        id: ConversationId,
+        user: UserId,
+    },
+    /// Change a channel's name, topic, or description. `None` leaves a field unchanged; `Some("")`
+    /// clears a topic or description.
+    UpdateConversation {
+        id: ConversationId,
+        name: Option<String>,
+        topic: Option<String>,
+        description: Option<String>,
+    },
+    ArchiveConversation(ConversationId),
+    UnarchiveConversation(ConversationId),
+    SetFavorite {
+        id: ConversationId,
+        favorite: bool,
+    },
+    /// Forget a failed action's error (for example when its dialog is closed).
+    DismissAction(ActionKind),
+    /// Whether the app window is focused and visible. Unread messages are marked read only while
+    /// it is. Assumed active until told otherwise.
+    WindowActive(bool),
+    /// Whether the newest message of the conversation is on screen. Must be reported by the
+    /// timeline view; a conversation is assumed *not* at the bottom until it says so, and the
+    /// report is forgotten when the person leaves the conversation.
+    TimelineAtBottom {
+        conversation: ConversationId,
+        at_bottom: bool,
+    },
+
     // ----- Runtime reports -----
     /// First input after the runtime starts.
     Started(StartupState),
@@ -85,6 +140,24 @@ pub enum Input {
     Frame(ServerFrame),
     /// A non-fatal local storage failure to surface to the person.
     StorageProblem(String),
+    /// Result of creating a channel or opening a conversation, the two actions that carry an
+    /// operation id. An unknown outcome is reconciled by asking the server, never by repeating
+    /// the request with a new id.
+    ConversationCommandResult {
+        operation: OperationId,
+        result: Result<ConversationResponse, RequestError>,
+    },
+    /// Result of every other management request, including browsing.
+    ActionResult {
+        kind: ActionKind,
+        result: Result<ActionOutcome, RequestError>,
+    },
+    /// Result of marking a conversation read up to `up_to`.
+    MarkReadResult {
+        conversation: ConversationId,
+        up_to: EventSeq,
+        result: Result<ConversationUserState, RequestError>,
+    },
 }
 
 /// Lifecycle of one workspace's realtime connection.

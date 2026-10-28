@@ -12,14 +12,16 @@ use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
 use axum::response::Response;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, patch, post, put};
 use futures_util::FutureExt;
-use lazy_domain::{ConversationId, OperationId};
+use lazy_domain::{ConversationId, OperationId, UserId, WorkspaceId};
 use lazy_protocol::api::paths;
 use lazy_protocol::{
-    BootstrapResponse, ErrorCode, HealthResponse, HistoryPage, HistoryQuery, LoginRequest,
-    OperationStatus, PROTOCOL_VERSION, RegisterRequest, SendMessageRequest, SendMessageResponse,
-    SessionResponse,
+    AddMembersRequest, BootstrapResponse, BrowseChannelsResponse, ConversationResponse,
+    CreateChannelRequest, ErrorCode, HealthResponse, HistoryPage, HistoryQuery, LoginRequest,
+    MarkReadRequest, OpenConversationRequest, OperationStatus, PROTOCOL_VERSION, RegisterRequest,
+    SendMessageRequest, SendMessageResponse, SessionResponse, SetFavoriteRequest,
+    UpdateConversationRequest, UserStateResponse,
 };
 use serde::de::DeserializeOwned;
 use tower_http::timeout::TimeoutLayer;
@@ -28,7 +30,7 @@ use tower_http::trace::TraceLayer;
 use crate::accounts::{self, Principal};
 use crate::app::AppState;
 use crate::error::AppError;
-use crate::{bootstrap, messages, realtime};
+use crate::{bootstrap, conversations, messages, realtime};
 
 /// Largest accepted request body.
 const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -47,6 +49,18 @@ pub fn router(state: AppState) -> Router {
         .route(paths::REALTIME, get(realtime_upgrade))
         .route(paths::MESSAGES_ROUTE, get(history).post(send_message))
         .route(paths::OPERATION_ROUTE, get(operation_status))
+        .route(paths::CHANNELS_ROUTE, post(create_channel))
+        .route(paths::BROWSE_CHANNELS_ROUTE, get(browse_channels))
+        .route(paths::OPEN_CONVERSATION_ROUTE, post(open_conversation))
+        .route(paths::CONVERSATION_ROUTE, patch(update_conversation))
+        .route(paths::JOIN_ROUTE, post(join_channel))
+        .route(paths::LEAVE_ROUTE, post(leave_channel))
+        .route(paths::ARCHIVE_ROUTE, post(archive_channel))
+        .route(paths::UNARCHIVE_ROUTE, post(unarchive_channel))
+        .route(paths::MEMBERS_ROUTE, post(add_members))
+        .route(paths::MEMBER_ROUTE, delete(remove_member))
+        .route(paths::FAVORITE_ROUTE, put(set_favorite))
+        .route(paths::READ_ROUTE, post(mark_read))
         .fallback(unknown_route)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(TimeoutLayer::with_status_code(
@@ -128,6 +142,152 @@ async fn operation_status(
     messages::operation_status(&state.pool, principal.user_id, operation_id)
         .await
         .map(Json)
+}
+
+async fn create_channel(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(workspace_id): ApiPath<WorkspaceId>,
+    ApiJson(request): ApiJson<CreateChannelRequest>,
+) -> Result<Json<ConversationResponse>, AppError> {
+    let conversation =
+        conversations::create_channel(&state.pool, principal.user_id, workspace_id, request)
+            .await?;
+    Ok(Json(ConversationResponse { conversation }))
+}
+
+async fn browse_channels(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(workspace_id): ApiPath<WorkspaceId>,
+) -> Result<Json<BrowseChannelsResponse>, AppError> {
+    conversations::browse_channels(&state.pool, principal.user_id, workspace_id)
+        .await
+        .map(Json)
+}
+
+async fn open_conversation(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(workspace_id): ApiPath<WorkspaceId>,
+    ApiJson(request): ApiJson<OpenConversationRequest>,
+) -> Result<Json<ConversationResponse>, AppError> {
+    let conversation =
+        conversations::open_conversation(&state.pool, principal.user_id, workspace_id, request)
+            .await?;
+    Ok(Json(ConversationResponse { conversation }))
+}
+
+async fn update_conversation(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+    ApiJson(request): ApiJson<UpdateConversationRequest>,
+) -> Result<Json<ConversationResponse>, AppError> {
+    let conversation = conversations::update_conversation(
+        &state.pool,
+        principal.user_id,
+        conversation_id,
+        request,
+    )
+    .await?;
+    Ok(Json(ConversationResponse { conversation }))
+}
+
+async fn join_channel(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+) -> Result<Json<ConversationResponse>, AppError> {
+    let conversation = conversations::join(&state.pool, principal.user_id, conversation_id).await?;
+    Ok(Json(ConversationResponse { conversation }))
+}
+
+async fn leave_channel(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+) -> Result<StatusCode, AppError> {
+    conversations::leave(&state.pool, principal.user_id, conversation_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn archive_channel(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+) -> Result<Json<ConversationResponse>, AppError> {
+    let conversation =
+        conversations::archive(&state.pool, principal.user_id, conversation_id).await?;
+    Ok(Json(ConversationResponse { conversation }))
+}
+
+async fn unarchive_channel(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+) -> Result<Json<ConversationResponse>, AppError> {
+    let conversation =
+        conversations::unarchive(&state.pool, principal.user_id, conversation_id).await?;
+    Ok(Json(ConversationResponse { conversation }))
+}
+
+async fn add_members(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+    ApiJson(request): ApiJson<AddMembersRequest>,
+) -> Result<Json<ConversationResponse>, AppError> {
+    let conversation = conversations::add_members_command(
+        &state.pool,
+        principal.user_id,
+        conversation_id,
+        request,
+    )
+    .await?;
+    Ok(Json(ConversationResponse { conversation }))
+}
+
+async fn remove_member(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath((conversation_id, user_id)): ApiPath<(ConversationId, UserId)>,
+) -> Result<StatusCode, AppError> {
+    conversations::remove_member_command(&state.pool, principal.user_id, conversation_id, user_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_favorite(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+    ApiJson(request): ApiJson<SetFavoriteRequest>,
+) -> Result<Json<UserStateResponse>, AppError> {
+    let state = conversations::set_favorite(
+        &state.pool,
+        principal.user_id,
+        conversation_id,
+        request.favorite,
+    )
+    .await?;
+    Ok(Json(UserStateResponse { state }))
+}
+
+async fn mark_read(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+    ApiJson(request): ApiJson<MarkReadRequest>,
+) -> Result<Json<UserStateResponse>, AppError> {
+    let state = conversations::mark_read(
+        &state.pool,
+        principal.user_id,
+        conversation_id,
+        request.up_to,
+    )
+    .await?;
+    Ok(Json(UserStateResponse { state }))
 }
 
 async fn realtime_upgrade(

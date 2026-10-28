@@ -23,7 +23,7 @@
 use std::collections::HashSet;
 
 use lazy_domain::{ConversationId, EventSeq, WorkspaceRole};
-use lazy_protocol::{Conversation, Message, User, Workspace};
+use lazy_protocol::{Conversation, ConversationUserState, Message, User, Workspace};
 use serde::{Deserialize, Serialize};
 
 /// Most messages cached per conversation (the newest ones).
@@ -52,6 +52,22 @@ pub struct CachedWorkspace {
     /// The event position everything in this workspace is current to; resume after it.
     pub cursor: EventSeq,
     pub timelines: Vec<CachedTimeline>,
+    /// The person's favorite flag, read position, and unread counts for the conversations above.
+    /// They are saved together with the cursor, so a restart that replays events after the
+    /// cursor counts exactly the messages that were not yet counted. A cache written before this
+    /// field existed has none, and the next bootstrap supplies the baseline.
+    #[serde(default)]
+    pub user_state: Vec<CachedUserState>,
+}
+
+/// One conversation's read state and the log position it is current to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedUserState {
+    pub state: ConversationUserState,
+    /// Events at or before this position are already reflected in `state` and are not counted
+    /// again. Usually the workspace cursor; later when the baseline came from a bootstrap that
+    /// was ahead of the cursor.
+    pub as_of: EventSeq,
 }
 
 /// The newest messages of one conversation.
@@ -77,6 +93,11 @@ impl ContentCache {
             workspace
                 .timelines
                 .retain(|t| known.contains(&t.conversation) && seen.insert(t.conversation));
+            let mut seen_state = HashSet::new();
+            workspace.user_state.retain(|s| {
+                known.contains(&s.state.conversation_id)
+                    && seen_state.insert(s.state.conversation_id)
+            });
             for timeline in &mut workspace.timelines {
                 let conversation = timeline.conversation;
                 timeline
@@ -168,10 +189,16 @@ mod tests {
         Conversation {
             id: ConversationId::generate(),
             workspace_id: workspace,
-            name: ChannelName::parse("general").unwrap(),
+            kind: lazy_domain::ConversationKind::Channel,
+            name: Some(ChannelName::parse("general").unwrap()),
             topic: None,
+            description: None,
             visibility: ChannelVisibility::Public,
             archived: false,
+            is_default: false,
+            created_by: None,
+            participants: Vec::new(),
+            member_count: 1,
         }
     }
 
@@ -211,6 +238,7 @@ mod tests {
                 members: vec![me],
                 cursor: EventSeq::new(1000).unwrap(),
                 timelines,
+                user_state: Vec::new(),
             }],
         }
     }

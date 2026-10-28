@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use lazy_domain::{ConversationId, EventSeq, MessageId, OperationId};
+use lazy_domain::{ConversationId, EventSeq, MessageId, OperationId, UserId};
 use lazy_protocol::Message;
 
 use crate::cache::CachedTimeline;
@@ -123,6 +123,46 @@ impl Timeline {
 
     pub(crate) fn items(&self) -> &[TimelineItem] {
         &self.items
+    }
+
+    /// Position of the newest confirmed row.
+    pub(crate) fn newest_seq(&self) -> Option<EventSeq> {
+        self.items.iter().rev().find_map(TimelineItem::seq)
+    }
+
+    /// Key of the first confirmed row after `position`: where a "New messages" divider goes.
+    pub(crate) fn first_after(&self, position: EventSeq) -> Option<ItemKey> {
+        self.items
+            .iter()
+            .find(|item| item.seq().is_some_and(|seq| seq > position))
+            .map(|item| item.key)
+    }
+
+    /// How many confirmed rows with a position after `position` and no later than `up_to` were
+    /// written by someone other than `me`.
+    pub(crate) fn count_others_between(
+        &self,
+        position: EventSeq,
+        up_to: EventSeq,
+        me: UserId,
+    ) -> u32 {
+        let count = self
+            .items
+            .iter()
+            .filter(|item| {
+                item.author_id != me && item.seq().is_some_and(|seq| seq > position && seq <= up_to)
+            })
+            .count();
+        u32::try_from(count).unwrap_or(u32::MAX)
+    }
+
+    /// Whether every message after `position` is loaded, so counting rows gives the true number.
+    pub(crate) fn is_complete_after(&self, position: EventSeq) -> bool {
+        self.initial_loaded
+            && (!self.older_available
+                || self
+                    .history_floor
+                    .is_none_or(|floor| position.get() + 1 >= floor.get()))
     }
 
     /// The `before` cursor for the next page of older history.

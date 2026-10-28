@@ -1,8 +1,7 @@
 //! Sending messages, reading history, and looking up operation outcomes.
 
 use lazy_domain::{
-    ChannelAccess, ConversationId, EventSeq, MessageDocument, MessageId, OperationId, Timestamp,
-    UserId, WorkspaceId,
+    ConversationId, EventSeq, MessageDocument, MessageId, OperationId, Timestamp, UserId,
 };
 use lazy_protocol::{
     Event, HistoryPage, HistoryQuery, Message, OperationStatus, SendMessageRequest,
@@ -12,9 +11,10 @@ use sqlx::{PgConnection, PgPool};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::db;
+use crate::conversations::{self, Lock};
 use crate::error::AppError;
-use crate::events;
+use crate::events::{self, Audience, NewEvent};
+use crate::receipts::{self, ReceiptKind, ReceiptTarget};
 
 /// History page size when the caller does not ask for one, and the largest it may ask for.
 pub const DEFAULT_HISTORY_LIMIT: u32 = 50;
@@ -57,64 +57,17 @@ impl MessageRow {
     }
 }
 
-/// A conversation's workspace and a user's relationship to it.
-#[derive(Debug, Clone, Copy)]
-pub struct ChannelFacts {
-    pub workspace_id: WorkspaceId,
-    pub access: ChannelAccess,
-}
-
-/// Loads the facts needed to authorize `user` against `conversation`, or `None` if the
-/// conversation does not exist.
-pub async fn load_access(
-    conn: &mut PgConnection,
-    user: UserId,
-    conversation: ConversationId,
-) -> Result<Option<ChannelFacts>, AppError> {
-    let row: Option<(Uuid, String, bool, Option<String>, bool)> = sqlx::query_as(
-        "SELECT c.workspace_id, c.visibility, c.archived, wm.role, (cm.user_id IS NOT NULL) \
-         FROM conversations c \
-         LEFT JOIN workspace_members wm ON wm.workspace_id = c.workspace_id AND wm.user_id = $1 \
-         LEFT JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1 \
-         WHERE c.id = $2",
-    )
-    .bind(user.as_uuid())
-    .bind(conversation.as_uuid())
-    .fetch_optional(conn)
-    .await?;
-    row.map(|(workspace_id, visibility, archived, role, is_member)| {
-        Ok(ChannelFacts {
-            workspace_id: WorkspaceId::from_uuid(workspace_id),
-            access: ChannelAccess {
-                workspace_role: role.as_deref().map(db::role_from_db).transpose()?,
-                is_channel_member: is_member,
-                visibility: db::visibility_from_db(&visibility)?,
-                archived,
-            },
-        })
-    })
-    .transpose()
-}
-
-/// A conversation the caller may read; otherwise `NotFound`, so private channels do not reveal
-/// their existence.
-async fn readable_facts(
-    conn: &mut PgConnection,
-    user: UserId,
-    conversation: ConversationId,
-) -> Result<ChannelFacts, AppError> {
-    load_access(conn, user, conversation)
-        .await?
-        .filter(|facts| facts.access.can_read())
-        .ok_or_else(|| AppError::not_found("conversation not found"))
-}
-
 /// Commits a message and returns the acknowledgment.
 ///
 /// One transaction authorizes the caller, claims the operation receipt, reserves the next event
 /// position, and inserts the message and its event. The result is returned only after commit.
 /// Repeating a committed operation with the same content returns the original message; the same
 /// operation id with different content is a conflict.
+///
+/// The transaction holds the conversation row `FOR SHARE`: any number of sends run together, but
+/// never alongside an archive or a membership change, so no message commits after an archive or
+/// after its author's removal in the log. It also moves the author's read position to the new
+/// message, without an event: a person who has just written has read everything before it.
 pub async fn send_message(
     pool: &PgPool,
     user: UserId,
@@ -123,43 +76,36 @@ pub async fn send_message(
 ) -> Result<Message, AppError> {
     let fingerprint = crate::crypto::request_fingerprint(conversation, &request.document)?;
 
-    let mut tx = pool.begin().await?;
-    let facts = readable_facts(&mut tx, user, conversation).await?;
-    if !facts.access.can_post() {
+    let (mut tx, loaded) =
+        conversations::begin_visible(pool, user, conversation, Lock::Shared).await?;
+    if !loaded.access().can_post() {
         return Err(AppError::forbidden("you cannot post in this conversation"));
     }
 
     // Claim the operation. A concurrent transaction holding the same (user, operation) makes this
     // wait for its outcome, so exactly one of two simultaneous duplicates inserts the message.
     let message_id = MessageId::generate();
-    let claimed = sqlx::query(
-        "INSERT INTO operation_receipts (user_id, operation_id, request_hash, message_id) \
-         VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, operation_id) DO NOTHING",
+    if let Some(existing) = receipts::claim(
+        &mut tx,
+        user,
+        request.operation_id,
+        ReceiptKind::SendMessage,
+        &fingerprint,
+        ReceiptTarget::Message(message_id),
     )
-    .bind(user.as_uuid())
-    .bind(request.operation_id.as_uuid())
-    .bind(&fingerprint[..])
-    .bind(message_id.as_uuid())
-    .execute(&mut *tx)
     .await?
-    .rows_affected()
-        == 1;
-
-    if !claimed {
-        let existing = fetch_receipt(&mut tx, user, request.operation_id).await?;
-        tx.rollback().await?;
-        return match existing {
-            Some((stored_fingerprint, message)) if stored_fingerprint == fingerprint[..] => {
-                Ok(message)
-            }
-            Some(_) => Err(AppError::conflict(
-                "this operation id was already used for a different message",
-            )),
-            None => Err(AppError::internal("operation receipt vanished")),
-        };
+    {
+        existing.ensure_same(ReceiptKind::SendMessage, &fingerprint)?;
+        let original = existing
+            .message_id
+            .map(MessageId::from_uuid)
+            .ok_or_else(|| AppError::internal("receipt has no message"))?;
+        return fetch_message(&mut tx, original)
+            .await?
+            .ok_or_else(|| AppError::internal("receipted message vanished"));
     }
 
-    let (seq, now) = events::next_position(&mut tx, facts.workspace_id).await?;
+    let (seq, now) = events::next_position(&mut tx, loaded.workspace_id).await?;
     let plain_text = request.document.plain_text();
     sqlx::query(
         "INSERT INTO messages (id, conversation_id, author_id, document, plain_text, revision, seq, created_at) \
@@ -174,6 +120,16 @@ pub async fn send_message(
     .bind(now.as_offset_date_time())
     .execute(&mut *tx)
     .await?;
+    sqlx::query(
+        "INSERT INTO conversation_user_state (user_id, conversation_id, last_read) VALUES ($1, $2, $3) \
+         ON CONFLICT (user_id, conversation_id) DO UPDATE \
+         SET last_read = GREATEST(conversation_user_state.last_read, excluded.last_read)",
+    )
+    .bind(user.as_uuid())
+    .bind(conversation.as_uuid())
+    .bind(seq.get())
+    .execute(&mut *tx)
+    .await?;
 
     let message = Message {
         id: message_id,
@@ -186,13 +142,14 @@ pub async fn send_message(
     };
     events::insert_event(
         &mut tx,
-        events::NewEvent {
-            workspace_id: facts.workspace_id,
+        NewEvent {
+            workspace_id: loaded.workspace_id,
             seq,
             occurred_at: now,
             kind: "message_created",
             conversation_id: Some(conversation),
             operation_id: Some(request.operation_id),
+            audience: Audience::Members,
             event: &Event::MessageCreated {
                 message: message.clone(),
                 operation_id: Some(request.operation_id),
@@ -204,29 +161,17 @@ pub async fn send_message(
     Ok(message)
 }
 
-/// Looks up the receipt for an operation together with the message it produced.
-async fn fetch_receipt(
+/// Loads a message by id.
+async fn fetch_message(
     conn: &mut PgConnection,
-    user: UserId,
-    operation: OperationId,
-) -> Result<Option<(Vec<u8>, Message)>, AppError> {
-    #[derive(sqlx::FromRow)]
-    struct ReceiptRow {
-        request_hash: Vec<u8>,
-        #[sqlx(flatten)]
-        message: MessageRow,
-    }
-    let row: Option<ReceiptRow> = sqlx::query_as(concat!(
-        "SELECT r.request_hash, m.id, m.conversation_id, m.author_id, m.document, m.created_at, m.revision, m.seq ",
-        "FROM operation_receipts r JOIN messages m ON m.id = r.message_id ",
-        "WHERE r.user_id = $1 AND r.operation_id = $2"
-    ))
-    .bind(user.as_uuid())
-    .bind(operation.as_uuid())
-    .fetch_optional(conn)
-    .await?;
-    row.map(|row| Ok((row.request_hash, row.message.into_message()?)))
-        .transpose()
+    id: MessageId,
+) -> Result<Option<Message>, AppError> {
+    let row: Option<MessageRow> =
+        sqlx::query_as(message_select!("FROM messages m WHERE m.id = $1"))
+            .bind(id.as_uuid())
+            .fetch_optional(conn)
+            .await?;
+    row.map(MessageRow::into_message).transpose()
 }
 
 /// Pages a conversation's history, oldest first within the page.
@@ -241,7 +186,10 @@ pub async fn history(
         .unwrap_or(DEFAULT_HISTORY_LIMIT)
         .clamp(1, MAX_HISTORY_LIMIT);
     let mut conn = pool.acquire().await?;
-    readable_facts(&mut conn, user, conversation).await?;
+    conversations::load(&mut conn, user, conversation)
+        .await?
+        .filter(conversations::Loaded::can_read)
+        .ok_or_else(|| AppError::not_found("conversation not found"))?;
 
     let mut rows: Vec<MessageRow> = sqlx::query_as(message_select!(
         "FROM messages m WHERE m.conversation_id = $1 AND ($2::bigint IS NULL OR m.seq < $2) \
@@ -270,8 +218,17 @@ pub async fn operation_status(
     operation: OperationId,
 ) -> Result<OperationStatus, AppError> {
     let mut conn = pool.acquire().await?;
-    Ok(match fetch_receipt(&mut conn, user, operation).await? {
-        Some((_, message)) => OperationStatus::Committed { message },
-        None => OperationStatus::NotFound,
-    })
+    let Some(receipt) = receipts::find(&mut conn, user, operation).await? else {
+        return Ok(OperationStatus::NotFound);
+    };
+    if let Some(id) = receipt.message_id {
+        let message = fetch_message(&mut conn, MessageId::from_uuid(id))
+            .await?
+            .ok_or_else(|| AppError::internal("receipted message vanished"))?;
+        return Ok(OperationStatus::Committed { message });
+    }
+    match conversations::operation_conversation(&mut conn, user, operation).await? {
+        Some(conversation) => Ok(OperationStatus::ConversationCommitted { conversation }),
+        None => Ok(OperationStatus::NotFound),
+    }
 }

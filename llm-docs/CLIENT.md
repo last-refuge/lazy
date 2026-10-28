@@ -35,6 +35,8 @@ Person actions, sent by the UI:
 | `LoadOlder { conversation }` | Next page of older history. |
 | `DismissNotice` | |
 
+Conversation and read-state inputs (create a channel, open a conversation, browse, join, leave, add or remove people, edit, archive, favorite, `WindowActive`, `TimelineAtBottom`, `DismissAction`) are listed under [Conversations and read state](#conversations-and-read-state-slice-2a).
+
 Runtime reports (the host forwards these from the `Receiver<Input>`; the UI never creates them): `Started`, `Authenticated`, `AuthFailed`, `SessionExpired`, `BootstrapLoaded`, `BootstrapFailed`, `HistoryLoaded`, `SubmissionPersisted`, `SubmissionPersistFailed`, `SendResult`, `OperationStatusResult`, `Socket(SocketEvent)`, `Frame(ServerFrame)`, `StorageProblem`.
 
 `Started` is always the first input the runtime delivers. It carries the unsettled journal, saved drafts, the saved content cache (if one could be read), whether a session was restored, and any storage problems found while loading.
@@ -43,7 +45,7 @@ Request results use `RequestError`: `Rejected(ApiError)` means the server receiv
 
 ### `Effect` (what comes out for the runtime)
 
-`Register`, `Login`, `SignOut`, `ForgetSession`, `LoadBootstrap`, `Subscribe { workspace, after }`, `FetchHistory { conversation, before, limit, generation }`, `PersistSubmission(entry)`, `SendMessage { operation, conversation, document }`, `QueryOperationStatus { operation }`, `SettleSubmission { operation }`, `PersistDrafts(all drafts)`, `PersistCache(cache)`, `DiscardCache`.
+`Register`, `Login`, `SignOut`, `ForgetSession`, `LoadBootstrap`, `Subscribe { workspace, after }`, `FetchHistory { conversation, before, limit, generation }`, `PersistSubmission(entry)`, `SendMessage { operation, conversation, document }`, `QueryOperationStatus { operation }`, `SettleSubmission { operation }`, `PersistDrafts(all drafts)`, `PersistCache(cache)`, `DiscardCache`, and for conversations: `CreateChannel`, `OpenConversation`, `BrowseChannels`, `JoinChannel`, `LeaveChannel`, `AddMembers`, `RemoveMember`, `UpdateConversation`, `ArchiveConversation`, `UnarchiveConversation`, `SetFavorite`, `MarkRead` (see [Conversations and read state](#conversations-and-read-state-slice-2a)).
 
 Effects from one `handle` call may run concurrently. The core never emits an effect that depends on another's completion: a send is emitted only after its journal write is reported durable.
 
@@ -145,6 +147,68 @@ The client keeps a bounded, encrypted, **regenerable** cache so a restart shows 
 
 **Edits and deletes (not in the protocol yet).** A cached message the server later edits or deletes is an *event* with a position greater than the cursor, so replay applies it through the same path that applies new messages (matched by message id) and the next cache write carries the result; nothing in the cache design needs to change. An edit or delete that happened while the client was away is covered because replay runs from the cached cursor. If the server has pruned those events (`snapshot_required`, cursor expired), the whole cache is discarded, so a stale cached message can never outlive the events that would have corrected it. When those events are added they must be applied by message id to timeline rows *and* mark the cache dirty; that is the only requirement.
 
+## Conversations and read state (slice 2A)
+
+The contract is `llm-docs/DECISIONS.md` D11 and `PROTOCOL_VERSION` 2. This section is what the client does with it.
+
+### What the UI calls
+
+**Read model** (all on `ClientCore`):
+
+| Call | Meaning |
+| --- | --- |
+| `sidebar()` → `Sidebar { favorites, channels, direct_and_group }` | Every conversation the person belongs to, once, in display order: favorites (any kind, by title), other channels (by name), other direct/group conversations (most recent message first). `favorites()`, `channels()`, `direct_and_group()` return one section each. |
+| `conversations()`, `conversation(id)` | The directory. `Conversation` has `kind`, `name` (channels only), `topic`, `description`, `archived`, `is_default`, `created_by`, `participants`, `member_count`. |
+| `conversation_title(id)` | A channel's name (no `#`), or the *other* participants' display names, alphabetical, joined with commas (a placeholder for people the client has not heard of). |
+| `user_state(id)` → `Option<&ConversationUserState>` | `favorite`, `last_read`, `unread_count`, `mention_count`. `total_unread()` sums the counts for a badge. |
+| `unread_marker(id)` → `Option<ItemKey>` | The timeline row the "New messages" divider goes above. |
+| `browse_results()` | The public channel directory from the last `BrowseChannels`, joined or not. |
+| `action(kind)` → `&ActionState` | `Idle`, `InFlight`, or `Failed(message)` for each `ActionKind`. |
+| `can_join(&BrowsedChannel)`, `can_leave(id)`, `can_add_members(id)`, `can_remove_members(id)`, `can_rename(id)`, `can_edit_details(id)`, `can_archive(id)`, `can_unarchive(id)`; `facts(id)`, `browsed_facts(&BrowsedChannel)` | What to **offer**, from `ConversationFacts` with the caller's workspace role and whether they created the channel. The server decides; these only avoid offering the impossible. |
+| `members()` | Everyone known in the workspace, including the signed-in person, ordered by display name. For pickers. |
+| `window_active()` | The window state the core was last told. |
+
+**Inputs from the UI**: `CreateChannel { name, visibility, topic, description }` (raw text; an empty topic or description means none; the name is trimmed, lowercased, and spaces become hyphens), `OpenConversation { participants }`, `BrowseChannels`, `JoinChannel(id)`, `LeaveChannel(id)`, `AddMembers { id, users }`, `RemoveMember { id, user }`, `UpdateConversation { id, name, topic, description }` (`None` = unchanged, `Some("")` clears), `ArchiveConversation(id)`, `UnarchiveConversation(id)`, `SetFavorite { id, favorite }`, `DismissAction(kind)`, and two pieces of view state the core cannot know: **`WindowActive(bool)`** (assumed true) and **`TimelineAtBottom { conversation, at_bottom }`** (assumed false until reported, and forgotten when the person leaves the conversation). Without those two reports nothing is ever marked read.
+
+**Changes**: `ConversationStateChanged { conversation }` (title, member count, archived, favorite, unread counts, or marker), `BrowseChanged`, `ActionChanged(kind)`, and `ConversationOpened(id)`. The latter means a created channel or an opened direct/group conversation is ready and **already selected**; navigate to it. Joining does not navigate (the UI may send `SelectConversation` afterwards). `DirectoryChanged`, `SelectionChanged`, `TimelineReset`, and `NoticeChanged` fire as before.
+
+**Runtime reports** (not for the UI): `ConversationCommandResult { operation, result }` for create and open, `ActionResult { kind, result }` for everything else, `MarkReadResult { conversation, up_to, result }`.
+
+### Actions
+
+Each `ActionKind` has one `ActionState`. Starting an action that is already `InFlight` is ignored (a double click cannot send twice). Input that can be checked locally fails immediately with a readable message and sends nothing: a channel name that is empty, too long, or uses other characters; a topic over 250 characters or with line breaks; a description over 1,000; an open with no other person or more than nine. Server refusals are turned into words (`name_taken` → "That name is already taken. Choose another."; `forbidden` → "You're not allowed to do that."; an unreachable server → "Couldn't reach the server. Check your connection and try again."). `Failed` stays until the action is started again or `DismissAction`. An expired session ends the session instead of showing a dialog error.
+
+**Create and open carry an operation id and follow the same rules as sends.** If the answer is lost, the core asks `QueryOperationStatus`; `conversation_committed` finishes the action, `not_found` resends the **same** request with the **same** operation id (at most three times), and it never creates anew with a fresh id. After giving up the action is `Failed("... Try again to check.")` but the operation is kept: starting the same create again continues it (asking first); starting a different one begins a new operation. A late "it committed" answer is accepted whatever the request is doing. The other commands set a state, so repeating them is harmless and they carry no id. Successful create/open adds the conversation, selects it, fetches its newest page, and emits `ConversationOpened`.
+
+### Unread counting
+
+The server computes each conversation's baseline at a known log position; the client then keeps it current by applying events in order:
+
+* a message by someone else in a conversation the person belongs to adds one, unless it is at or before the read position;
+* a message by the person moves the read position to it and leaves nothing unread (the server does the same in the send transaction, without an event);
+* `UserStateChanged` replaces the whole state, since the server computed it at its own position;
+* events for a conversation the client does not know are ignored (they still advance the cursor), and no timeline is created for them.
+
+Every state also remembers the log position it is **current to** (`as_of`, saved in the cache). Events at or before it are never counted again. That is what makes a message count exactly once across replay after a cached restart, a reconnect, and a bootstrap that teaches the client a conversation the cache did not know. The answer to a mark-read request recounts from the timeline, but only messages up to the applied position, because a history page can hold messages whose events have not arrived yet.
+
+### Marking read
+
+Evaluated after every input, never from render. The core emits `MarkRead { conversation, up_to }` when the conversation is **selected**, the **window is active**, the timeline reports it is **at the bottom**, its history is **loaded**, it has **unread messages**, and the newest loaded message is beyond the read position. `up_to` is the newest loaded message position, so requests only ever move forward and are never sent because of the person's own message. At most one request per conversation is in flight (that is the debounce): messages arriving meanwhile are covered by one follow-up when the answer returns. A failed request is not retried for the same position until something changes (a new message, the window or bottom state, or reselecting).
+
+### The "New messages" divider
+
+When a conversation is selected the core captures its read position (if it has unread messages) and `unread_marker` returns the first confirmed row after it, as soon as that row is loaded. It stays while the conversation is marked read underneath it and is dropped only when the person selects another conversation. If nothing was unread on opening but messages arrive while the person is not looking (window inactive or scrolled up), the divider starts at the first of them.
+
+### Membership events
+
+* `ConversationCreated`: adds an unknown conversation (everything before it counts as read) or replaces a known one. `ConversationUpdated`: replaces a known conversation, ignores an unknown one.
+* `MemberAdded` for me: adds the conversation, **fetches its newest page**, does not select it, starts its read position at the event. `MemberAdded` for someone else: replaces the snapshot (it carries the current member count).
+* `MemberRemoved` for me: the conversation, its timeline, draft, read state, divider, unsent messages (their journal entries are released), and cache entry are dropped; if it was open, the default conversation opens instead and a notice says "You were removed from #name". If the person asked to leave (`LeaveChannel`), whichever of the answer and the event arrives first removes it, silently. `MemberRemoved` for someone else decrements the member count (a later `ConversationUpdated` snapshot is authoritative).
+
+### Cache and persistence
+
+The cache carries the directory (with the new conversation fields), each conversation's read state **and the position it is current to**, under the same atomic cursor-and-messages write, so a restart shows favorites and unread counts at once and replay counts only what is new. On revalidation the cached state is kept (replay brings it up to date); conversations the cache did not know take the bootstrap's baseline, current to its head; a cache from before read state existed supplies none and the bootstrap does. Conversations the person can no longer read lose their state with their content. Drafts remain per conversation and are removed with a removed conversation; sign-out deletes everything. Writes caused only by counting a live message are batched like other live events.
+
 ## Runtime
 
 ```rust
@@ -164,6 +228,10 @@ The input channel is bounded (4096). A host that stops draining it slows the rea
 ### Failure classification
 
 Reads that are safe to repeat (bootstrap, history, operation status) are retried up to `read_attempts` with backoff, then reported as `Unknown`. Mutations (register, login, send) are attempted exactly once. A 4xx with an `ApiError` body whose code is a definitive refusal is `Rejected`; a timeout, dropped connection, 5xx, or unparseable body is `Unknown`. A 401 on the WebSocket upgrade becomes `Input::SessionExpired`.
+
+### Conversation requests
+
+Created and opened conversations use `POST` once, never repeated by the runtime (the core reconciles). Browsing is a safe read and is retried. The other management calls are single attempts: join, archive, unarchive (`POST`, no body, answered with the conversation), leave (`POST`) and remove member (`DELETE`) where any 2xx status counts and the body is ignored (the contract does not say what they return), add members (`POST` with `user_ids`), update (`PATCH`, absent fields unchanged), favorite (`PUT`), and mark read (`POST` with `up_to`). All use `lazy_protocol::paths` and the same failure classification: a 4xx `ApiError` with a definitive code is a refusal, anything else is an unknown outcome.
 
 ### Secrets
 
@@ -226,6 +294,10 @@ On window close or app quit, call `runtime.shutdown()` from a non-async context 
 | --- | --- |
 | Core behavior rules above (send machine and queue, recovery, sync, history, sign-out) | **Measured**: 50 scenario tests plus a property test of random interleavings (events, replays, stale history pages, lost acknowledgments and requests, rejections, snapshot refreshes, reconnects, **app kills restarting from any cache write that could have survived**) that asserts commit order equals submission order, no lost or duplicated message after any restart, and the cache invariant on every cache write, run at 300 cases by default, 60,000 after each core change, and 300,000 once (353,551 restarts from caches with messages, 6.28 million cache writes checked); it found and fixed the history-floor bug and the restored-floor bug above, and fails if the cache is built wrongly or resumed past its cursor (both mutation-checked) |
 | Cache scenarios: instant restart, resume from the cached cursor without a newest-page fetch, revalidation, membership loss, selection move, snapshot discard (expired and ahead), cursor ahead of the log, other person's cache, offline start, cache with journal recovery and the send queue, bounds and eviction, cost | **Measured** (26 core tests) |
+| Conversations and read state: sections and ordering, titles, what to offer by role and creator, unread counting (others, own, replaced state, baselines, duplicates, unknown conversations), the mark-read policy (every condition, one in flight, monotonic, failures), the divider, membership events and removal while open, browse, every management action with validation, readable errors, double submit, stale results, and create/open unknown-outcome reconciliation | **Measured** (80 scenario tests across `readstate`, `conversations`, `actions`, and the cache tests) |
+| Read-state property: unread never exceeds what other people wrote, the sidebar lists each conversation once, every saved unread count is bounded by what existed at its position, and after everything is delivered the read position equals the server's and the unread count equals both the server's count and the loaded rows from other people after it, through restarts from any surviving cache write, reconnect replays, snapshot refreshes, reads on another device, lost answers, and mark-read in every window and scroll state | **Measured** (random runs: 60,000 cases with 19,315 mark-reads answered and 59,036 read-state events; mutation-checked: a double count is caught; the applied-position bound is pinned by a direct test) |
+| Every new HTTP call: route, method, body, success shape (including bodiless leave/remove), refusal vs unknown classification, mutations never repeated, browse retried | **Measured** (runtime transport tests against the Axum stub) |
+| Behavior against the real server for conversations | **Unverified** here; covered by the coordinator's end-to-end tests once the server lands |
 | Cache file: round trip, atomic replacement under a crash at each write step (old or new, never a mixture), size-limit eviction by whole timelines, load-time bounds, corruption, newer format, discard, wipe, encryption and permissions through the real `Runtime` | **Measured** (store and transport tests) |
 | File store: round trip, crash at each write step, truncation, tampering, wrong key, wrong kind, newer format, size bounds, permissions, wipe | **Measured** (unit tests) |
 | Secret namespacing per profile and server; sign-out deletes only its own secrets | **Measured** (`MemoryStorage` tests, plus a two-runtime transport test) |

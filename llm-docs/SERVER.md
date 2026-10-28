@@ -1,6 +1,6 @@
 # Lazy server
 
-How `crates/lazy-server` works and how to run it. The contracts it implements are in [DECISIONS.md](DECISIONS.md) (D2 sign-in, D3 ordering, D4 submission) and the rustdoc of `lazy-protocol`.
+How `crates/lazy-server` works and how to run it. The contracts it implements are in [DECISIONS.md](DECISIONS.md) (D2 sign-in, D3 ordering, D4 submission, D11 conversations and read state) and the rustdoc of `lazy-protocol` (protocol version 2).
 
 ## Running it
 
@@ -10,7 +10,7 @@ export DATABASE_URL=postgres://lazy@127.0.0.1:54329/lazy
 cargo run -p lazy-server -- serve       # listens on 127.0.0.1:8080
 ```
 
-`serve` applies the embedded migrations, starts the event-log pruner (see [Retention](#retention)), and, if no workspace exists, creates the workspace **Lazy** with a public `#general` channel. Both are safe to repeat and safe to run from several servers at once (an advisory lock guards the seed). Registering adds a person to that workspace and to its public channels; the first person to register becomes its owner.
+`serve` applies the embedded migrations, starts the event-log pruner (see [Retention](#retention)), and, if no workspace exists, creates the workspace **Lazy** with a public `#general` channel. Both are safe to repeat and safe to run from several servers at once (an advisory lock guards the seed). Registering adds a person to that workspace and to its **default channel** (`#general`) only; other public channels are found by browsing and joined explicitly. The first person to register becomes the workspace's owner.
 
 | Option | Environment | Default |
 | --- | --- | --- |
@@ -37,9 +37,11 @@ curl -s -X POST localhost:8080/v1/auth/register -H 'content-type: application/js
 | `app` | `run` (pool, migrate, seed, serve) and `serve` (an already-bound listener and pool); shared `AppState`; shutdown |
 | `http` | Routes, extractors (JSON, query, path, bearer auth) that report failures as `ApiError`, handlers |
 | `accounts` | Register, login, logout, session authentication |
-| `messages` | Send (the transaction below), history paging, operation status, access facts |
+| `messages` | Send (the transaction below), history paging, operation status |
+| `conversations` | Creating channels, opening direct and group conversations, browsing, joining, leaving, adding and removing members, renaming, archiving, favorites, mark-read ([Conversations](#conversations-and-read-state)) |
+| `receipts` | Idempotency records shared by sends, channel creation, and opening conversations |
 | `bootstrap` | The consistent snapshot a client starts from |
-| `events` | Appending to the log, reading it, filtering by current access |
+| `events` | Appending to the log, reading it, and filtering each event by its stored [audience](#event-audiences) against current membership |
 | `dispatcher` | Tails the log and fans batches out to subscribers |
 | `pruner` | Retention: deletes aged-out events and raises the workspace's `event_floor` |
 | `realtime` | One WebSocket connection and its subscriptions |
@@ -51,7 +53,7 @@ The service modules take a `PgPool`, so tests can call them directly (for exampl
 
 ## Schema
 
-All in `migrations/0001_init.sql`. Queries are runtime-checked SQLx, so building never needs a database.
+Migrations `0001_init.sql` (messaging), `0002_event_floor.sql` (retention), and `0003_conversations.sql` (conversations, read state, audiences). Queries are runtime-checked SQLx, so building never needs a database.
 
 | Table | Notes |
 | --- | --- |
@@ -59,11 +61,12 @@ All in `migrations/0001_init.sql`. Queries are runtime-checked SQLx, so building
 | `sessions` | Only `sha256(token)` is stored; `expires_at` (30 days) and `revoked` |
 | `workspaces` | `event_head`: the newest position in the workspace's event log; `event_floor`: the highest pruned position (migration 0002) |
 | `workspace_members` | Role: `owner`, `admin`, `member` |
-| `conversations` | `kind = 'channel'`; name unique per workspace; `visibility`, `archived` |
-| `conversation_members` | Channel membership |
-| `messages` | Versioned `document` (jsonb), `plain_text` projection, `revision`, `seq`, `created_at`; unique `(conversation_id, seq DESC)` |
-| `operation_receipts` | PK `(user_id, operation_id)`, `request_hash`, `message_id` (deferrable FK) |
-| `events` | PK `(workspace_id, seq)`; `kind`, nullable `conversation_id`, `operation_id`, the serialized `Event` as `payload`. Positions `1..=event_floor` have been pruned |
+| `conversations` | `kind` is `channel`, `direct`, or `group`. `name` is present exactly for channels and unique per workspace; `description`, `created_by`, `is_default` (unique per workspace), `visibility` (direct and group are always private), `archived`, `member_count`, and `participant_key` for direct and group conversations, unique per workspace |
+| `conversation_members` | Membership of every kind of conversation |
+| `conversation_user_state` | Per person per conversation: `favorite` and `last_read` (a message position, 0 for none). A row exists exactly while the person is a member |
+| `messages` | Versioned `document` (jsonb), `plain_text` projection, `revision`, `seq`, `created_at`; unique, covering `(conversation_id, seq DESC) INCLUDE (author_id)` |
+| `operation_receipts` | PK `(user_id, operation_id)`, `kind` (`send_message`, `create_channel`, `open_conversation`), `request_hash`, and either `message_id` or `conversation_id` (both deferrable foreign keys) |
+| `events` | PK `(workspace_id, seq)`; `kind`, nullable `conversation_id`, `operation_id`, the stored `audience` and `target_user_id`, and the serialized `Event` as `payload`. Positions `1..=event_floor` have been pruned |
 
 ## Ordering: how it is implemented
 
@@ -77,19 +80,86 @@ The row lock is held until the transaction ends. A second writer's `UPDATE` wait
 
 ### The send transaction
 
-1. Load the caller's access facts and evaluate `ChannelAccess`. A conversation the caller cannot read is `not_found` (so private channels do not reveal themselves); readable but not postable is `forbidden`.
+1. Lock the conversation row `FOR SHARE`, then load the caller's facts and evaluate `ChannelAccess`. A conversation the caller cannot read is `not_found` (so private channels do not reveal themselves); readable but not postable is `forbidden`.
 2. Claim the receipt: `INSERT ... ON CONFLICT (user_id, operation_id) DO NOTHING`. If it was not inserted, the existing receipt decides: same request fingerprint returns the original message (identical response), a different fingerprint is `conflict`. Two simultaneous duplicates serialize on this insert; the second waits for the first's outcome.
 3. `next_position`, then insert the message (`seq` = that position, `created_at` = the database clock read under the lock).
-4. Insert the event and `pg_notify('lazy_events', workspace_id)`.
-5. Commit. Only then is the acknowledgment returned.
+4. Move the author's `last_read` to the message's position, in this transaction and **without an event**: someone who has just written has read everything before it.
+5. Insert the event (audience `members`) and `pg_notify('lazy_events', workspace_id)`.
+6. Commit. Only then is the acknowledgment returned.
+
+Because a send holds the conversation row `FOR SHARE`, any number of sends run together, but never alongside an archive or a membership change (which take it exclusively). No message can therefore appear in the log after the event that archived its channel, or after its author's removal.
 
 The fingerprint covers the conversation id and the document, so an operation id reused anywhere else is a conflict. Rejected sends (authorization failures) create no receipt.
 
-Registration is the same shape: insert the user, take the next position, add the memberships, insert a `member_joined` event, create the session, commit.
+Registration takes an advisory lock so registrations take turns (the first owns the workspace even when two arrive together), inserts the user and membership, joins the default channel, appends `member_joined` (audience `workspace`) and `member_added` for `#general` (audience `members`), creates the session, and commits.
 
 ### Bootstrap
 
-One `REPEATABLE READ`, read-only transaction reads the workspace's `event_head` together with conversations and members. Because an event and its `event_head` bump commit atomically, the snapshot contains exactly the effects of events up to `head`. A client that subscribes with `after = head` neither misses nor repeats anything.
+One `REPEATABLE READ`, read-only transaction reads the workspace's `event_head` together with the caller's conversations (member conversations only, with participants for direct and group ones), their favorite and read state and unread counts, and the members. Because an event and its `event_head` bump commit atomically, the snapshot contains exactly the effects of events up to `head`. A client that subscribes with `after = head` neither misses nor repeats anything.
+
+## Conversations and read state
+
+`conversations.rs` implements every command in `lazy_protocol::api::paths` beyond messaging. They share one shape (the function docs have the detail):
+
+1. **Lock the conversation row**: `FOR NO KEY UPDATE` to change it, `FOR SHARE` to act inside it.
+2. **Load facts, then authorize** with the domain's `ConversationFacts`. A conversation the caller cannot see (a private channel they are not in, or one outside their workspace) is `not_found`, for everyone including the owner and admins. One they can see but may not do this to is `forbidden`.
+3. **Write rows**: memberships, state rows, the conversation, `member_count`.
+4. **Append events last** with `events::append_all`, which takes the workspace row lock for the position bump.
+
+**Lock order is conversation row, then workspace row, always**, and nothing waits on anything else once it holds the workspace lock. Operations that wait on a unique index (creating a channel, opening a conversation) do so before that point. This is why the concurrent cases below cannot deadlock.
+
+| Command | Allowed | Events appended |
+| --- | --- | --- |
+| Create channel | any workspace member | `conversation_created` (members) |
+| Open direct/group | any workspace member, everyone named in the workspace, 2 to 9 people | `conversation_created` (members), only if it was created |
+| Update name | the creator or an admin/owner; not archived | `conversation_updated` |
+| Update topic/description | a member; not archived | `conversation_updated` |
+| Join | anyone in the workspace, public and unarchived | `member_added` |
+| Leave | a member of a channel, never the default channel | `member_removed` (members and the leaver), `conversation_updated` (new count) |
+| Add members | a member; or an admin/owner for a *public* channel they are not in; not archived | one `member_added` per person newly added |
+| Remove member | the creator or an admin/owner, never from the default channel | as leave |
+| Archive / unarchive | the creator or an admin/owner; never the default channel | `conversation_updated` |
+| Favorite | a member | `user_state_changed` (that person), if it changed |
+| Mark read | a member | `user_state_changed` (that person), if it advanced |
+
+Repeating a command that is already in effect (joining a channel you are in, archiving an archived channel, setting the same favorite) succeeds and appends nothing. A request that changes nothing (a topic equal to the current one, an empty update) appends nothing. A private channel is never reachable by an admin who is not in it, for any command.
+
+**Idempotency.** Creating a channel and opening a conversation claim a receipt like a send does (`kind` distinguishes the commands, so an operation id reused across commands is a `conflict`), and `GET /v1/operations/{id}` answers `conversation_committed` for them. Channel names are arbitrated by the unique `(workspace_id, name)`: of simultaneous creates exactly one wins and the others get `name_taken`. Opening is arbitrated by the unique `(workspace_id, participant_key)` with `ON CONFLICT DO NOTHING`: the loser waits for the winner, finds its row, and returns it; only the winner appends `conversation_created`. Different operation ids for the same set, from either participant, all return the one conversation.
+
+**Read state.** `last_read` is a message position. The unread count is messages from *other* people after it. A person's own send moves it (step 4 above). `MarkRead` takes the maximum of the current position and `min(up_to, newest message)`, so it only moves forward and cannot point past the end; it returns the resulting state. Someone who joins (or is added) starts with `last_read` at the conversation's newest message, so history from before they arrived is not "unread" (the protocol leaves this open; the alternative would show a new member every old message as unread). State rows are deleted on removal, so rejoining starts fresh, favorite included.
+
+**`member_count`** is maintained by the same transactions that change membership, under the conversation row lock, and a test checks after concurrent churn that it equals `count(*)` of the members and that state rows exist exactly for the members. A removal appends a `conversation_updated` carrying the new count (the `member_removed` event has none); an addition's `member_added` already carries the count as of that person.
+
+### Unread query plans
+
+The bootstrap unread count for one conversation is `SELECT count(*) FROM messages WHERE conversation_id = $1 AND seq > $2 AND author_id <> $3`, run once per member conversation inside the bootstrap snapshot, with the person's read position as a concrete value. Measured on a seeded database with one 100,000-message conversation (80% from others) and 200 other conversations of 500 messages:
+
+| Case | Plan | Buffers | Time |
+| --- | --- | --- | --- |
+| 10 unread in the 100k conversation | Index Only Scan on `messages_conversation_seq_idx`, 0 heap fetches | 4 | 0.04 ms |
+| 100 unread among 200 other conversations | Index Only Scan, 0 heap fetches | 5 | 0.04 ms |
+| 80,000 unread (nothing ever read) | Parallel Seq Scan (the right plan: 80% of the table matches) | 3637 | 11.7 ms |
+
+Two things made this fast, both found by looking at the plan. The unread count was first written as a correlated subquery inside the member-conversations query; the planner cannot see the outer row's `last_read` and assumes a third of the table matches, so it scanned all 100,000 messages to find 8 (2128 buffers, 2.9 ms). Running one query per conversation with the actual position fixes that. And `messages_conversation_seq_idx` now carries `author_id` (`INCLUDE`), so the author filter needs no heap access.
+
+## Event audiences
+
+Each event stores who may receive it, when it is appended, and both replay and live delivery use that column. It is always evaluated against **current** membership, read from the database after the events were read and once per distinct conversation in a batch (`events::visibility`).
+
+| Audience | Delivered to | Events |
+| --- | --- | --- |
+| `workspace` | every workspace member | `member_joined` |
+| `members` | the current members of the event's conversation | `message_created`, `conversation_created`, `conversation_updated`, `member_added` |
+| `members_and_user` | the current members, and the named person even if they are not (or no longer) one | `member_removed` |
+| `user` | the named person, and only while they are a member of the event's conversation | `user_state_changed` |
+
+What follows from evaluating at delivery time:
+
+- Someone removed from a conversation receives their own `member_removed` and nothing else about it afterwards, **including events that committed before the removal but were not yet delivered, and events replayed later from an old cursor.** Their stream may or may not contain earlier events that were delivered live before the removal committed; what can never happen is anything after it.
+- Someone who joins later receives the conversation's older events when they replay past them (members see the full history). A client already connected does not: it fetches history on `member_added`.
+- A `member_added` for a person who has since left is not delivered to them, so a replay never shows a conversation flashing into the sidebar and out again.
+- `user_state_changed` is invisible to everyone but its owner, and stops reaching the owner when they leave the conversation.
+- Pruning is unaffected: the pruner deletes a prefix regardless of audience.
 
 ## The dispatcher
 
@@ -138,7 +208,7 @@ A pass that is told to stop finishes its current chunk (a started server always 
 
 Everything the dispatcher published before step 2 was committed before step 4's reads, so replay covers it; everything after arrives on the broadcast. There are two further guards, both reusing the replay path: a `Lagged` notice from the broadcast, and a batch whose `after` is beyond the cursor, each trigger a replay from the database.
 
-**Access is checked on every delivery**, against the database, once per distinct conversation in a batch. Losing channel access stops that channel's events immediately (and its history on later replays). Losing workspace membership ends the subscription with a `forbidden` error frame.
+**Delivery is checked on every batch** against each event's stored [audience](#event-audiences) and the viewer's current membership, so no per-connection cache can go stale. Losing membership of a conversation stops its events immediately (and its history on later replays). Losing workspace membership ends the subscription with a `forbidden` error frame.
 
 **Back-pressure.** Each connection has a bounded outbound queue (256 frames). When it fills, the subscription task waits, stops draining its broadcast receiver, and recovers by replaying from the database once it is more than the channel capacity behind. A single socket write that takes longer than 15 seconds closes the connection. A queue that cannot even accept a ping closes it. The server pings every 20 seconds, drops a connection that has been silent for 60 seconds, and ends a connection whose session was revoked (checked on each ping).
 
@@ -151,11 +221,22 @@ scripts/dev-db.sh start
 cargo test -p lazy-server       # DATABASE_URL comes from crates/lazy-server/.env
 ```
 
-`#[sqlx::test]` creates a throwaway database per test, so tests are isolated and parallel. 60 tests in all: 16 unit tests (crypto, configuration and CLI, pruner, dispatcher) and the integration suites (`tests/auth.rs`, `tests/messages.rs`, `tests/realtime.rs`, `tests/retention.rs`, and a `tests/process_crash.rs` that is not part of this document) run a real server on a loopback port and talk to it over HTTP and WebSocket.
+`#[sqlx::test]` creates a throwaway database per test, so tests are isolated and parallel. 98 tests in all: 19 unit tests (crypto, configuration and CLI, pruner, dispatcher, audiences) and integration suites that run a real server on a loopback port and talk to it over HTTP and WebSocket.
 
-`tests/retention.rs` covers pruning (the newest-1000 floor, the age window, repeat runs never lowering the floor, multi-chunk backlogs, shutdown), expired and boundary cursors, history/bootstrap/receipts being unaffected, and a replay racing a prune. The dispatcher's behavior when pruning overtakes it is a unit test in `dispatcher.rs`.
+| Suite | Covers |
+| --- | --- |
+| `auth.rs`, `messages.rs` | Sign-in, sessions, send idempotency and conflicts, authorization, history paging, bootstrap consistency, lost acknowledgments |
+| `realtime.rs` | Replay then live, cursors, forbidden subscriptions, malformed frames, shutdown, and the stress test below |
+| `retention.rs` | Pruning, expired and boundary cursors, a replay racing a prune |
+| `conversations.rs` | Creating and opening, validation, operation status, and the concurrency cases (exactly one winner for a contested name, exactly one conversation and one event for simultaneous opens, repeats of one create) |
+| `membership.rs` | The authorization matrix for update, join, leave, add, remove, archive and unarchive across owner, admin, creator, member and stranger, public/private/archived/default; `member_count` after concurrent churn |
+| `read_state.rs` | Unread baseline, own sends advancing the position without an event, monotonic and clamped mark-read, favorites, delivery only to the owner's devices, late joiners |
+| `delivery.rs` | The 2.7 hardening cases: a disconnected subscriber removed from a private channel replaying an **old cursor** gets only their removal while another member's device receives everything; removal while connected; leaving; late joiner replay; personal state; being added back; pruning personal events |
+| `process_crash.rs` | Not part of this document |
 
-The test that matters most is `nothing_is_lost_or_duplicated_while_clients_connect_mid_stream`: 8 users send 400 messages and 4 people register concurrently while 32 subscribers connect at staggered moments, **and a pruner runs continuously, deleting 300 aged-out events from the front of the log as it goes**; every subscriber must see exactly the log's positions after its cursor, once, in order. It was checked for sensitivity by temporarily subscribing after the replay and disabling the contiguity guard (with both removed it fails with a lost event), and separately by removing the replay's floor check (the cursor-expiry test fails because a stale subscriber is handed events from position 17, silently skipping 1 to 16).
+The test that matters most is `nothing_is_lost_or_duplicated_while_clients_connect_mid_stream`: 8 users send 400 messages and 4 people register concurrently while 32 subscribers connect at staggered moments, **a pruner deletes 300 aged-out events from the front of the log as it goes, and a private channel's membership churns for the whole run** (an owner adds a person, posts, removes them, posts, 25 times). Every subscriber, none of whom is in the churn channel, must see exactly the events visible to it, once each, in order: any leak from the churn channel fails the comparison. The person being churned must receive each of their 25 removals exactly once and nothing about the channel after the last; the owner's replay must show all 125 channel events in order; the churned person's own fresh replay must show only the removals.
+
+It was checked for sensitivity by mutation: subscribing after the replay with the contiguity guard disabled (fails with a lost event); removing the replay's floor check (a stale subscriber is handed events from position 17, silently skipping 1 to 16); delivering `members` events to every workspace member (the stress test fails with the churn events in a watcher's stream and five of the seven delivery tests fail); and dropping the removal-reaches-its-subject and personal-state-needs-membership rules (four delivery tests fail).
 
 ## Known limits
 
@@ -167,5 +248,10 @@ The test that matters most is `nothing_is_lost_or_duplicated_while_clients_conne
 - **Lag recovery is untested end to end.** It reuses the replay path that every subscription runs, which is covered, but forcing a real broadcast lag from a test client is not deterministic.
 - **No rate limiting** on sign-in or sending.
 - **No TLS** (terminate it in front of the server) and the SQLx build has no TLS feature for the database connection; enable one before connecting to a remote database.
-- **No workspace or channel administration API** beyond registration. Tests create channels and change membership with SQL.
+- **No workspace administration API.** Channels are managed through the API, but workspace roles are changed only in the database (the tests do so with SQL), there is no invitation flow, and channels cannot be deleted.
+- **Replay filters after reading.** A page of 200 log rows is read and then filtered by audience, so a person in few conversations of a busy workspace pages through many events they will not receive. Pushing the audience test into the query (join on membership) is the fix if it matters; correctness does not depend on it.
+- **Sends and membership changes wait for each other.** A send holds the conversation row `FOR SHARE`, and joins, leaves, adds, removes, archives and renames hold it exclusively, so a burst of membership changes in one very busy channel briefly queues its sends (and the reverse). That buys the property that nothing is posted after an archive or by someone already removed.
+- **`mention_count` is always 0** until mentions exist, and unread counts treat every message from another person as unread.
+- **Browsing** returns at most 1000 public channels, archived ones included (clients filter on `archived`).
+- **`GET /v1/operations/{id}` for a created conversation** returns the conversation as it is now, not as it was created, and does not re-check that the caller can still see it.
 - **One dispatcher per server process.** Several server processes work against one database (each tails the same log), but that has not been exercised.

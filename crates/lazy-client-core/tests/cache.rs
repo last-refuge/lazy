@@ -3,15 +3,13 @@
 
 mod common;
 
-use common::{Driver, World, seq, user};
+use common::{Driver, World, channel, people, read_state, seq, user};
 use lazy_client_core::{
     Change, ConnectionState, ContentCache, Delivery, Effect, HistoryStatus, Input, ItemKey,
     JournalEntry, MAX_CACHED_CONVERSATIONS, MAX_CACHED_MESSAGES, RequestError, SessionPhase,
     SocketEvent, StartupState,
 };
-use lazy_domain::{
-    ChannelName, ChannelVisibility, ConversationId, MessageDocument, OperationId, Timestamp,
-};
+use lazy_domain::{ConversationId, MessageDocument, OperationId, Timestamp};
 use lazy_protocol::{
     Conversation, ErrorCode, HistoryPage, OperationStatus, SendMessageResponse, ServerFrame,
     SnapshotReason,
@@ -241,14 +239,7 @@ fn the_cache_is_bounded_per_conversation_and_overall() {
     // Sixty loaded conversations: only the fifty most recently active are kept.
     let mut bootstrap = world.bootstrap();
     let extra: Vec<Conversation> = (0..60)
-        .map(|i| Conversation {
-            id: ConversationId::generate(),
-            workspace_id: world.workspace.id,
-            name: ChannelName::parse(&format!("channel-{i}")).unwrap(),
-            topic: None,
-            visibility: ChannelVisibility::Public,
-            archived: false,
-        })
+        .map(|i| channel(world.workspace.id, &format!("channel-{i}")))
         .collect();
     bootstrap.workspaces[0].conversations = extra.clone();
     let mut driver = Driver::new();
@@ -418,12 +409,8 @@ fn revalidation_refreshes_the_directory_and_drops_conversations_the_person_lost(
 
     // The person has since lost access to #random and gained a new channel.
     let newcomer = Conversation {
-        id: ConversationId::generate(),
-        workspace_id: world.workspace.id,
-        name: ChannelName::parse("new-channel").unwrap(),
         topic: Some("fresh".into()),
-        visibility: ChannelVisibility::Public,
-        archived: false,
+        ..channel(world.workspace.id, "new-channel")
     };
     let mut bootstrap = world.bootstrap();
     bootstrap.workspaces[0].conversations = vec![world.channel.clone(), newcomer.clone()];
@@ -882,14 +869,7 @@ fn a_full_cache_does_not_cost_a_frame_per_live_event() {
     let world = world_with_head(100_000);
     let mut bootstrap = world.bootstrap();
     let conversations: Vec<Conversation> = (0..MAX_CACHED_CONVERSATIONS)
-        .map(|i| Conversation {
-            id: ConversationId::generate(),
-            workspace_id: world.workspace.id,
-            name: ChannelName::parse(&format!("channel-{i}")).unwrap(),
-            topic: None,
-            visibility: ChannelVisibility::Public,
-            archived: false,
-        })
+        .map(|i| channel(world.workspace.id, &format!("channel-{i}")))
         .collect();
     bootstrap.workspaces[0].conversations = conversations.clone();
     let mut driver = Driver::new();
@@ -1062,4 +1042,181 @@ fn older_history_pages_from_the_cached_floor() {
         &out.effects[..],
         [Effect::FetchHistory { before: Some(before), .. }] if *before == seq(10)
     ));
+}
+
+// ----- Read state in the cache -----
+
+fn unread(driver: &Driver, conversation: ConversationId) -> u32 {
+    driver
+        .core
+        .user_state(conversation)
+        .map_or(0, |state| state.unread_count)
+}
+
+/// A world where general has two unread messages (6 and 7 after the read position 5) as of 20.
+fn world_with_unread_as_of_20() -> World {
+    let mut world = world_with_head(20);
+    world.user_states = vec![read_state(world.channel.id, 5, 2)];
+    world
+}
+
+#[test]
+fn a_restart_shows_the_sidebar_with_its_unread_counts_and_favorites_at_once() {
+    let mut world = world_with_unread_as_of_20();
+    let mut starred = read_state(world.second_channel.id, 3, 4);
+    starred.favorite = true;
+    world.user_states.push(starred);
+    let cache = warm_cache(&world, &[6, 7], None);
+    let saved = &cache.workspaces[0].user_state;
+    assert_eq!(saved.len(), 2, "every conversation's state is saved");
+    assert!(saved.iter().all(|s| s.as_of == seq(20)));
+
+    let (driver, _) = restart(&world, Some(cache));
+    assert_eq!(unread(&driver, world.channel.id), 2);
+    assert_eq!(driver.core.total_unread(), 6);
+    assert_eq!(driver.core.favorites(), vec![world.second_channel.id]);
+    // The divider position is known from the saved read position as soon as the rows are.
+    assert!(driver.core.unread_marker(world.channel.id).is_some());
+}
+
+#[test]
+fn replay_after_a_cached_start_counts_each_message_exactly_once() {
+    let world = world_with_unread_as_of_20();
+    let cache = warm_cache(&world, &[6, 7], None);
+    let (mut driver, _) = restart(&world, Some(cache));
+
+    // By the time the client reconnects, ten more messages have arrived and the server's own
+    // count has moved on to 12. Its baseline must not be added to the replay.
+    let mut bootstrap = world.bootstrap();
+    bootstrap.workspaces[0].head = seq(30);
+    bootstrap.workspaces[0].user_state = vec![read_state(world.channel.id, 5, 12)];
+    driver.send(Input::BootstrapLoaded(Box::new(bootstrap)));
+    assert_eq!(
+        unread(&driver, world.channel.id),
+        2,
+        "the cached state is kept"
+    );
+
+    for at in 21..=30 {
+        driver.send(world.event(
+            world.message(
+                world.channel.id,
+                &world.other,
+                at,
+                &format!("replayed {at}"),
+            ),
+            None,
+        ));
+    }
+    assert_eq!(
+        unread(&driver, world.channel.id),
+        12,
+        "equal to the server's count, not double"
+    );
+
+    // A replay of the same positions again (a reconnect) changes nothing.
+    for at in 21..=30 {
+        driver.send(world.event(
+            world.message(world.channel.id, &world.other, at, "dup"),
+            None,
+        ));
+    }
+    assert_eq!(unread(&driver, world.channel.id), 12);
+}
+
+#[test]
+fn a_conversation_the_cache_did_not_know_takes_the_bootstraps_baseline_and_ignores_older_replay() {
+    let world = world_with_unread_as_of_20();
+    let cache = warm_cache(&world, &[6, 7], None);
+    let (mut driver, _) = restart(&world, Some(cache));
+
+    // Meanwhile the person joined #fresh, which has 4 unread as of position 30.
+    let fresh = channel(world.workspace.id, "fresh");
+    let mut bootstrap = world.bootstrap();
+    bootstrap.workspaces[0].head = seq(30);
+    bootstrap.workspaces[0].conversations.push(fresh.clone());
+    bootstrap.workspaces[0].user_state = vec![
+        read_state(world.channel.id, 5, 2),
+        read_state(fresh.id, 0, 4),
+    ];
+    driver.send(Input::BootstrapLoaded(Box::new(bootstrap)));
+    assert_eq!(unread(&driver, fresh.id), 4);
+
+    // Replay now delivers #fresh's older messages, which the baseline already counts.
+    driver.send(world.event(world.message(fresh.id, &world.other, 25, "older"), None));
+    driver.send(world.event(
+        world.message(fresh.id, &world.other, 30, "at the baseline"),
+        None,
+    ));
+    assert_eq!(unread(&driver, fresh.id), 4);
+    driver.send(world.event(world.message(fresh.id, &world.other, 31, "new"), None));
+    assert_eq!(unread(&driver, fresh.id), 5);
+}
+
+#[test]
+fn a_cache_from_before_read_state_existed_takes_the_baseline_from_the_bootstrap() {
+    let world = world_with_unread_as_of_20();
+    let mut cache = warm_cache(&world, &[6, 7], None);
+    cache.workspaces[0].user_state.clear();
+
+    let (mut driver, _) = restart(&world, Some(cache));
+    assert!(
+        driver.core.user_state(world.channel.id).is_none(),
+        "nothing known yet"
+    );
+    driver.send(Input::BootstrapLoaded(Box::new(world.bootstrap())));
+    assert_eq!(unread(&driver, world.channel.id), 2);
+    // And it is current as of the bootstrap's head, so older replay is not counted again.
+    driver.send(world.event(
+        world.message(world.channel.id, &world.other, 20, "old"),
+        None,
+    ));
+    assert_eq!(unread(&driver, world.channel.id), 2);
+}
+
+#[test]
+fn read_state_is_saved_and_dropped_with_its_conversation() {
+    let world = world_with_unread_as_of_20();
+    let cache = warm_cache(&world, &[6, 7], Some(&[8]));
+    let (mut driver, _) = restart(&world, Some(cache));
+    let mut bootstrap = world.bootstrap();
+    bootstrap.workspaces[0].conversations = vec![world.channel.clone()];
+    driver.send(Input::BootstrapLoaded(Box::new(bootstrap)));
+    assert!(driver.core.user_state(world.second_channel.id).is_none());
+    let saved = &driver.last_cache().unwrap().workspaces[0].user_state;
+    assert!(
+        saved
+            .iter()
+            .all(|s| s.state.conversation_id != world.second_channel.id)
+    );
+}
+
+#[test]
+fn direct_messages_survive_a_restart_with_their_titles_and_order() {
+    let mut world = world_with_head(20);
+    let kai = user("kai");
+    let dm_zoe = people(world.workspace.id, &[&world.me, &world.other]);
+    let dm_kai = people(world.workspace.id, &[&world.me, &kai]);
+    world.extra = vec![dm_zoe.clone(), dm_kai.clone()];
+    world.extra_users = vec![kai.clone()];
+    let mut driver = Driver::ready(&world);
+    driver.send(world.event(world.message(dm_kai.id, &kai, 21, "hello"), None));
+    driver.send(world.event(world.message(dm_zoe.id, &world.other, 22, "hi"), None));
+    driver.send(Input::SelectConversation(dm_zoe.id));
+    driver.load_history(dm_zoe.id, vec![], false);
+    let cache = driver.last_cache().unwrap().clone();
+
+    let (restarted, _) = restart(&world, Some(cache));
+    assert_eq!(restarted.core.conversation_title(dm_zoe.id), "ZOE");
+    assert_eq!(restarted.core.conversation_title(dm_kai.id), "KAI");
+    assert_eq!(
+        restarted.core.members().len(),
+        3,
+        "the people are saved too"
+    );
+    // Zoe wrote last, so her conversation comes first even before anything is refetched.
+    assert_eq!(
+        restarted.core.direct_and_group(),
+        vec![dm_zoe.id, dm_kai.id]
+    );
 }

@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use lazy_domain::{
-    ChannelName, ChannelVisibility, ConversationId, DisplayName, UserId, Username, WorkspaceId,
-    WorkspaceRole,
+    ChannelName, ChannelVisibility, ConversationId, ConversationKind, DisplayName, UserId,
+    Username, WorkspaceId, WorkspaceRole,
 };
 use lazy_protocol::User;
 use sqlx::PgPool;
@@ -65,8 +65,8 @@ pub async fn seed_default_workspace(pool: &PgPool) -> Result<Option<SeededWorksp
         .execute(&mut *tx)
         .await?;
     sqlx::query(
-        "INSERT INTO conversations (id, workspace_id, kind, name, topic, visibility) \
-         VALUES ($1, $2, 'channel', $3, $4, 'public')",
+        "INSERT INTO conversations (id, workspace_id, kind, name, topic, visibility, is_default) \
+         VALUES ($1, $2, 'channel', $3, $4, 'public', true)",
     )
     .bind(general_id.as_uuid())
     .bind(workspace_id.as_uuid())
@@ -99,6 +99,32 @@ pub(crate) fn visibility_from_db(text: &str) -> Result<ChannelVisibility, AppErr
         other => Err(AppError::internal(format!(
             "unknown visibility {other:?} in database"
         ))),
+    }
+}
+
+pub(crate) fn visibility_to_db(visibility: ChannelVisibility) -> &'static str {
+    match visibility {
+        ChannelVisibility::Public => "public",
+        ChannelVisibility::Private => "private",
+    }
+}
+
+pub(crate) fn kind_from_db(text: &str) -> Result<ConversationKind, AppError> {
+    match text {
+        "channel" => Ok(ConversationKind::Channel),
+        "direct" => Ok(ConversationKind::Direct),
+        "group" => Ok(ConversationKind::Group),
+        other => Err(AppError::internal(format!(
+            "unknown conversation kind {other:?} in database"
+        ))),
+    }
+}
+
+pub(crate) fn kind_to_db(kind: ConversationKind) -> &'static str {
+    match kind {
+        ConversationKind::Channel => "channel",
+        ConversationKind::Direct => "direct",
+        ConversationKind::Group => "group",
     }
 }
 

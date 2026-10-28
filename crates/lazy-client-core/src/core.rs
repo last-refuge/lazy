@@ -7,19 +7,23 @@ use lazy_domain::{
     UserId, Username, WorkspaceId,
 };
 use lazy_protocol::{
-    BootstrapResponse, Conversation, Event, EventEnvelope, LoginRequest, Message, OperationStatus,
-    PROTOCOL_VERSION, Password, RegisterRequest, ServerFrame, User,
+    BootstrapResponse, BrowsedChannel, Conversation, ConversationUserState, Event, EventEnvelope,
+    LoginRequest, Message, OperationStatus, PROTOCOL_VERSION, Password, RegisterRequest,
+    ServerFrame, User,
 };
 
-use crate::cache::{CachedWorkspace, ContentCache};
+use crate::cache::{CachedUserState, CachedWorkspace, ContentCache};
 use crate::change::{Change, Output};
 use crate::effect::Effect;
 use crate::input::{Input, SocketEvent};
 use crate::model::{
-    ConnectionState, Delivery, HistoryStatus, ItemKey, JournalEntry, RequestError, RetryKind,
-    SessionPhase, TimelineItem, UNKNOWN_MEMBER_NAME, WorkspaceInfo,
+    ActionKind, ActionState, ConnectionState, Delivery, HistoryStatus, ItemKey, JournalEntry,
+    RequestError, RetryKind, SessionPhase, TimelineItem, UNKNOWN_MEMBER_NAME, WorkspaceInfo,
 };
 use crate::timeline::Timeline;
+
+mod conversations;
+mod readstate;
 
 /// Messages fetched per history request.
 const HISTORY_PAGE_LIMIT: u32 = 50;
@@ -108,6 +112,31 @@ pub struct ClientCore {
     cache_suppressed: bool,
     /// Whose cache is on disk, as far as this run knows (loaded, or saved by this run).
     cache_owner: Option<UserId>,
+
+    // ----- Conversations and read state -----
+    /// The person's favorite flag and read position for each conversation they belong to.
+    user_states: HashMap<ConversationId, ConversationUserState>,
+    /// The log position each state is current to. Message events at or before it are already
+    /// reflected in the state and are not counted again.
+    state_as_of: HashMap<ConversationId, EventSeq>,
+    /// Where the "New messages" divider goes: the read position captured when the conversation
+    /// was opened, kept until the person leaves it.
+    marker_anchor: HashMap<ConversationId, EventSeq>,
+    /// The public channel directory from the last browse.
+    browse: Vec<BrowsedChannel>,
+    actions: HashMap<ActionKind, ActionState>,
+    /// Channel creations and conversation openings whose outcome is not settled, by operation.
+    commands: HashMap<OperationId, conversations::PendingCommand>,
+    window_active: bool,
+    /// Conversations whose newest message the timeline view reports as on screen.
+    at_bottom: HashSet<ConversationId>,
+    /// The position of the mark-read request in flight, per conversation.
+    mark_in_flight: HashMap<ConversationId, EventSeq>,
+    /// The position of a mark-read request that failed; not retried for that position until
+    /// something changes.
+    mark_failed: HashMap<ConversationId, EventSeq>,
+    /// Conversations the person asked to leave, so their removal is not reported as a surprise.
+    leaving: HashSet<ConversationId>,
 }
 
 impl Default for ClientCore {
@@ -145,6 +174,17 @@ impl ClientCore {
             cache_size: 0,
             cache_suppressed: false,
             cache_owner: None,
+            user_states: HashMap::new(),
+            state_as_of: HashMap::new(),
+            marker_anchor: HashMap::new(),
+            browse: Vec::new(),
+            actions: HashMap::new(),
+            commands: HashMap::new(),
+            window_active: true,
+            at_bottom: HashSet::new(),
+            mark_in_flight: HashMap::new(),
+            mark_failed: HashMap::new(),
+            leaving: HashSet::new(),
         }
     }
 
@@ -231,6 +271,7 @@ impl ClientCore {
     /// Applies one input and returns the resulting effects and changes.
     pub fn handle(&mut self, input: Input) -> Output {
         let mut out = self.dispatch(input);
+        self.maybe_mark_read(&mut out);
         self.flush_cache(&mut out);
         out
     }
@@ -264,6 +305,54 @@ impl ClientCore {
             } => self.retry_operation(conversation, operation, &mut out),
             Input::LoadOlder { conversation } => self.load_older(conversation, &mut out),
             Input::DismissNotice => self.set_notice(None, &mut out),
+            Input::CreateChannel {
+                name,
+                visibility,
+                topic,
+                description,
+            } => self.create_channel(&name, visibility, &topic, &description, &mut out),
+            Input::OpenConversation { participants } => {
+                self.open_conversation(participants, &mut out)
+            }
+            Input::BrowseChannels => self.browse_channels(&mut out),
+            Input::JoinChannel(id) => self.join_channel(id, &mut out),
+            Input::LeaveChannel(id) => self.leave_channel(id, &mut out),
+            Input::AddMembers { id, users } => self.add_members(id, users, &mut out),
+            Input::RemoveMember { id, user } => self.remove_member(id, user, &mut out),
+            Input::UpdateConversation {
+                id,
+                name,
+                topic,
+                description,
+            } => self.update_conversation(id, name, topic, description, &mut out),
+            Input::ArchiveConversation(id) => self.archive_conversation(id, true, &mut out),
+            Input::UnarchiveConversation(id) => self.archive_conversation(id, false, &mut out),
+            Input::SetFavorite { id, favorite } => self.set_favorite(id, favorite, &mut out),
+            Input::DismissAction(kind) => self.dismiss_action(kind, &mut out),
+            Input::WindowActive(active) => {
+                self.window_active = active;
+                self.mark_failed.clear();
+            }
+            Input::TimelineAtBottom {
+                conversation,
+                at_bottom,
+            } => {
+                if at_bottom {
+                    self.at_bottom.insert(conversation);
+                } else {
+                    self.at_bottom.remove(&conversation);
+                }
+                self.mark_failed.remove(&conversation);
+            }
+            Input::ConversationCommandResult { operation, result } => {
+                self.command_result(operation, result, &mut out)
+            }
+            Input::ActionResult { kind, result } => self.action_result(kind, result, &mut out),
+            Input::MarkReadResult {
+                conversation,
+                up_to,
+                result,
+            } => self.mark_read_result(conversation, up_to, result, &mut out),
 
             Input::Started(state) => {
                 self.drafts = state.drafts;
@@ -456,6 +545,16 @@ impl ClientCore {
         self.revalidating = false;
         self.cache_dirty = false;
         self.cache_urgent = false;
+        self.user_states.clear();
+        self.state_as_of.clear();
+        self.marker_anchor.clear();
+        self.browse.clear();
+        self.actions.clear();
+        self.commands.clear();
+        self.at_bottom.clear();
+        self.mark_in_flight.clear();
+        self.mark_failed.clear();
+        self.leaving.clear();
         out.changes.push(Change::DirectoryChanged);
         out.changes.push(Change::SelectionChanged);
         self.recompute_connection(out);
@@ -586,6 +685,7 @@ impl ClientCore {
     /// longer read are dropped.
     fn keep_cached_content(&mut self, response: &BootstrapResponse, out: &mut Output) {
         let readable: HashSet<ConversationId> = self.conversations.iter().map(|c| c.id).collect();
+        self.adopt_bootstrap_states(response, false);
         let lost: Vec<ConversationId> = self
             .timelines
             .keys()
@@ -625,6 +725,7 @@ impl ClientCore {
     /// being delivered survive), and the subscription starts after the snapshot's `head`, which
     /// misses nothing because the snapshot reflects everything up to it.
     fn rebuild_from_snapshot(&mut self, response: &BootstrapResponse, out: &mut Output) {
+        self.adopt_bootstrap_states(response, true);
         let known: Vec<ConversationId> = self.timelines.keys().copied().collect();
         for conversation in known {
             if let Some(timeline) = self.timelines.get_mut(&conversation) {
@@ -660,16 +761,8 @@ impl ClientCore {
             .selected
             .is_some_and(|id| self.conversation(id).is_some());
         if !selection_valid {
-            let next = self
-                .conversations
-                .iter()
-                .find(|c| c.name.as_str() == "general")
-                .or_else(|| self.conversations.first())
-                .map(|c| c.id);
-            if next != self.selected {
-                self.selected = next;
-                out.changes.push(Change::SelectionChanged);
-            }
+            let next = self.default_selection();
+            self.change_selection(next, out);
         }
         if let Some(selected) = self.selected {
             self.ensure_history(selected, out);
@@ -693,6 +786,7 @@ impl ClientCore {
                 members,
                 cursor,
                 timelines,
+                user_state,
             } = cached;
             let id = workspace.id;
             self.workspaces.push(WorkspaceInfo { workspace, role });
@@ -702,6 +796,11 @@ impl ClientCore {
                 self.users.insert(member.id, member);
             }
             self.conversations.extend(conversations);
+            for cached_state in user_state {
+                let conversation = cached_state.state.conversation_id;
+                self.state_as_of.insert(conversation, cached_state.as_of);
+                self.user_states.insert(conversation, cached_state.state);
+            }
             self.applied.insert(id, cursor);
             self.subscribed.insert(id);
             self.sockets.insert(id, ConnectionState::Connecting);
@@ -757,6 +856,15 @@ impl ClientCore {
                     .iter()
                     .filter_map(|c| self.timelines.get(&c.id)?.to_cache(c.id))
                     .collect();
+                let user_state = conversations
+                    .iter()
+                    .filter_map(|c| {
+                        Some(CachedUserState {
+                            state: self.user_states.get(&c.id)?.clone(),
+                            as_of: *self.state_as_of.get(&c.id)?,
+                        })
+                    })
+                    .collect();
                 Some(CachedWorkspace {
                     workspace: info.workspace.clone(),
                     role: info.role,
@@ -764,6 +872,7 @@ impl ClientCore {
                     members,
                     cursor,
                     timelines,
+                    user_state,
                 })
             })
             .collect();
@@ -873,10 +982,8 @@ impl ClientCore {
         if self.conversation(id).is_none() {
             return;
         }
-        if self.selected != Some(id) {
-            self.selected = Some(id);
-            out.changes.push(Change::SelectionChanged);
-        }
+        self.change_selection(Some(id), out);
+        self.mark_failed.remove(&id);
         self.ensure_history(id, out);
     }
 
@@ -1085,6 +1192,9 @@ impl ClientCore {
         result: Result<OperationStatus, RequestError>,
         out: &mut Output,
     ) {
+        if self.commands.contains_key(&operation) {
+            return self.command_status_result(operation, result, out);
+        }
         if !self
             .ops
             .get(&operation)
@@ -1095,6 +1205,10 @@ impl ClientCore {
         match result {
             Ok(OperationStatus::Committed { message }) => {
                 self.confirm_operation(operation, &message, out)
+            }
+            Ok(OperationStatus::ConversationCommitted { .. }) => {
+                let reason = "The server gave an unexpected answer.".to_owned();
+                self.fail_operation(operation, reason, RetryKind::SameOperation, false, out);
             }
             Ok(OperationStatus::NotFound) => {
                 let Some(op) = self.ops.get_mut(&operation) else {
@@ -1349,6 +1463,23 @@ impl ClientCore {
                 out.changes.push(Change::DirectoryChanged);
                 self.cache_changed(true);
             }
+            Event::ConversationCreated { conversation } => {
+                self.event_conversation_created(conversation, envelope.seq, out)
+            }
+            Event::ConversationUpdated { conversation } => {
+                self.event_conversation_updated(conversation, out)
+            }
+            Event::MemberAdded {
+                conversation,
+                user_id,
+            } => self.event_member_added(conversation, user_id, envelope.seq, out),
+            Event::MemberRemoved {
+                conversation_id,
+                user_id,
+            } => self.event_member_removed(conversation_id, user_id, out),
+            Event::UserStateChanged { state } => {
+                self.event_user_state_changed(state, envelope.seq, out)
+            }
         }
         self.advance_cursor(workspace, envelope.seq);
     }
@@ -1359,6 +1490,12 @@ impl ClientCore {
         operation: Option<OperationId>,
         out: &mut Output,
     ) {
+        // Events for a conversation this client does not know are ignored: history is fetched
+        // when it learns of the conversation, and covers them.
+        if self.conversation(message.conversation_id).is_none() {
+            return;
+        }
+        self.count_message_event(&message, out);
         let own = self
             .me
             .as_ref()

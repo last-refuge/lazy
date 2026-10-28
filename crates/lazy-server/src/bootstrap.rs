@@ -1,17 +1,16 @@
 //! The bootstrap snapshot that starts a client's synchronization.
 
-use lazy_domain::{ChannelAccess, ConversationId, EventSeq, UserId, WorkspaceId};
-use lazy_protocol::{
-    BootstrapResponse, Conversation, PROTOCOL_VERSION, Workspace, WorkspaceBootstrap,
-};
+use lazy_domain::{EventSeq, UserId, WorkspaceId};
+use lazy_protocol::{BootstrapResponse, PROTOCOL_VERSION, Workspace, WorkspaceBootstrap};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::conversations;
 use crate::db;
 use crate::error::AppError;
 
-/// Returns the caller's workspaces with conversations, members, and the event-log position the
-/// snapshot corresponds to.
+/// Returns the caller's workspaces with the conversations they belong to (and their favorite and
+/// read state for each), the members, and the event-log position the snapshot corresponds to.
 ///
 /// Everything is read in one `REPEATABLE READ` read-only transaction. A writer inserts an event
 /// and bumps `event_head` in a single transaction, so the snapshot includes exactly the effects
@@ -47,37 +46,8 @@ pub async fn bootstrap(pool: &PgPool, user_id: UserId) -> Result<BootstrapRespon
         let role = db::role_from_db(&role)?;
         let workspace_id = WorkspaceId::from_uuid(workspace_id);
 
-        let conversation_rows: Vec<(Uuid, String, Option<String>, String, bool, bool)> =
-            sqlx::query_as(
-                "SELECT c.id, c.name, c.topic, c.visibility, c.archived, (cm.user_id IS NOT NULL) \
-                 FROM conversations c \
-                 LEFT JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1 \
-                 WHERE c.workspace_id = $2 ORDER BY c.name",
-            )
-            .bind(user_id.as_uuid())
-            .bind(workspace_id.as_uuid())
-            .fetch_all(&mut *tx)
-            .await?;
-        let mut conversations = Vec::new();
-        for (id, name, topic, visibility, archived, is_member) in conversation_rows {
-            let visibility = db::visibility_from_db(&visibility)?;
-            let access = ChannelAccess {
-                workspace_role: Some(role),
-                is_channel_member: is_member,
-                visibility,
-                archived,
-            };
-            if access.can_read() {
-                conversations.push(Conversation {
-                    id: ConversationId::from_uuid(id),
-                    workspace_id,
-                    name: db::channel_name_from_db(&name)?,
-                    topic,
-                    visibility,
-                    archived,
-                });
-            }
-        }
+        let (conversations, user_state) =
+            conversations::member_conversations(&mut tx, user_id, workspace_id).await?;
 
         let member_rows: Vec<(Uuid, String, String)> = sqlx::query_as(
             "SELECT u.id, u.username, u.display_name \
@@ -99,6 +69,7 @@ pub async fn bootstrap(pool: &PgPool, user_id: UserId) -> Result<BootstrapRespon
             },
             role,
             conversations,
+            user_state,
             members,
             head: EventSeq::new(head)
                 .ok_or_else(|| AppError::internal("workspace event head is negative"))?,

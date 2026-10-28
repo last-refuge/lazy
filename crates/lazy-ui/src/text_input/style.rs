@@ -3,6 +3,7 @@
 use gpui::{Hsla, Pixels, SharedString, px, rgb, rgba};
 
 use super::model::DEFAULT_MAX_BYTES;
+use crate::theme::Theme;
 
 /// Colors and metrics. The input draws nothing else: backgrounds, borders, and focus rings belong
 /// to the host, which can feed its theme tokens in here.
@@ -18,6 +19,24 @@ pub struct TextInputStyle {
     pub padding_x: Pixels,
     pub padding_y: Pixels,
     pub caret_width: Pixels,
+}
+
+impl TextInputStyle {
+    /// The style that takes its colors and metrics from `theme`. Text inputs derive this from the
+    /// live theme on every render, so they follow a change of system appearance.
+    pub fn from_theme(theme: &Theme) -> Self {
+        Self {
+            text_color: theme.colors.text,
+            placeholder_color: theme.colors.text_faint,
+            selection_color: theme.colors.selection,
+            caret_color: theme.colors.caret,
+            font_size: theme.type_scale.body,
+            line_height: theme.type_scale.line_height_body,
+            padding_x: px(0.),
+            padding_y: px(0.),
+            caret_width: px(1.5),
+        }
+    }
 }
 
 impl Default for TextInputStyle {
@@ -68,7 +87,15 @@ pub struct TextInputOptions {
     pub max_bytes: usize,
     pub submit_chord: SubmitChord,
     pub style: TextInputStyle,
+    /// Follow the live theme (the default): the style is re-derived from the theme on every render
+    /// when one is installed. [`TextInputOptions::style`] turns this off for a fixed style.
+    pub themed: bool,
     pub enabled: bool,
+    /// For single-line inputs embedded in a list-like control: Up and Down, and Backspace in an
+    /// empty input, are not consumed but propagate to the parent, which can use them to move a
+    /// highlight or remove a chip. Off by default, where Up and Down move the caret to the start
+    /// or end.
+    pub pass_through_navigation: bool,
 }
 
 impl TextInputOptions {
@@ -82,7 +109,9 @@ impl TextInputOptions {
             max_bytes: DEFAULT_MAX_BYTES,
             submit_chord: SubmitChord::Enter,
             style: TextInputStyle::default(),
+            themed: true,
             enabled: true,
+            pass_through_navigation: false,
         }
     }
 
@@ -116,13 +145,25 @@ impl TextInputOptions {
         self
     }
 
+    /// Uses a fixed style, which no longer follows the theme.
     pub fn style(mut self, style: TextInputStyle) -> Self {
         self.style = style;
+        self.themed = false;
+        self
+    }
+
+    pub fn themed(mut self, themed: bool) -> Self {
+        self.themed = themed;
         self
     }
 
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
+        self
+    }
+
+    pub fn pass_through_navigation(mut self, pass_through: bool) -> Self {
+        self.pass_through_navigation = pass_through;
         self
     }
 }

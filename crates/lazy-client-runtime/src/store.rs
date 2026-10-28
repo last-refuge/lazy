@@ -44,6 +44,28 @@ pub(crate) enum StoreError {
     File(#[from] FileError),
 }
 
+/// What `cache.enc` holds: the cache plus the protocol version whose types it contains.
+///
+/// The cache embeds the protocol's own types (conversations, messages, users), so it can only be
+/// read by a build speaking the same protocol. Recording the version lets an old cache be told
+/// apart from a damaged one: an old cache is simply discarded, because it is regenerable, instead
+/// of being reported as corruption.
+#[derive(serde::Serialize)]
+struct CacheOnDisk<'a> {
+    protocol_version: u32,
+    cache: &'a ContentCache,
+}
+
+/// Reads [`CacheOnDisk`] loosely, so that a file written before the version was recorded (which
+/// is the bare cache) still parses as "from an older protocol" instead of failing.
+#[derive(serde::Deserialize)]
+struct CacheFromDisk {
+    #[serde(default)]
+    protocol_version: Option<u32>,
+    #[serde(default)]
+    cache: Option<serde_json::Value>,
+}
+
 /// What was found on disk.
 #[derive(Debug, Default)]
 pub(crate) struct Recovered {
@@ -119,8 +141,40 @@ impl StateStore {
 
         // The cache is disposable: if it cannot be read the client behaves as on a first run.
         // A cache written by a newer version is left untouched and never overwritten.
-        match files.load::<ContentCache>(FileKind::Cache) {
-            Loaded::Value(cache) => recovered.cache = Some(cache.bounded()),
+        match files.load::<CacheFromDisk>(FileKind::Cache) {
+            Loaded::Value(stored) => match (stored.protocol_version, stored.cache) {
+                (Some(version), Some(value)) if version == lazy_protocol::PROTOCOL_VERSION => {
+                    match serde_json::from_value::<ContentCache>(value) {
+                        Ok(cache) => recovered.cache = Some(cache.bounded()),
+                        Err(error) => {
+                            // Same protocol, wrong shape: that is damage, not age.
+                            files.remove_current(FileKind::Cache);
+                            note(
+                                FileKind::Cache,
+                                format!(
+                                    "The saved message cache had invalid contents ({error}) and was discarded. Saved messages will be downloaded again."
+                                ),
+                                false,
+                                &mut recovered.problems,
+                            );
+                        }
+                    }
+                }
+                (Some(version), _) if version > lazy_protocol::PROTOCOL_VERSION => note(
+                    FileKind::Cache,
+                    format!(
+                        "The saved message cache was written by a newer version of Lazy (protocol {version}) and is not used."
+                    ),
+                    true,
+                    &mut recovered.problems,
+                ),
+                _ => {
+                    // Written by an older protocol, or before versions were recorded. The cache
+                    // is regenerable, so this is expected after an upgrade: no warning.
+                    tracing::info!("discarding the saved message cache from an older protocol");
+                    files.remove_current(FileKind::Cache);
+                }
+            },
             Loaded::Missing => {}
             Loaded::Corrupt(message) => {
                 let message = format!("{message} Saved messages will be downloaded again.");
@@ -241,7 +295,11 @@ impl StateStore {
         self.check_writable(FileKind::Cache)?;
         let mut cache = cache.bounded();
         loop {
-            match self.files.save_with_hook(FileKind::Cache, &cache, hook) {
+            let on_disk = CacheOnDisk {
+                protocol_version: lazy_protocol::PROTOCOL_VERSION,
+                cache: &cache,
+            };
+            match self.files.save_with_hook(FileKind::Cache, &on_disk, hook) {
                 Ok(()) => return Ok(()),
                 Err(FileError::TooLarge { .. }) => {
                     if !cache.shrink() {
@@ -442,10 +500,16 @@ mod tests {
             let conversation = Conversation {
                 id: ConversationId::generate(),
                 workspace_id: workspace.id,
-                name: ChannelName::parse(&format!("channel-{index}")).unwrap(),
+                kind: lazy_domain::ConversationKind::Channel,
+                name: Some(ChannelName::parse(&format!("channel-{index}")).unwrap()),
                 topic: None,
+                description: None,
                 visibility: ChannelVisibility::Public,
                 archived: false,
+                is_default: false,
+                created_by: None,
+                participants: Vec::new(),
+                member_count: 1,
             };
             let text = "x".repeat(text_bytes);
             cached.push(CachedTimeline {
@@ -466,6 +530,21 @@ mod tests {
             });
             conversations.push(conversation);
         }
+        // Read state is saved with the cursor it is current to.
+        let user_state = conversations
+            .iter()
+            .enumerate()
+            .map(|(index, conversation)| lazy_client_core::CachedUserState {
+                state: lazy_protocol::ConversationUserState {
+                    conversation_id: conversation.id,
+                    favorite: index % 2 == 0,
+                    last_read: EventSeq::new(index as i64).unwrap(),
+                    unread_count: u32::try_from(index).unwrap() + 1,
+                    mention_count: 0,
+                },
+                as_of: EventSeq::new(cursor).unwrap(),
+            })
+            .collect();
         ContentCache {
             user: me.clone(),
             workspaces: vec![CachedWorkspace {
@@ -475,6 +554,7 @@ mod tests {
                 members: vec![me],
                 cursor: EventSeq::new(cursor).unwrap(),
                 timelines: cached,
+                user_state,
             }],
         }
     }
@@ -489,8 +569,18 @@ mod tests {
             store.save_cache(cache.clone()).unwrap();
         }
         let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
-        assert_eq!(recovered.cache, Some(cache));
+        assert_eq!(recovered.cache, Some(cache.clone()));
         assert!(recovered.problems.is_empty());
+        // The read state came back with the cursor it is current to.
+        let workspace = &recovered.cache.unwrap().workspaces[0];
+        assert_eq!(workspace.user_state.len(), 2);
+        assert!(
+            workspace
+                .user_state
+                .iter()
+                .all(|s| s.as_of == workspace.cursor)
+        );
+        assert!(workspace.user_state[0].state.favorite && !workspace.user_state[1].state.favorite);
     }
 
     #[test]
@@ -579,7 +669,7 @@ mod tests {
 
         let too_many_conversations = cache_of(60, 3, 5, 9);
         files
-            .save(FileKind::Cache, &too_many_conversations)
+            .save(FileKind::Cache, &cache_file(&too_many_conversations))
             .unwrap();
         let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
         assert_eq!(
@@ -588,7 +678,9 @@ mod tests {
         );
 
         let too_many_messages = cache_of(2, lazy_client_core::MAX_CACHED_MESSAGES + 20, 5, 9);
-        files.save(FileKind::Cache, &too_many_messages).unwrap();
+        files
+            .save(FileKind::Cache, &cache_file(&too_many_messages))
+            .unwrap();
         let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
         let loaded = recovered.cache.unwrap();
         assert!(
@@ -596,6 +688,92 @@ mod tests {
                 t.messages.len() == lazy_client_core::MAX_CACHED_MESSAGES && t.has_more
             })
         );
+    }
+
+    /// The cache as `cache.enc` stores it, for tests that write it behind the store's back.
+    fn cache_file(cache: &ContentCache) -> CacheOnDisk<'_> {
+        CacheOnDisk {
+            protocol_version: lazy_protocol::PROTOCOL_VERSION,
+            cache,
+        }
+    }
+
+    #[test]
+    fn a_cache_from_an_older_protocol_is_discarded_without_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+
+        // The bare shape that was written before the protocol version was recorded, whose
+        // conversations lack fields the current protocol requires (the case a real upgrade hit).
+        let legacy = serde_json::json!({
+            "user": { "id": "3f2b8a3e-5d8e-4f6a-9d3a-0c9c3f0a1b2c", "username": "alice", "display_name": "Alice" },
+            "workspaces": [{ "conversations": [{ "id": "3f2b8a3e-5d8e-4f6a-9d3a-0c9c3f0a1b2d", "name": "general" }] }]
+        });
+        files.save(FileKind::Cache, &legacy).unwrap();
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "the app starts from a fresh download"
+        );
+        assert!(
+            recovered.problems.is_empty(),
+            "no alarming message: {:?}",
+            recovered.problems
+        );
+        assert!(
+            !dir.path().read_dir().unwrap().any(|e| {
+                e.unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("cache.enc")
+            }),
+            "the old cache is removed, not kept as evidence of damage"
+        );
+
+        // The same for a file that records an older protocol version.
+        let older = serde_json::json!({ "protocol_version": 1, "cache": { "anything": true } });
+        files.save(FileKind::Cache, &older).unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(recovered.cache.is_none() && recovered.problems.is_empty());
+        store.save_cache(cache_of(1, 1, 5, 6)).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(again.cache.is_some() && again.problems.is_empty());
+    }
+
+    #[test]
+    fn a_cache_with_the_right_protocol_but_invalid_contents_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+        let damaged = serde_json::json!({
+            "protocol_version": lazy_protocol::PROTOCOL_VERSION,
+            "cache": { "user": 7 }
+        });
+        files.save(FileKind::Cache, &damaged).unwrap();
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(recovered.cache.is_none());
+        assert_eq!(recovered.problems.len(), 1, "{:?}", recovered.problems);
+        assert!(recovered.problems[0].contains("invalid contents"));
+    }
+
+    #[test]
+    fn a_cache_from_a_newer_protocol_is_neither_used_nor_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+        let newer = serde_json::json!({
+            "protocol_version": lazy_protocol::PROTOCOL_VERSION + 1,
+            "cache": {}
+        });
+        files.save(FileKind::Cache, &newer).unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(recovered.cache.is_none());
+        assert_eq!(recovered.problems.len(), 1);
+        assert!(recovered.problems[0].contains("newer version"));
+        // Not overwritten: saving is refused while the file is locked.
+        assert!(store.save_cache(cache_of(1, 1, 5, 6)).is_err());
+        assert!(dir.path().join("cache.enc").exists());
     }
 
     #[test]

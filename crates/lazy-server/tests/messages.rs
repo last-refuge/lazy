@@ -22,8 +22,8 @@ async fn sends_are_acknowledged_with_what_was_committed(pool: PgPool) {
     assert_eq!(message.author_id, ada.user.id);
     assert_eq!(message.revision, 1);
     assert_eq!(message.document.plain_text(), "hello\nworld");
-    // Registration took position 1.
-    assert_eq!(message.seq.get(), 2);
+    // Registration took positions 1 and 2.
+    assert_eq!(message.seq.get(), 3);
     assert_eq!(app.head().await, message.seq);
 
     let stored: (String, i64) =
@@ -32,7 +32,7 @@ async fn sends_are_acknowledged_with_what_was_committed(pool: PgPool) {
             .fetch_one(&app.pool)
             .await
             .unwrap();
-    assert_eq!(stored, ("hello\nworld".to_owned(), 2));
+    assert_eq!(stored, ("hello\nworld".to_owned(), 3));
     app.server.shutdown().await.unwrap();
 }
 

@@ -5,12 +5,11 @@ A Rust and GPUI Slack-style chat app: Axum and Postgres server, shared client co
 ## Commands
 
 ```sh
-scripts/dev-db.sh start                      # project-local Postgres on 127.0.0.1:54329; needed by server and e2e tests
+scripts/test.sh                              # ALL test runs: whole workspace on the separate test Postgres (:54330)
 cargo fmt --all --check
 cargo clippy --workspace --all-targets
-cargo test --workspace
 scripts/check-core-deps.sh                   # shared crates must not depend on UI, async runtime, HTTP, or SQL crates
-scripts/run-server.sh                        # server on 127.0.0.1:8080
+scripts/run-server.sh                        # server on 127.0.0.1:8080 using the dev Postgres (:54329)
 scripts/run-client.sh alice                  # desktop client with its own disposable profile
 ```
 
@@ -23,6 +22,8 @@ scripts/run-client.sh alice                  # desktop client with its own dispo
 - **Ordering.** Event positions are assigned under the workspace row lock (see `DECISIONS.md` D3). Never order by timestamp or a raw sequence.
 - **SQL.** Use runtime-checked SQLx queries, not the `query!` macros, so builds need no database. Dynamic SQL needs `sqlx::AssertSqlSafe` and a reason.
 - **GPUI.** `gpui` and `gpui_platform` stay on one pinned Zed revision (root `Cargo.toml`). Read the pinned source in `~/.cargo/git/checkouts/zed-*` before relying on an API. Scroll callbacks run while list state is borrowed: defer anything that splices it.
+- **Two databases.** The dev Postgres (`:54329`) belongs to servers a person is running by hand. Never run tests against it, and never `stop` or `reset` it: doing so breaks their running server (a test run can also exhaust its connections). Tests and automated checks use `scripts/test.sh` or `LAZY_PG_INSTANCE=test scripts/dev-db.sh ...` (`:54330`).
+- **Upgrades.** Anything saved on a person's machine must survive a protocol change. Persisted data that embeds protocol types is versioned (the content cache records `PROTOCOL_VERSION`); a regenerable file from an older version is discarded silently, and only real damage is reported. Test with a file in the *previous* shape, not just fresh profiles.
 - **Tests.** Wait on events or conditions with bounded deadlines, not sleeps. End-to-end tests live in `crates/lazy-e2e`; start a client with its own profile directory and a `MemoryStorage`.
 - **Looking at the UI.** Render it offscreen with `cargo run -p lazy-ui --example screens -- .dev/screens` (GPUI's headless wgpu renderer: no window, no display) and read the PNGs. `crates/lazy-e2e/tests/gui.rs` drives two real clients headlessly and can save their windows with `LAZY_SCREENSHOT_DIR`. Label interactive elements with `.debug_selector(..)` so tests can find and click them; it costs nothing outside tests.
 - **Native automation.** Launch only your own test windows with disposable profiles and stop them by PID. Never capture the screen by region, and do not send input to windows you did not verify you own.

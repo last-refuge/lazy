@@ -233,8 +233,8 @@ mod tests {
             }
         });
         sqlx::query(
-            "INSERT INTO events (workspace_id, seq, occurred_at, kind, payload) \
-             SELECT $1, g, now(), 'member_joined', $3 FROM generate_series(1, $2::bigint) g",
+            "INSERT INTO events (workspace_id, seq, occurred_at, kind, audience, payload) \
+             SELECT $1, g, now(), 'member_joined', 'workspace', $3 FROM generate_series(1, $2::bigint) g",
         )
         .bind(workspace_id.as_uuid())
         .bind(count)

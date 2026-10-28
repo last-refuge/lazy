@@ -16,8 +16,8 @@ use lazy_client_core::{
 };
 use lazy_domain::{ConversationId, EventSeq, MessageId, OperationId};
 use lazy_protocol::{
-    ApiError, ErrorCode, Event, EventEnvelope, HistoryPage, Message, OperationStatus,
-    SendMessageResponse, ServerFrame,
+    ApiError, ConversationUserState, ErrorCode, Event, EventEnvelope, HistoryPage, Message,
+    OperationStatus, SendMessageResponse, ServerFrame,
 };
 use proptest::prelude::*;
 use proptest::test_runner::TestRunner;
@@ -48,6 +48,12 @@ enum Action {
     Select(bool),
     LoadOlder(bool),
     Snapshot,
+    /// The window gains or loses focus.
+    Window(bool),
+    /// The timeline of a conversation reports whether its newest message is on screen.
+    Bottom(bool, bool),
+    /// The person reads a conversation on another device.
+    OtherDeviceReads(bool),
     /// The app is killed and restarted. The disk holds whichever of the cache writes survived.
     Restart(usize),
 }
@@ -71,13 +77,39 @@ fn action() -> impl Strategy<Value = Action> {
         1 => any::<bool>().prop_map(Action::Select),
         1 => any::<bool>().prop_map(Action::LoadOlder),
         1 => Just(Action::Snapshot),
+        3 => any::<bool>().prop_map(Action::Window),
+        4 => (any::<bool>(), any::<bool>()).prop_map(|(c, b)| Action::Bottom(c, b)),
+        1 => any::<bool>().prop_map(Action::OtherDeviceReads),
         2 => any::<usize>().prop_map(Action::Restart),
     ]
 }
 
+enum LogEvent {
+    Message {
+        message: Message,
+        operation: Option<OperationId>,
+    },
+    /// The person's read state changed on the server (a mark-read, or another device).
+    State(ConversationUserState),
+}
+
 struct LogEntry {
-    message: Message,
-    operation: Option<OperationId>,
+    event: LogEvent,
+}
+
+impl LogEntry {
+    fn message_entry(message: Message, operation: Option<OperationId>) -> Self {
+        Self {
+            event: LogEvent::Message { message, operation },
+        }
+    }
+
+    fn message(&self) -> Option<&Message> {
+        match &self.event {
+            LogEvent::Message { message, .. } => Some(message),
+            LogEvent::State(_) => None,
+        }
+    }
 }
 
 struct Sim {
@@ -108,6 +140,8 @@ struct Sim {
     disk: Vec<Option<ContentCache>>,
     /// The durable journal: submissions whose write completed and that are not settled.
     journal: HashMap<OperationId, JournalEntry>,
+    /// The server's record of how far the person has read each conversation.
+    server_last_read: HashMap<ConversationId, i64>,
 }
 
 impl Sim {
@@ -130,6 +164,7 @@ impl Sim {
             given_up: HashSet::new(),
             disk: vec![None],
             journal: HashMap::new(),
+            server_last_read: HashMap::new(),
         };
         let out = sim.driver.send(Input::Started(StartupState {
             session_restored: true,
@@ -265,9 +300,71 @@ impl Sim {
         }
     }
 
+    /// The person's state in a conversation as the server computes it at log position
+    /// `position`: messages from other people after the read position, up to that position.
+    fn server_state(&self, conversation: ConversationId, position: i64) -> ConversationUserState {
+        let last_read = self
+            .server_last_read
+            .get(&conversation)
+            .copied()
+            .unwrap_or(0);
+        let me = self.world.me.id;
+        let unread = self
+            .log
+            .iter()
+            .filter_map(LogEntry::message)
+            .filter(|m| {
+                m.conversation_id == conversation
+                    && m.author_id != me
+                    && m.seq.get() > last_read
+                    && m.seq.get() <= position
+            })
+            .count();
+        ConversationUserState {
+            conversation_id: conversation,
+            favorite: false,
+            last_read: seq(last_read),
+            unread_count: u32::try_from(unread).unwrap(),
+            mention_count: 0,
+        }
+    }
+
+    /// Moves the person's read position forward, as a mark-read or another device would, and
+    /// records the change in the log so every client learns of it in order.
+    fn server_reads(&mut self, conversation: ConversationId, up_to: i64) {
+        let newest = self
+            .log
+            .iter()
+            .filter_map(LogEntry::message)
+            .filter(|m| m.conversation_id == conversation)
+            .map(|m| m.seq.get())
+            .max()
+            .unwrap_or(0);
+        let target = up_to.min(newest);
+        if target
+            <= self
+                .server_last_read
+                .get(&conversation)
+                .copied()
+                .unwrap_or(0)
+        {
+            return;
+        }
+        self.server_last_read.insert(conversation, target);
+        let position = BASE_HEAD + 1 + self.log.len() as i64;
+        let state = self.server_state(conversation, position);
+        self.log.push(LogEntry {
+            event: LogEvent::State(state),
+        });
+    }
+
     fn resolve_bootstrap(&mut self) {
         let mut bootstrap = self.world.bootstrap();
         bootstrap.workspaces[0].head = self.head();
+        bootstrap.workspaces[0].user_state = [self.world.channel.id, self.world.second_channel.id]
+            .into_iter()
+            .map(|c| self.server_state(c, BASE_HEAD + self.log.len() as i64))
+            .collect();
         self.feed(Input::BootstrapLoaded(Box::new(bootstrap)));
     }
 
@@ -284,10 +381,11 @@ impl Sim {
         let message = self
             .world
             .message(conversation, &self.world.me.clone(), at, text);
-        self.log.push(LogEntry {
-            message: message.clone(),
-            operation: Some(operation),
-        });
+        self.log
+            .push(LogEntry::message_entry(message.clone(), Some(operation)));
+        // The server moves the author's read position in the same transaction, without an event.
+        let read = self.server_last_read.entry(conversation).or_insert(0);
+        *read = (*read).max(at);
         self.committed.insert(operation, message.clone());
         message
     }
@@ -300,7 +398,7 @@ impl Sim {
     ) -> HistoryPage {
         let candidates: Vec<&Message> = self.log[..visible.min(self.log.len())]
             .iter()
-            .map(|entry| &entry.message)
+            .filter_map(LogEntry::message)
             .filter(|m| m.conversation_id == conversation)
             .filter(|m| before.is_none_or(|b| m.seq < b))
             .collect();
@@ -389,6 +487,32 @@ impl Sim {
                 });
             }
             Effect::LoadBootstrap => self.resolve_bootstrap(),
+            Effect::MarkRead {
+                conversation,
+                up_to,
+            } => {
+                MARK_READS_ANSWERED.fetch_add(1, Ordering::Relaxed);
+                let result = match outcome {
+                    Outcome::Ok => {
+                        self.server_reads(conversation, up_to.get());
+                        Ok(self.server_state(conversation, BASE_HEAD + self.log.len() as i64))
+                    }
+                    Outcome::LostAnswer => {
+                        self.server_reads(conversation, up_to.get());
+                        Err(unknown())
+                    }
+                    Outcome::LostRequest => Err(unknown()),
+                    Outcome::Reject => Err(RequestError::Rejected(ApiError::new(
+                        ErrorCode::Forbidden,
+                        "no",
+                    ))),
+                };
+                self.feed(Input::MarkReadResult {
+                    conversation,
+                    up_to,
+                    result,
+                });
+            }
             other => panic!("unexpected pending effect {other:?}"),
         }
     }
@@ -399,14 +523,23 @@ impl Sim {
                 break;
             }
             let entry = &self.log[self.pointer];
+            let event = match &entry.event {
+                LogEvent::Message { message, operation } => Event::MessageCreated {
+                    message: message.clone(),
+                    operation_id: *operation,
+                },
+                LogEvent::State(state) => {
+                    READ_STATE_EVENTS_DELIVERED.fetch_add(1, Ordering::Relaxed);
+                    Event::UserStateChanged {
+                        state: state.clone(),
+                    }
+                }
+            };
             let envelope = EventEnvelope {
                 workspace_id: self.world.workspace.id,
-                seq: entry.message.seq,
+                seq: seq(BASE_HEAD + 1 + self.pointer as i64),
                 occurred_at: lazy_domain::Timestamp::now(),
-                event: Event::MessageCreated {
-                    message: entry.message.clone(),
-                    operation_id: entry.operation,
-                },
+                event,
             };
             self.pointer += 1;
             self.feed(Input::Frame(ServerFrame::Event(envelope)));
@@ -431,11 +564,20 @@ impl Sim {
                 cursor <= BASE_HEAD + self.log.len() as i64,
                 "the cached cursor {cursor} is beyond the server's log"
             );
+            for saved in &workspace.user_state {
+                let horizon = saved.as_of.get().max(cursor);
+                let others = self.others_messages(saved.state.conversation_id, horizon, 0);
+                assert!(
+                    saved.state.unread_count as usize <= others,
+                    "a saved unread count of {} exceeds the {others} messages written by \
+                     other people by position {horizon}",
+                    saved.state.unread_count
+                );
+            }
             for timeline in &workspace.timelines {
                 let cached: HashSet<MessageId> = timeline.messages.iter().map(|m| m.id).collect();
                 let floor = timeline.messages.first().map(|m| m.seq.get());
-                for entry in &self.log {
-                    let message = &entry.message;
+                for message in self.log.iter().filter_map(LogEntry::message) {
                     if message.conversation_id != timeline.conversation
                         || message.seq.get() > cursor
                     {
@@ -458,6 +600,38 @@ impl Sim {
                 }
             }
         }
+    }
+
+    /// Counts of unread messages are sane at every step: present, never more than the number of
+    /// messages other people have written, and the sidebar lists every conversation once.
+    fn check_read_state(&self, conversation: ConversationId) {
+        let others = self.others_messages(conversation, i64::MAX, 0);
+        if let Some(state) = self.driver.core.user_state(conversation) {
+            assert!(
+                state.unread_count as usize <= others,
+                "{} unread but only {others} messages from other people exist",
+                state.unread_count
+            );
+        }
+        let sidebar = self.driver.core.sidebar();
+        assert_eq!(
+            sidebar.favorites.len() + sidebar.channels.len() + sidebar.direct_and_group.len(),
+            self.driver.core.conversations().len()
+        );
+    }
+
+    /// How many messages other people wrote in a conversation after `after`, up to `until`.
+    fn others_messages(&self, conversation: ConversationId, until: i64, after: i64) -> usize {
+        self.log
+            .iter()
+            .filter_map(LogEntry::message)
+            .filter(|m| {
+                m.conversation_id == conversation
+                    && m.author_id != self.world.me.id
+                    && m.seq.get() > after
+                    && m.seq.get() <= until
+            })
+            .count()
     }
 
     /// The app is killed. Requests in flight die with it; durable state (the journal, and
@@ -497,10 +671,7 @@ impl Sim {
                 let message = self
                     .world
                     .message(conversation, &self.world.other.clone(), at, "hi");
-                self.log.push(LogEntry {
-                    message,
-                    operation: None,
-                });
+                self.log.push(LogEntry::message_entry(message, None));
             }
             Action::UserSends(flag) => {
                 let conversation = self.conversation(flag);
@@ -522,6 +693,18 @@ impl Sim {
                 self.feed(Input::LoadOlder { conversation });
             }
             Action::Restart(pick) => self.restart(pick),
+            Action::Window(active) => self.feed(Input::WindowActive(active)),
+            Action::Bottom(flag, at_bottom) => {
+                let conversation = self.conversation(flag);
+                self.feed(Input::TimelineAtBottom {
+                    conversation,
+                    at_bottom,
+                });
+            }
+            Action::OtherDeviceReads(flag) => {
+                let conversation = self.conversation(flag);
+                self.server_reads(conversation, i64::MAX);
+            }
             Action::Snapshot => {
                 let frame = ServerFrame::SnapshotRequired {
                     workspace_id: self.world.workspace.id,
@@ -558,6 +741,7 @@ impl Sim {
             );
             let mut ids = HashSet::new();
             let mut keys = HashSet::new();
+            self.check_read_state(conversation);
             for row in rows {
                 if let Some(id) = row.message_id() {
                     assert!(ids.insert(id), "duplicate message id in timeline");
@@ -650,6 +834,50 @@ impl Sim {
                 "committed out of submission order: {numbers:?}"
             );
         }
+        // Read state has converged on the server's: the same read position, and an unread count
+        // equal to the messages other people wrote after it, which for a complete timeline is
+        // also the number of loaded rows from other people after the read position.
+        for conversation in [self.world.channel.id, self.world.second_channel.id] {
+            let state = self
+                .driver
+                .core
+                .user_state(conversation)
+                .expect("a read state for every conversation");
+            let server_read = self
+                .server_last_read
+                .get(&conversation)
+                .copied()
+                .unwrap_or(0);
+            assert_eq!(
+                state.last_read.get(),
+                server_read,
+                "read position\n{}",
+                self.trace.join("\n")
+            );
+            let expected = self.others_messages(conversation, i64::MAX, server_read);
+            assert_eq!(
+                state.unread_count as usize,
+                expected,
+                "unread count\n{}",
+                self.trace.join("\n")
+            );
+            if matches!(
+                self.driver.core.history_status(conversation),
+                lazy_client_core::HistoryStatus::Ready { has_more: false }
+            ) {
+                let loaded = self
+                    .driver
+                    .core
+                    .timeline(conversation)
+                    .iter()
+                    .filter(|row| {
+                        row.author_id != self.world.me.id
+                            && row.seq().is_some_and(|s| s.get() > server_read)
+                    })
+                    .count();
+                assert_eq!(state.unread_count as usize, loaded, "unread vs loaded rows");
+            }
+        }
         let mut present: HashMap<ConversationId, HashSet<MessageId>> = HashMap::new();
         for conversation in [self.world.channel.id, self.world.second_channel.id] {
             let rows = self.driver.core.timeline(conversation);
@@ -669,7 +897,9 @@ impl Sim {
             );
         }
         for (index, entry) in self.log.iter().enumerate() {
-            let message = &entry.message;
+            let Some(message) = entry.message() else {
+                continue;
+            };
             let ids = &present[&message.conversation_id];
             let loaded = matches!(
                 self.driver.core.history_status(message.conversation_id),
@@ -680,17 +910,12 @@ impl Sim {
                 let log: Vec<_> = self
                     .log
                     .iter()
-                    .map(|e| {
-                        (
-                            e.message.seq.get(),
-                            e.message.conversation_id == self.world.channel.id,
-                            e.operation.is_some(),
-                        )
-                    })
+                    .filter_map(LogEntry::message)
+                    .map(|m| (m.seq.get(), m.conversation_id == self.world.channel.id))
                     .collect();
                 assert!(
                     ids.contains(&message.id),
-                    "message at {} (index {index}, general={}) missing; loaded={loaded} bootstrap_head={} status={:?}\ntrace:\n{}\ntimeline seqs={:?}\nlog(seq, general, own)={log:?}",
+                    "message at {} (index {index}, general={}) missing; loaded={loaded} bootstrap_head={} status={:?}\ntrace:\n{}\ntimeline seqs={:?}\nlog(seq, general)={log:?}",
                     message.seq,
                     message.conversation_id == self.world.channel.id,
                     self.bootstrap_head,
@@ -718,6 +943,8 @@ impl Sim {
 static RESTARTS_WITH_CACHED_MESSAGES: AtomicUsize = AtomicUsize::new(0);
 static RESTARTS_WITHOUT_CACHE: AtomicUsize = AtomicUsize::new(0);
 static CACHE_WRITES_CHECKED: AtomicUsize = AtomicUsize::new(0);
+static MARK_READS_ANSWERED: AtomicUsize = AtomicUsize::new(0);
+static READ_STATE_EVENTS_DELIVERED: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn timelines_stay_consistent_under_any_interleaving() {
@@ -746,6 +973,19 @@ fn timelines_stay_consistent_under_any_interleaving() {
     assert!(RESTARTS_WITH_CACHED_MESSAGES.load(Ordering::Relaxed) > 0);
     assert!(RESTARTS_WITHOUT_CACHE.load(Ordering::Relaxed) > 0);
     assert!(CACHE_WRITES_CHECKED.load(Ordering::Relaxed) > 0);
+    assert!(
+        MARK_READS_ANSWERED.load(Ordering::Relaxed) > 0,
+        "mark-read was exercised"
+    );
+    assert!(
+        READ_STATE_EVENTS_DELIVERED.load(Ordering::Relaxed) > 0,
+        "read-state events were exercised"
+    );
+    eprintln!(
+        "simulation coverage: {} mark-reads answered, {} read-state events delivered",
+        MARK_READS_ANSWERED.load(Ordering::Relaxed),
+        READ_STATE_EVENTS_DELIVERED.load(Ordering::Relaxed),
+    );
     eprintln!(
         "simulation coverage: {} restarts from a cache with messages, {} without a cache, {} cache writes checked",
         RESTARTS_WITH_CACHED_MESSAGES.load(Ordering::Relaxed),

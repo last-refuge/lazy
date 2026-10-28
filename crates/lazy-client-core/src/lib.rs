@@ -17,14 +17,15 @@ mod model;
 mod timeline;
 
 pub use cache::{
-    CachedTimeline, CachedWorkspace, ContentCache, MAX_CACHE_BYTES, MAX_CACHED_CONVERSATIONS,
-    MAX_CACHED_MESSAGES,
+    CachedTimeline, CachedUserState, CachedWorkspace, ContentCache, MAX_CACHE_BYTES,
+    MAX_CACHED_CONVERSATIONS, MAX_CACHED_MESSAGES,
 };
 pub use change::{Change, Output};
 pub use core::ClientCore;
 pub use effect::Effect;
 pub use input::{Input, SocketEvent};
 pub use model::{
-    ConnectionState, Delivery, HistoryStatus, ItemKey, JournalEntry, RequestError, RetryKind,
-    SessionPhase, StartupState, TimelineItem, UNKNOWN_MEMBER_NAME, WorkspaceInfo,
+    ActionKind, ActionOutcome, ActionState, ConnectionState, Delivery, HistoryStatus, ItemKey,
+    JournalEntry, RequestError, RetryKind, SessionPhase, Sidebar, StartupState, TimelineItem,
+    UNKNOWN_MEMBER_NAME, WorkspaceInfo,
 };

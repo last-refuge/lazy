@@ -4,12 +4,14 @@
 //! on every desktop client, and on future phone clients.
 
 pub mod authz;
+pub mod conversation;
 pub mod document;
 pub mod ids;
 pub mod names;
 pub mod time_stamp;
 
 pub use authz::{ChannelAccess, ChannelVisibility, WorkspaceRole};
+pub use conversation::{ConversationFacts, ConversationKind, ParticipantError, ParticipantSet};
 pub use document::{Block, DocumentError, Inline, MessageDocument};
 pub use ids::{ConversationId, EventSeq, MessageId, OperationId, UserId, WorkspaceId};
 pub use names::{ChannelName, DisplayName, NameError, Username};

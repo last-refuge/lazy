@@ -13,13 +13,14 @@ use gpui::{
     AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext, WindowAppearance,
 };
 use lazy_client_core::{Delivery, Effect, Input, RequestError, SessionPhase, StartupState};
+use lazy_domain::ConversationKind;
 use lazy_domain::{
     ChannelName, ChannelVisibility, ConversationId, DisplayName, EventSeq, MessageDocument,
     MessageId, Timestamp, UserId, Username, WorkspaceId, WorkspaceRole,
 };
 use lazy_protocol::{
-    ApiError, BootstrapResponse, Conversation, ErrorCode, HistoryPage, Message, PROTOCOL_VERSION,
-    SendMessageResponse, User, Workspace, WorkspaceBootstrap,
+    ApiError, BootstrapResponse, Conversation, ConversationUserState, ErrorCode, HistoryPage,
+    Message, PROTOCOL_VERSION, SendMessageResponse, User, Workspace, WorkspaceBootstrap,
 };
 use lazy_ui::app_model::{AppModel, EffectSink};
 use lazy_ui::root_view::RootView;
@@ -39,6 +40,39 @@ struct Fixture {
     me: User,
     workspace: WorkspaceId,
     general: ConversationId,
+}
+
+/// A public channel as the server describes it.
+fn channel(
+    workspace: WorkspaceId,
+    id: ConversationId,
+    name: &str,
+    topic: Option<&str>,
+) -> Conversation {
+    Conversation {
+        id,
+        workspace_id: workspace,
+        kind: ConversationKind::Channel,
+        name: Some(ChannelName::parse(name).unwrap()),
+        topic: topic.map(str::to_owned),
+        description: None,
+        visibility: ChannelVisibility::Public,
+        archived: false,
+        is_default: name == "general",
+        created_by: None,
+        participants: vec![],
+        member_count: 2,
+    }
+}
+
+fn read_state(conversation: ConversationId) -> ConversationUserState {
+    ConversationUserState {
+        conversation_id: conversation,
+        favorite: false,
+        last_read: EventSeq::ZERO,
+        unread_count: 0,
+        mention_count: 0,
+    }
 }
 
 fn user(name: &str) -> User {
@@ -92,14 +126,13 @@ impl Fixture {
                     name: "Lazy".into(),
                 },
                 role: WorkspaceRole::Member,
-                conversations: vec![Conversation {
-                    id: self.general,
-                    workspace_id: self.workspace,
-                    name: ChannelName::parse("general").unwrap(),
-                    topic: Some("Company-wide chatter".into()),
-                    visibility: ChannelVisibility::Public,
-                    archived: false,
-                }],
+                conversations: vec![channel(
+                    self.workspace,
+                    self.general,
+                    "general",
+                    Some("Company-wide chatter"),
+                )],
+                user_state: vec![read_state(self.general)],
                 members: vec![self.me.clone(), user("bob")],
                 head: EventSeq::ZERO,
             }],
@@ -651,14 +684,10 @@ fn the_shell_can_be_driven_entirely_from_the_keyboard(cx: &mut TestAppContext) {
     let (app, cx) = start(cx);
     let random = ConversationId::generate();
     let mut bootstrap = app.bootstrap();
-    bootstrap.workspaces[0].conversations.push(Conversation {
-        id: random,
-        workspace_id: app.workspace,
-        name: ChannelName::parse("random").unwrap(),
-        topic: None,
-        visibility: ChannelVisibility::Public,
-        archived: false,
-    });
+    bootstrap.workspaces[0]
+        .conversations
+        .push(channel(app.workspace, random, "random", None));
+    bootstrap.workspaces[0].user_state.push(read_state(random));
     app.dispatch(
         cx,
         Input::Started(StartupState {
@@ -694,8 +723,10 @@ fn the_shell_can_be_driven_entirely_from_the_keyboard(cx: &mut TestAppContext) {
         .expect("Tab then Enter on Send submits the message");
     assert_eq!(sent, "typed with the keyboard");
 
-    // Shift+Tab walks back: Send, composer, Sign out, then the sidebar channels.
-    cx.simulate_keystrokes("shift-tab shift-tab shift-tab");
+    // Shift+Tab walks back through everything between Send and the sidebar's channel list:
+    // the composer, Details, Favorite, Sign out, "Start a conversation", the Direct messages
+    // "+", and then the last channel row (random).
+    cx.simulate_keystrokes("shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab");
     cx.simulate_keystrokes("enter");
     let selected = app
         .model

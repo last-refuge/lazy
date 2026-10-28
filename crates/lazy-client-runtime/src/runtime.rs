@@ -20,11 +20,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use lazy_client_core::{ContentCache, Effect, Input, JournalEntry, RequestError, StartupState};
+use lazy_client_core::{
+    ActionKind, ActionOutcome, ContentCache, Effect, Input, JournalEntry, RequestError,
+    StartupState,
+};
 use lazy_domain::{ConversationId, EventSeq, OperationId, WorkspaceId};
 use lazy_protocol::{
-    BootstrapResponse, HistoryPage, HistoryQuery, OperationStatus, SendMessageRequest,
-    SendMessageResponse, SessionResponse, paths,
+    BootstrapResponse, BrowseChannelsResponse, ConversationResponse, HistoryPage, HistoryQuery,
+    MarkReadRequest, OperationStatus, SendMessageRequest, SendMessageResponse, SessionResponse,
+    SetFavoriteRequest, UserStateResponse, paths,
 };
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::JoinSet;
@@ -439,6 +443,184 @@ impl Inner {
                 if let Some(persistence) = self.persistence() {
                     persistence.queue_drafts(drafts);
                 }
+            }
+            Effect::CreateChannel { workspace, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt only: an unknown outcome is reconciled by the core, never
+                    // repeated here.
+                    let operation = request.operation_id;
+                    let result = inner
+                        .api
+                        .post::<ConversationResponse, _>(&paths::channels(workspace), &request)
+                        .await;
+                    inner
+                        .emit(Input::ConversationCommandResult { operation, result })
+                        .await;
+                });
+            }
+            Effect::OpenConversation { workspace, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let operation = request.operation_id;
+                    let result = inner
+                        .api
+                        .post::<ConversationResponse, _>(
+                            &paths::open_conversation(workspace),
+                            &request,
+                        )
+                        .await;
+                    inner
+                        .emit(Input::ConversationCommandResult { operation, result })
+                        .await;
+                });
+            }
+            Effect::BrowseChannels { workspace } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::browse_channels(workspace);
+                    let result = inner
+                        .retry_read(|| inner.api.get::<BrowseChannelsResponse>(&path))
+                        .await
+                        .map(|response| ActionOutcome::Browse(response.channels));
+                    let kind = ActionKind::Browse;
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::JoinChannel { conversation } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::conversation_action(conversation, "join");
+                    let result = inner
+                        .api
+                        .post_empty::<ConversationResponse>(&path)
+                        .await
+                        .map(|r| ActionOutcome::Conversation(r.conversation));
+                    let kind = ActionKind::Join(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::LeaveChannel { conversation } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::conversation_action(conversation, "leave");
+                    let result = inner
+                        .api
+                        .post_unit(&path)
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::Leave(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::AddMembers {
+                conversation,
+                request,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::conversation_action(conversation, "members");
+                    let result = inner
+                        .api
+                        .post::<ConversationResponse, _>(&path, &request)
+                        .await
+                        .map(|r| ActionOutcome::Conversation(r.conversation));
+                    let kind = ActionKind::AddMembers(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::RemoveMember { conversation, user } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let result = inner
+                        .api
+                        .delete_unit(&paths::member(conversation, user))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::RemoveMember(conversation, user);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::UpdateConversation {
+                conversation,
+                request,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let result = inner
+                        .api
+                        .patch::<ConversationResponse, _>(
+                            &paths::conversation(conversation),
+                            &request,
+                        )
+                        .await
+                        .map(|r| ActionOutcome::Conversation(r.conversation));
+                    let kind = ActionKind::UpdateConversation(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::ArchiveConversation { conversation } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::conversation_action(conversation, "archive");
+                    let result = inner
+                        .api
+                        .post_empty::<ConversationResponse>(&path)
+                        .await
+                        .map(|r| ActionOutcome::Conversation(r.conversation));
+                    let kind = ActionKind::Archive(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::UnarchiveConversation { conversation } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::conversation_action(conversation, "unarchive");
+                    let result = inner
+                        .api
+                        .post_empty::<ConversationResponse>(&path)
+                        .await
+                        .map(|r| ActionOutcome::Conversation(r.conversation));
+                    let kind = ActionKind::Unarchive(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::SetFavorite {
+                conversation,
+                favorite,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::conversation_action(conversation, "favorite");
+                    let result = inner
+                        .api
+                        .put::<UserStateResponse, _>(&path, &SetFavoriteRequest { favorite })
+                        .await
+                        .map(|r| ActionOutcome::UserState(r.state));
+                    let kind = ActionKind::SetFavorite(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::MarkRead {
+                conversation,
+                up_to,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::conversation_action(conversation, "read");
+                    let result = inner
+                        .api
+                        .post::<UserStateResponse, _>(&path, &MarkReadRequest { up_to })
+                        .await
+                        .map(|r| r.state);
+                    inner
+                        .emit(Input::MarkReadResult {
+                            conversation,
+                            up_to,
+                            result,
+                        })
+                        .await;
+                });
             }
             Effect::PersistCache(cache) => {
                 if let Some(persistence) = self.persistence() {

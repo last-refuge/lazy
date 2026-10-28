@@ -399,7 +399,9 @@ impl EditorModel {
             selection = edit.before;
             self.redo.push(edit);
         }
-        self.selection = selection;
+        // A selection saved during an IME composition may sit inside a cluster, which is only
+        // allowed while the composition is active.
+        self.selection = self.snapped(selection.anchor, selection.head);
         self.revision += 1;
         true
     }
@@ -418,7 +420,7 @@ impl EditorModel {
             selection = edit.after;
             self.undo.push(edit);
         }
-        self.selection = selection;
+        self.selection = self.snapped(selection.anchor, selection.head);
         self.revision += 1;
         true
     }
@@ -464,21 +466,17 @@ impl EditorModel {
 
     /// Selects the word under `offset`, as a double-click does.
     pub fn select_word_at(&mut self, offset: usize) -> bool {
+        // Word and grapheme segmentation can disagree (for example where a combining mark splits
+        // a pair of regional indicators), so snap the word's ends outward to grapheme boundaries.
         let range = word_range_at(&self.text, offset);
-        self.set_selection(Selection {
-            anchor: range.start,
-            head: range.end,
-        })
+        self.select(range.start, range.end)
     }
 
     /// Selects the logical line under `offset`, as a triple-click does.
     pub fn select_line_at(&mut self, offset: usize) -> bool {
         let start = line_start(&self.text, offset);
         let end = line_end(&self.text, offset);
-        self.set_selection(Selection {
-            anchor: start,
-            head: end,
-        })
+        self.select(start, end)
     }
 
     /// Sets the selection, snapping both ends to grapheme boundaries (outward for a non-empty

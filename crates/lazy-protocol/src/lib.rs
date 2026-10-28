@@ -38,4 +38,4 @@ pub use secret::{Password, SessionToken};
 
 /// Version of this protocol. Bumped for incompatible changes; clients compare it with the value
 /// returned by `GET /v1/bootstrap` and `GET /healthz`.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;

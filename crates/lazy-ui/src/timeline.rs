@@ -5,7 +5,7 @@
 //! friends) and this view mirrors them into the list state; rows are drawn from the core's
 //! current data. No I/O or parsing happens while rendering.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -16,7 +16,7 @@ use gpui::{
 use jiff::Zoned;
 use jiff::tz::TimeZone;
 use lazy_client_core::{Change, Delivery, HistoryStatus, Input, ItemKey};
-use lazy_domain::ConversationId;
+use lazy_domain::{ConversationId, ConversationKind};
 
 use crate::app_model::{AppEvent, AppModel};
 use crate::message_row::{RetryHandler, RowProps, render_message_row, row_layout};
@@ -55,6 +55,10 @@ pub struct TimelineView {
     model: Entity<AppModel>,
     lists: HashMap<ConversationId, ListState>,
     restore: Option<PendingRestore>,
+    /// The "New messages" row of each conversation as last drawn, to remeasure when it moves.
+    markers: HashMap<ConversationId, Option<ItemKey>>,
+    /// What was last reported to the core about whether each list is at the bottom.
+    bottom_reported: HashMap<ConversationId, Rc<Cell<Option<bool>>>>,
     /// Tab stops for the retry buttons of failed messages, by message identity.
     retry_focus: Rc<RefCell<HashMap<ItemKey, FocusHandle>>>,
     zone: TimeZone,
@@ -71,6 +75,8 @@ impl TimelineView {
             model,
             lists: HashMap::new(),
             restore: None,
+            markers: HashMap::new(),
+            bottom_reported: HashMap::new(),
             retry_focus: Rc::default(),
             zone: TimeZone::system(),
             _subscription: subscription,
@@ -140,7 +146,56 @@ impl TimelineView {
         if restore.is_some() {
             self.restore = restore;
         }
+        let selection_changed = changes
+            .iter()
+            .any(|c| matches!(c, Change::SelectionChanged));
+        if let Some(selected) = self.model.read(cx).core().selected_conversation() {
+            if selection_changed {
+                self.report_bottom_again(selected, cx);
+            }
+            self.sync_marker(selected, cx);
+        }
         cx.notify();
+    }
+
+    /// The core forgets a conversation's on-screen report when the person leaves it, so tell it
+    /// again, from the list's current state, when they come back.
+    fn report_bottom_again(&mut self, conversation: ConversationId, cx: &mut Context<Self>) {
+        let (Some(state), Some(reported)) = (
+            self.lists.get(&conversation),
+            self.bottom_reported.get(&conversation),
+        ) else {
+            return; // A list created on the next render reports for itself.
+        };
+        let at_bottom = state.is_following_tail();
+        reported.set(Some(at_bottom));
+        self.model.update(cx, |model, cx| {
+            model.dispatch(
+                Input::TimelineAtBottom {
+                    conversation,
+                    at_bottom,
+                },
+                cx,
+            );
+        });
+    }
+
+    /// Remeasures the rows that gained or lost the "New messages" divider.
+    fn sync_marker(&mut self, conversation: ConversationId, cx: &mut Context<Self>) {
+        let marker = self.model.read(cx).core().unread_marker(conversation);
+        let previous = self.markers.insert(conversation, marker).flatten();
+        if previous == marker {
+            return;
+        }
+        let Some(state) = self.lists.get(&conversation) else {
+            return;
+        };
+        let items = self.model.read(cx).core().timeline(conversation);
+        for key in [previous, marker].into_iter().flatten() {
+            if let Some(index) = items.iter().position(|item| item.key == key) {
+                state.remeasure_items(index..index + 1);
+            }
+        }
     }
 
     /// Advances a pending position restore by one render. See [`PendingRestore`].
@@ -187,7 +242,42 @@ impl TimelineView {
         state.set_follow_mode(FollowMode::Tail);
 
         let model = self.model.clone();
+        // A new list starts at the newest message, so that is what the core is told.
+        let reported = Rc::new(Cell::new(Some(true)));
+        self.bottom_reported.insert(conversation, reported.clone());
+        {
+            let model = model.clone();
+            cx.defer(move |cx| {
+                model.update(cx, |model, cx| {
+                    model.dispatch(
+                        Input::TimelineAtBottom {
+                            conversation,
+                            at_bottom: true,
+                        },
+                        cx,
+                    );
+                });
+            });
+        }
         state.set_scroll_handler(move |event, _window, cx| {
+            let at_bottom = event.is_following_tail;
+            if reported.get() != Some(at_bottom) {
+                reported.set(Some(at_bottom));
+                // Dispatching splices nothing here, but the list state is borrowed while its
+                // scroll handler runs, so report after the handler returns.
+                let model = model.clone();
+                cx.defer(move |cx| {
+                    model.update(cx, |model, cx| {
+                        model.dispatch(
+                            Input::TimelineAtBottom {
+                                conversation,
+                                at_bottom,
+                            },
+                            cx,
+                        );
+                    });
+                });
+            }
             if event.visible_range.start > LOAD_OLDER_THRESHOLD {
                 return;
             }
@@ -228,16 +318,32 @@ impl Render for TimelineView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *Theme::get(cx);
         let model = self.model.clone();
-        let (selected, count, status, name) = {
+        let (selected, count, status, start_of_history, marker) = {
             let core = model.read(cx).core();
             let selected = core.selected_conversation();
             (
                 selected,
                 selected.map_or(0, |id| core.timeline(id).len()),
                 selected.map(|id| core.history_status(id).clone()),
-                selected
-                    .and_then(|id| core.conversation(id))
-                    .map(|conversation| conversation.name.to_string()),
+                selected.and_then(|id| {
+                    let conversation = core.conversation(id)?;
+                    let title = core.conversation_title(id);
+                    Some(match conversation.kind {
+                        ConversationKind::Channel if conversation.archived => format!(
+                            "This is the beginning of #{title}. It is archived, so it is read-only."
+                        ),
+                        ConversationKind::Channel => {
+                            format!("This is the beginning of #{title}. Say hello!")
+                        }
+                        ConversationKind::Direct => {
+                            format!("This is the start of your conversation with {title}. Say hello!")
+                        }
+                        ConversationKind::Group => {
+                            format!("This is the start of your group conversation with {title}. Say hello!")
+                        }
+                    })
+                }),
+                selected.and_then(|id| core.unread_marker(id)),
             )
         };
 
@@ -249,10 +355,9 @@ impl Render for TimelineView {
                 Some(HistoryStatus::Failed { message }) => {
                     format!("Couldn't load messages: {message}")
                 }
-                Some(HistoryStatus::Ready { .. }) => format!(
-                    "This is the beginning of #{}. Say hello!",
-                    name.as_deref().unwrap_or("channel")
-                ),
+                Some(HistoryStatus::Ready { .. }) => {
+                    start_of_history.unwrap_or_else(|| "Say hello!".to_owned())
+                }
                 _ => "Loading messages…".to_owned(),
             };
             return self.empty_state(text, &theme);
@@ -302,6 +407,7 @@ impl Render for TimelineView {
                     .clone()
             });
             render_message_row(RowProps {
+                new_messages_divider: marker == Some(item.key),
                 retry_focus,
                 index,
                 item,

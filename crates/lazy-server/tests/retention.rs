@@ -36,7 +36,7 @@ fn never() -> CancellationToken {
 async fn pruning_removes_aged_out_events_and_always_keeps_the_newest(pool: PgPool) {
     let app = App::start(pool).await;
     let (_, head) = log_of(&app, 20).await;
-    assert_eq!(head.get(), 21);
+    assert_eq!(head.get(), 22);
     app.backdate_events(head, 40).await;
 
     // Nothing happens when the policy is off, or the events are younger than the window.
@@ -59,26 +59,26 @@ async fn pruning_removes_aged_out_events_and_always_keeps_the_newest(pool: PgPoo
     assert_eq!(reports[0].deleted, 0);
     assert_eq!(
         (app.event_floor().await.get(), count_events(&app).await),
-        (0, 21)
+        (0, 22)
     );
 
     // Everything is old, but the newest five stay.
     let reports = prune_all(&app.pool, retention(5), &never()).await.unwrap();
     assert_eq!(reports.len(), 1);
-    assert_eq!((reports[0].deleted, reports[0].floor.get()), (16, 16));
-    assert_eq!(app.event_floor().await.get(), 16);
+    assert_eq!((reports[0].deleted, reports[0].floor.get()), (17, 17));
+    assert_eq!(app.event_floor().await.get(), 17);
     assert_eq!(
         app.log_positions_after(EventSeq::ZERO).await,
-        vec![17, 18, 19, 20, 21]
+        vec![18, 19, 20, 21, 22]
     );
 
     // Pruning again changes nothing, and a gentler policy never lowers the floor.
     let again = prune_all(&app.pool, retention(5), &never()).await.unwrap();
-    assert_eq!((again[0].deleted, again[0].floor.get()), (0, 16));
+    assert_eq!((again[0].deleted, again[0].floor.get()), (0, 17));
     prune_all(&app.pool, retention(100), &never())
         .await
         .unwrap();
-    assert_eq!(app.event_floor().await.get(), 16);
+    assert_eq!(app.event_floor().await.get(), 17);
     app.server.shutdown().await.unwrap();
 }
 
@@ -86,18 +86,18 @@ async fn pruning_removes_aged_out_events_and_always_keeps_the_newest(pool: PgPoo
 async fn the_default_policy_keeps_the_newest_thousand_events(pool: PgPool) {
     let app = App::start(pool).await;
     let (_, head) = log_of(&app, 1100).await;
-    assert_eq!(head.get(), 1101);
+    assert_eq!(head.get(), 1102);
     app.backdate_events(head, 90).await;
 
     let reports = prune_all(&app.pool, RetentionPolicy::from_days(30), &never())
         .await
         .unwrap();
-    assert_eq!(reports[0].deleted, 101);
-    assert_eq!(app.event_floor().await.get(), 101);
+    assert_eq!(reports[0].deleted, 102);
+    assert_eq!(app.event_floor().await.get(), 102);
     assert_eq!(count_events(&app).await, 1000);
     assert_eq!(
         app.log_positions_after(EventSeq::ZERO).await.first(),
-        Some(&102)
+        Some(&103)
     );
     app.server.shutdown().await.unwrap();
 }
@@ -124,8 +124,8 @@ async fn large_backlogs_are_pruned_in_several_bounded_transactions(pool: PgPool)
     const TOTAL: i64 = 12_000;
     let app = App::start(pool).await;
     sqlx::query(
-        "INSERT INTO events (workspace_id, seq, occurred_at, kind, payload) \
-         SELECT $1, g, now() - interval '40 days', 'filler', '{}'::jsonb \
+        "INSERT INTO events (workspace_id, seq, occurred_at, kind, audience, payload) \
+         SELECT $1, g, now() - interval '40 days', 'filler', 'workspace', '{}'::jsonb \
          FROM generate_series(1, $2::bigint) g",
     )
     .bind(app.workspace_id.as_uuid())
@@ -155,8 +155,8 @@ async fn large_backlogs_are_pruned_in_several_bounded_transactions(pool: PgPool)
         .await
         .unwrap();
     sqlx::query(
-        "INSERT INTO events (workspace_id, seq, occurred_at, kind, payload) \
-         SELECT $1, g, now() - interval '40 days', 'filler', '{}'::jsonb \
+        "INSERT INTO events (workspace_id, seq, occurred_at, kind, audience, payload) \
+         SELECT $1, g, now() - interval '40 days', 'filler', 'workspace', '{}'::jsonb \
          FROM generate_series(1, $2::bigint - 10) g",
     )
     .bind(app.workspace_id.as_uuid())
@@ -181,7 +181,7 @@ async fn expired_cursors_take_a_snapshot_and_the_floor_itself_replays(pool: PgPo
     app.backdate_events(head, 40).await;
     prune_all(&app.pool, retention(5), &never()).await.unwrap();
     let floor = app.event_floor().await;
-    assert_eq!(floor.get(), 16);
+    assert_eq!(floor.get(), 17);
 
     let mut ws = app.connect_ws(&ada).await;
     for stale in [0, 1, 15] {
@@ -203,7 +203,7 @@ async fn expired_cursors_take_a_snapshot_and_the_floor_itself_replays(pool: PgPo
     ws.subscribe(app.workspace_id, floor).await;
     let (replayed, caught_up) = ws.replay().await;
     let positions: Vec<i64> = replayed.iter().map(|e| e.seq.get()).collect();
-    assert_eq!(positions, vec![17, 18, 19, 20, 21]);
+    assert_eq!(positions, vec![18, 19, 20, 21, 22]);
     assert_eq!(caught_up, head);
 
     // A cursor beyond the head is still the other kind of refusal.

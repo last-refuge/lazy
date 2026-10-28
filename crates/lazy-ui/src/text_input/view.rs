@@ -17,6 +17,7 @@ use super::layout::LayoutState;
 use super::model::{Direction, EditorModel, Unit};
 use super::style::{SubmitChord, TextInputOptions, TextInputStyle};
 use super::unicode::{floor_char_boundary, next_grapheme_boundary};
+use crate::theme::Theme;
 
 /// Key context set on the input's root element. Bindings from [`bind_keys`] apply inside it.
 pub const KEY_CONTEXT: &str = "LazyTextInput";
@@ -161,10 +162,13 @@ pub struct TextInput {
     pub(crate) placeholder: SharedString,
     accessible_label: SharedString,
     pub(crate) single_line: bool,
+    pass_through_navigation: bool,
     pub(crate) masked: bool,
     pub(crate) max_lines: usize,
     submit_chord: SubmitChord,
     pub(crate) style: TextInputStyle,
+    /// Whether `style` is re-derived from the installed theme on every render.
+    themed: bool,
     enabled: bool,
     /// Shaped text, shared with the element that produces it during layout.
     pub(crate) layout: Rc<RefCell<Option<LayoutState>>>,
@@ -198,10 +202,12 @@ impl TextInput {
             placeholder: options.placeholder,
             accessible_label: options.accessible_label,
             single_line: options.single_line,
+            pass_through_navigation: options.pass_through_navigation,
             masked: options.masked,
             max_lines: options.max_lines.max(1),
             submit_chord: options.submit_chord,
             style: options.style,
+            themed: options.themed,
             enabled: options.enabled,
             layout: Rc::new(RefCell::new(None)),
             scroll: point(px(0.), px(0.)),
@@ -487,6 +493,10 @@ impl TextInput {
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pass_through_navigation && self.model.is_empty() {
+            cx.propagate();
+            return;
+        }
         self.delete_by(Direction::Backward, Unit::Grapheme, window, cx);
     }
 
@@ -679,6 +689,10 @@ impl TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.single_line && self.pass_through_navigation {
+            cx.propagate();
+            return;
+        }
         if self.single_line {
             let direction = if down {
                 Direction::Forward
@@ -846,6 +860,17 @@ fn logical_vertical_target(text: &str, offset: usize, down: bool) -> usize {
 
 impl Render for TextInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Follow the live theme: the window can open in one appearance and the system can report
+        // the other afterwards. The shaped-text cache is keyed by these colors, so a change
+        // reshapes on its own.
+        if self.themed
+            && let Some(theme) = cx.try_global::<Theme>()
+        {
+            let style = TextInputStyle::from_theme(theme);
+            if self.style != style {
+                self.style = style;
+            }
+        }
         let role = if self.masked {
             Role::PasswordInput
         } else if self.single_line {

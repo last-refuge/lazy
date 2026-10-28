@@ -6,7 +6,9 @@
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use lazy_domain::{ConversationId, EventSeq, MessageDocument, OperationId, Username, WorkspaceId};
+use lazy_domain::{
+    ConversationId, EventSeq, MessageDocument, OperationId, UserId, Username, WorkspaceId,
+};
 use lazy_protocol::api::paths;
 use lazy_protocol::{
     ApiError, BootstrapResponse, ClientFrame, ErrorCode, HistoryPage, LoginRequest, Message,
@@ -308,6 +310,8 @@ impl App {
         id
     }
 
+    /// Adds a member directly in the database, without events, keeping the member count and the
+    /// person's state row consistent with what the server does.
     pub async fn add_to_conversation(&self, conversation: ConversationId, account: &Account) {
         sqlx::query("INSERT INTO conversation_members (conversation_id, user_id) VALUES ($1, $2)")
             .bind(conversation.as_uuid())
@@ -315,8 +319,23 @@ impl App {
             .execute(&self.pool)
             .await
             .expect("add member");
+        sqlx::query(
+            "INSERT INTO conversation_user_state (user_id, conversation_id, last_read) \
+             VALUES ($1, $2, COALESCE((SELECT max(seq) FROM messages WHERE conversation_id = $2), 0))",
+        )
+        .bind(account.user.id.as_uuid())
+        .bind(conversation.as_uuid())
+        .execute(&self.pool)
+        .await
+        .expect("add state");
+        sqlx::query("UPDATE conversations SET member_count = member_count + 1 WHERE id = $1")
+            .bind(conversation.as_uuid())
+            .execute(&self.pool)
+            .await
+            .expect("count member");
     }
 
+    /// Removes a member directly in the database, without events.
     pub async fn remove_from_conversation(&self, conversation: ConversationId, account: &Account) {
         sqlx::query("DELETE FROM conversation_members WHERE conversation_id = $1 AND user_id = $2")
             .bind(conversation.as_uuid())
@@ -324,6 +343,250 @@ impl App {
             .execute(&self.pool)
             .await
             .expect("remove member");
+        sqlx::query(
+            "DELETE FROM conversation_user_state WHERE conversation_id = $1 AND user_id = $2",
+        )
+        .bind(conversation.as_uuid())
+        .bind(account.user.id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .expect("remove state");
+        sqlx::query("UPDATE conversations SET member_count = member_count - 1 WHERE id = $1")
+            .bind(conversation.as_uuid())
+            .execute(&self.pool)
+            .await
+            .expect("count member");
+    }
+
+    /// Changes someone's workspace role directly in the database.
+    pub async fn set_role(&self, account: &Account, role: &str) {
+        sqlx::query(
+            "UPDATE workspace_members SET role = $1 WHERE workspace_id = $2 AND user_id = $3",
+        )
+        .bind(role)
+        .bind(self.workspace_id.as_uuid())
+        .bind(account.user.id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .expect("set role");
+    }
+
+    /// Sends an authenticated request with an optional JSON body.
+    pub async fn call(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        account: &Account,
+        body: Option<serde_json::Value>,
+    ) -> reqwest::Response {
+        let mut request = self
+            .http
+            .request(method, self.url(path))
+            .bearer_auth(&account.token);
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        request.send().await.expect("request")
+    }
+
+    /// Creates a channel and expects success.
+    pub async fn create_channel(
+        &self,
+        account: &Account,
+        name: &str,
+        visibility: &str,
+    ) -> lazy_protocol::Conversation {
+        let response = self
+            .create_channel_raw(account, name, visibility, OperationId::generate())
+            .await;
+        assert!(
+            response.status().is_success(),
+            "create {name}: {}",
+            response.status()
+        );
+        response
+            .json::<lazy_protocol::ConversationResponse>()
+            .await
+            .expect("json")
+            .conversation
+    }
+
+    pub async fn create_channel_raw(
+        &self,
+        account: &Account,
+        name: &str,
+        visibility: &str,
+        operation: OperationId,
+    ) -> reqwest::Response {
+        self.call(
+            reqwest::Method::POST,
+            &paths::channels(self.workspace_id),
+            account,
+            Some(serde_json::json!({
+                "operation_id": operation, "name": name, "visibility": visibility,
+                "topic": null, "description": null,
+            })),
+        )
+        .await
+    }
+
+    pub async fn open_raw(
+        &self,
+        account: &Account,
+        others: &[&Account],
+        operation: OperationId,
+    ) -> reqwest::Response {
+        let participants: Vec<_> = others.iter().map(|other| other.user.id).collect();
+        self.call(
+            reqwest::Method::POST,
+            &paths::open_conversation(self.workspace_id),
+            account,
+            Some(serde_json::json!({"operation_id": operation, "participants": participants})),
+        )
+        .await
+    }
+
+    /// Opens a direct or group conversation and expects success.
+    pub async fn open(
+        &self,
+        account: &Account,
+        others: &[&Account],
+    ) -> lazy_protocol::Conversation {
+        let response = self
+            .open_raw(account, others, OperationId::generate())
+            .await;
+        assert!(
+            response.status().is_success(),
+            "open: {}",
+            response.status()
+        );
+        response
+            .json::<lazy_protocol::ConversationResponse>()
+            .await
+            .expect("json")
+            .conversation
+    }
+
+    /// `POST /v1/conversations/{id}/{action}` with no body.
+    pub async fn act(
+        &self,
+        account: &Account,
+        conversation: ConversationId,
+        action: &str,
+    ) -> reqwest::Response {
+        self.call(
+            reqwest::Method::POST,
+            &paths::conversation_action(conversation, action),
+            account,
+            None,
+        )
+        .await
+    }
+
+    pub async fn add_members(
+        &self,
+        account: &Account,
+        conversation: ConversationId,
+        users: &[&Account],
+    ) -> reqwest::Response {
+        let ids: Vec<_> = users.iter().map(|user| user.user.id).collect();
+        self.call(
+            reqwest::Method::POST,
+            &paths::conversation_action(conversation, "members"),
+            account,
+            Some(serde_json::json!({"user_ids": ids})),
+        )
+        .await
+    }
+
+    pub async fn remove_member(
+        &self,
+        account: &Account,
+        conversation: ConversationId,
+        user: &Account,
+    ) -> reqwest::Response {
+        self.call(
+            reqwest::Method::DELETE,
+            &paths::member(conversation, user.user.id),
+            account,
+            None,
+        )
+        .await
+    }
+
+    pub async fn update(
+        &self,
+        account: &Account,
+        conversation: ConversationId,
+        body: serde_json::Value,
+    ) -> reqwest::Response {
+        self.call(
+            reqwest::Method::PATCH,
+            &paths::conversation(conversation),
+            account,
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn mark_read(
+        &self,
+        account: &Account,
+        conversation: ConversationId,
+        up_to: i64,
+    ) -> reqwest::Response {
+        self.call(
+            reqwest::Method::POST,
+            &paths::conversation_action(conversation, "read"),
+            account,
+            Some(serde_json::json!({"up_to": up_to})),
+        )
+        .await
+    }
+
+    pub async fn favorite(
+        &self,
+        account: &Account,
+        conversation: ConversationId,
+        favorite: bool,
+    ) -> reqwest::Response {
+        self.call(
+            reqwest::Method::PUT,
+            &paths::conversation_action(conversation, "favorite"),
+            account,
+            Some(serde_json::json!({"favorite": favorite})),
+        )
+        .await
+    }
+
+    /// The caller's conversations as bootstrap reports them.
+    pub async fn conversations_of(&self, account: &Account) -> Vec<lazy_protocol::Conversation> {
+        self.bootstrap_ok(account).await.workspaces[0]
+            .conversations
+            .clone()
+    }
+
+    /// The caller's state for one conversation as bootstrap reports it.
+    pub async fn state_of(
+        &self,
+        account: &Account,
+        conversation: ConversationId,
+    ) -> lazy_protocol::ConversationUserState {
+        self.bootstrap_ok(account).await.workspaces[0]
+            .user_state
+            .iter()
+            .find(|state| state.conversation_id == conversation)
+            .cloned()
+            .unwrap_or_else(|| panic!("no state for {conversation}"))
+    }
+
+    /// Number of members according to the table, for checking the maintained count.
+    pub async fn counted_members(&self, conversation: ConversationId) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM conversation_members WHERE conversation_id = $1")
+            .bind(conversation.as_uuid())
+            .fetch_one(&self.pool)
+            .await
+            .expect("count")
     }
 
     pub async fn connect_ws(&self, account: &Account) -> Ws {
@@ -447,6 +710,30 @@ impl Ws {
                 }
                 ServerFrame::CaughtUp { .. } => {}
                 other => panic!("unexpected frame: {other:?}"),
+            }
+        }
+    }
+
+    /// Reads events until the arrival of `marker` in the workspace (a person registered after the
+    /// actions under test), returning everything that came before it. Because events are delivered
+    /// in order, anything deliverable that was committed before the marker is in the result, so
+    /// this proves absence without sleeping.
+    pub async fn events_until_marker(
+        &mut self,
+        marker: UserId,
+    ) -> Vec<lazy_protocol::EventEnvelope> {
+        let mut events = Vec::new();
+        loop {
+            match self.next().await {
+                ServerFrame::Event(envelope) => {
+                    if matches!(&envelope.event, lazy_protocol::Event::MemberJoined { user } if user.id == marker)
+                    {
+                        return events;
+                    }
+                    events.push(envelope);
+                }
+                ServerFrame::CaughtUp { .. } => {}
+                other => panic!("unexpected frame while waiting for the marker: {other:?}"),
             }
         }
     }

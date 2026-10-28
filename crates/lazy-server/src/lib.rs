@@ -11,6 +11,7 @@ pub mod accounts;
 pub mod app;
 pub mod bootstrap;
 pub mod config;
+pub mod conversations;
 pub mod crypto;
 pub mod db;
 pub mod dispatcher;
@@ -20,6 +21,7 @@ pub mod http;
 pub mod messages;
 pub mod pruner;
 pub mod realtime;
+pub mod receipts;
 
 #[cfg(feature = "testing")]
 pub mod testing;

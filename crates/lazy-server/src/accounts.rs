@@ -6,10 +6,11 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::app::AppState;
+use crate::conversations;
 use crate::crypto;
 use crate::db;
 use crate::error::AppError;
-use crate::events;
+use crate::events::{self, Audience, PendingEvent};
 
 /// The authenticated caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,13 @@ pub async fn register(
     let Some(workspace_id) = default_workspace.map(WorkspaceId::from_uuid) else {
         return Err(AppError::forbidden("registration is closed"));
     };
+    // Registrations take turns. Only other registrations wait on this lock, and it is taken
+    // before any other, so it cannot take part in a deadlock; it makes "the first person to
+    // register owns the workspace" hold even when two arrive together.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(workspace_id.to_string())
+        .execute(&mut *tx)
+        .await?;
 
     let inserted = sqlx::query(
         "INSERT INTO users (id, username, display_name, password_hash) VALUES ($1, $2, $3, $4)",
@@ -60,8 +68,6 @@ pub async fn register(
         Err(error) => return Err(error.into()),
     }
 
-    // From here on the workspace row is locked until commit.
-    let (seq, now) = events::next_position(&mut tx, workspace_id).await?;
     sqlx::query(
         "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, \
          CASE WHEN EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = $1) \
@@ -71,34 +77,35 @@ pub async fn register(
     .bind(user_id.as_uuid())
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
-        "INSERT INTO conversation_members (conversation_id, user_id) \
-         SELECT id, $2 FROM conversations \
-         WHERE workspace_id = $1 AND visibility = 'public' AND NOT archived",
-    )
-    .bind(workspace_id.as_uuid())
-    .bind(user_id.as_uuid())
-    .execute(&mut *tx)
-    .await?;
+    // A new account joins the default channel only; other public channels are found by browsing.
+    let default_channel =
+        conversations::join_default_channel(&mut tx, workspace_id, user_id).await?;
 
     let user = User {
         id: user_id,
         username: request.username,
         display_name: request.display_name,
     };
-    events::insert_event(
-        &mut tx,
-        events::NewEvent {
-            workspace_id,
-            seq,
-            occurred_at: now,
-            kind: "member_joined",
-            conversation_id: None,
+    let mut announcements = vec![PendingEvent {
+        kind: "member_joined",
+        conversation_id: None,
+        operation_id: None,
+        audience: Audience::Workspace,
+        event: Event::MemberJoined { user: user.clone() },
+    }];
+    if let Some(conversation) = default_channel {
+        announcements.push(PendingEvent {
+            kind: "member_added",
+            conversation_id: Some(conversation.id),
             operation_id: None,
-            event: &Event::MemberJoined { user: user.clone() },
-        },
-    )
-    .await?;
+            audience: Audience::Members,
+            event: Event::MemberAdded {
+                conversation,
+                user_id,
+            },
+        });
+    }
+    events::append_all(&mut tx, workspace_id, announcements).await?;
     let token = insert_session(&mut tx, user_id).await?;
     tx.commit().await?;
 
