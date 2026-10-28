@@ -1,0 +1,22 @@
+[package]
+name = "lazy-e2e"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "End-to-end tests: real clients (core and runtime) against a real server and Postgres."
+
+[dev-dependencies]
+lazy-client-core.workspace = true
+lazy-client-runtime.workspace = true
+lazy-desktop = { path = "../lazy-desktop" }
+lazy-domain.workspace = true
+lazy-ui.workspace = true
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+gpui_wgpu.workspace = true
+lazy-protocol.workspace = true
+lazy-server = { path = "../lazy-server", features = ["testing"] }
+sqlx.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "time", "sync", "macros", "rt-multi-thread"] }

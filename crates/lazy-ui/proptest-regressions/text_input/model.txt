@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc db7a5f0e700684662edde5a9e78944945db04a5d3ef04b785dbc9b8517aa4d8a # shrinks to ops = [Commit("\n"), Replace(1, 1, "word\n"), Mark("👨\u{200d}👩🇨", None), Replace(0, 9, "🇨"), Delete(Forward, Grapheme)]

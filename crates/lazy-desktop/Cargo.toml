@@ -1,0 +1,23 @@
+[package]
+name = "lazy-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "lazy_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lazy-desktop"
+path = "src/main.rs"
+
+[dependencies]
+gpui.workspace = true
+gpui_platform.workspace = true
+lazy-client-core.workspace = true
+lazy-client-runtime.workspace = true
+lazy-ui.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

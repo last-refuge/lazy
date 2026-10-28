@@ -1,0 +1,22 @@
+[package]
+name = "lazy-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+lazy-client-core.workspace = true
+lazy-domain.workspace = true
+lazy-protocol.workspace = true
+unicode-segmentation.workspace = true
+tracing.workspace = true
+jiff.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+gpui_wgpu.workspace = true
+proptest.workspace = true
+time.workspace = true

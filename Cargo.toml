@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[workspace.dependencies]
+# Internal crates.
+lazy-domain = { path = "crates/lazy-domain" }
+lazy-protocol = { path = "crates/lazy-protocol" }
+lazy-client-core = { path = "crates/lazy-client-core" }
+lazy-client-runtime = { path = "crates/lazy-client-runtime" }
+lazy-ui = { path = "crates/lazy-ui" }
+
+# GPUI is pinned to one full Zed revision; `gpui` and `gpui_platform` must stay on the same one.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "e5bdd01cd819d6348ae764e69218adfee3d7edab" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "e5bdd01cd819d6348ae764e69218adfee3d7edab", features = ["wayland", "x11"] }
+gpui_wgpu = { git = "https://github.com/zed-industries/zed", rev = "e5bdd01cd819d6348ae764e69218adfee3d7edab" }
+
+# Shared.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+time = { version = "0.3", features = ["serde-well-known", "macros"] }
+thiserror = "2"
+tracing = "0.1"
+proptest = "1"
+unicode-segmentation = "1"
+jiff = "0.2"
+
+# Server.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.7", features = ["trace"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "time", "json", "migrate", "macros"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+argon2 = "0.6"
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+sha2 = "0.11"
+getrandom = "0.4"
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# Client runtime.
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+chacha20poly1305 = "0.11"
+keyring = "4"
+directories = "6"
+
+# Client runtime.
+async-channel = "2"
+tempfile = "3"

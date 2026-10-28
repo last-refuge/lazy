@@ -1,0 +1,681 @@
+//! The client's persistent local state: the submission journal, drafts, and the content cache.
+//!
+//! Each kind lives in its own encrypted file (see [`crate::files`]). The journal is the one that
+//! matters: an entry is written durably before its message is sent and removed only once the
+//! outcome is settled, so an interrupted send can be reconciled after a restart. The content
+//! cache is disposable but must be internally consistent: its cursor and messages are one value
+//! in one file, replaced atomically, so a crash leaves either the old cache or the new one,
+//! never a cursor from one and messages from the other.
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
+
+use lazy_client_core::{ContentCache, JournalEntry};
+use lazy_domain::{ConversationId, OperationId};
+use serde::{Deserialize, Serialize};
+
+use crate::files::{FileError, FileKind, FileStore, Loaded, WriteStep};
+
+/// Most unsettled submissions kept. More are refused so the file stays bounded.
+pub(crate) const MAX_JOURNAL_ENTRIES: usize = 256;
+/// Most drafts kept.
+pub(crate) const MAX_DRAFTS: usize = 200;
+/// Longest saved draft, in bytes.
+pub(crate) const MAX_DRAFT_BYTES: usize = 64 * 1024;
+
+#[derive(Serialize, Deserialize)]
+struct JournalFile {
+    entries: Vec<JournalEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DraftsFile {
+    drafts: Vec<(ConversationId, String)>,
+}
+
+/// Why a state write failed.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum StoreError {
+    #[error("the {0} was written by a newer version of Lazy, so it can't be changed")]
+    Locked(&'static str),
+    #[error("too many unsent messages are waiting to be confirmed")]
+    JournalFull,
+    #[error(transparent)]
+    File(#[from] FileError),
+}
+
+/// What was found on disk.
+#[derive(Debug, Default)]
+pub(crate) struct Recovered {
+    pub(crate) journal: Vec<JournalEntry>,
+    pub(crate) drafts: HashMap<ConversationId, String>,
+    /// The saved content cache, normalized and bounded, if one could be read.
+    pub(crate) cache: Option<ContentCache>,
+    pub(crate) problems: Vec<String>,
+}
+
+pub(crate) struct StateStore {
+    files: FileStore,
+    journal: Vec<JournalEntry>,
+    drafts: BTreeMap<ConversationId, String>,
+    /// Kinds that must not be written because the file on disk cannot be safely replaced.
+    locked: Vec<FileKind>,
+}
+
+impl StateStore {
+    /// Loads whatever state exists in `dir`.
+    pub(crate) fn open(dir: PathBuf, key: &[u8; 32]) -> (Self, Recovered) {
+        let files = FileStore::new(dir, key);
+        let mut recovered = Recovered::default();
+        let mut locked = Vec::new();
+
+        let mut note = |kind: FileKind, message: String, lock: bool, problems: &mut Vec<String>| {
+            problems.push(message);
+            if lock {
+                locked.push(kind);
+            }
+        };
+
+        let mut journal = Vec::new();
+        match files.load::<JournalFile>(FileKind::Journal) {
+            Loaded::Value(file) => journal = file.entries,
+            Loaded::Missing => {}
+            Loaded::Corrupt(message) => {
+                let message = format!(
+                    "{message} Messages that were still being sent may need to be sent again."
+                );
+                note(FileKind::Journal, message, false, &mut recovered.problems)
+            }
+            Loaded::NewerFormat(found) => note(
+                FileKind::Journal,
+                format!(
+                    "The unsent-message journal was written by a newer version of Lazy (format {found}); sending is disabled."
+                ),
+                true,
+                &mut recovered.problems,
+            ),
+            Loaded::Unreadable(message) => {
+                note(FileKind::Journal, message, true, &mut recovered.problems)
+            }
+        }
+        journal.truncate(MAX_JOURNAL_ENTRIES);
+
+        let mut drafts = BTreeMap::new();
+        match files.load::<DraftsFile>(FileKind::Drafts) {
+            Loaded::Value(file) => drafts.extend(file.drafts.into_iter().take(MAX_DRAFTS)),
+            Loaded::Missing => {}
+            Loaded::Corrupt(message) | Loaded::Unreadable(message) => {
+                note(FileKind::Drafts, message, false, &mut recovered.problems)
+            }
+            Loaded::NewerFormat(found) => note(
+                FileKind::Drafts,
+                format!(
+                    "Drafts were saved by a newer version of Lazy (format {found}) and won't be loaded."
+                ),
+                true,
+                &mut recovered.problems,
+            ),
+        }
+
+        // The cache is disposable: if it cannot be read the client behaves as on a first run.
+        // A cache written by a newer version is left untouched and never overwritten.
+        match files.load::<ContentCache>(FileKind::Cache) {
+            Loaded::Value(cache) => recovered.cache = Some(cache.bounded()),
+            Loaded::Missing => {}
+            Loaded::Corrupt(message) => {
+                let message = format!("{message} Saved messages will be downloaded again.");
+                note(FileKind::Cache, message, false, &mut recovered.problems)
+            }
+            Loaded::Unreadable(message) => {
+                note(FileKind::Cache, message, false, &mut recovered.problems)
+            }
+            Loaded::NewerFormat(found) => note(
+                FileKind::Cache,
+                format!(
+                    "The saved message cache was written by a newer version of Lazy (format {found}) and is not used."
+                ),
+                true,
+                &mut recovered.problems,
+            ),
+        }
+
+        recovered.journal = journal.clone();
+        recovered.drafts = drafts.iter().map(|(k, v)| (*k, v.clone())).collect();
+        (
+            Self {
+                files,
+                journal,
+                drafts,
+                locked,
+            },
+            recovered,
+        )
+    }
+
+    fn check_writable(&self, kind: FileKind) -> Result<(), StoreError> {
+        if self.locked.contains(&kind) {
+            Err(StoreError::Locked(kind.describe()))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Durably records a submission. Returns only after the data is flushed to disk. Recording
+    /// the same operation again is a no-op.
+    pub(crate) fn add_journal(&mut self, entry: JournalEntry) -> Result<(), StoreError> {
+        self.check_writable(FileKind::Journal)?;
+        if self
+            .journal
+            .iter()
+            .any(|e| e.operation_id == entry.operation_id)
+        {
+            return Ok(());
+        }
+        if self.journal.len() >= MAX_JOURNAL_ENTRIES {
+            return Err(StoreError::JournalFull);
+        }
+        self.journal.push(entry);
+        if let Err(error) = self.write_journal() {
+            self.journal.pop();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Removes a settled submission.
+    pub(crate) fn settle(&mut self, operation: OperationId) -> Result<(), StoreError> {
+        self.check_writable(FileKind::Journal)?;
+        let Some(index) = self
+            .journal
+            .iter()
+            .position(|e| e.operation_id == operation)
+        else {
+            return Ok(());
+        };
+        let removed = self.journal.remove(index);
+        if let Err(error) = self.write_journal() {
+            self.journal.insert(index, removed);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn write_journal(&self) -> Result<(), StoreError> {
+        let file = JournalFile {
+            entries: self.journal.clone(),
+        };
+        Ok(self.files.save(FileKind::Journal, &file)?)
+    }
+
+    /// Replaces all saved drafts. Oversized drafts are shortened and extra drafts dropped, since
+    /// drafts are a convenience and the file must stay bounded.
+    pub(crate) fn save_drafts(
+        &mut self,
+        drafts: &[(ConversationId, String)],
+    ) -> Result<(), StoreError> {
+        self.check_writable(FileKind::Drafts)?;
+        self.drafts = drafts
+            .iter()
+            .take(MAX_DRAFTS)
+            .map(|(id, text)| (*id, truncate_to(text, MAX_DRAFT_BYTES).to_owned()))
+            .collect();
+        let file = DraftsFile {
+            drafts: self.drafts.iter().map(|(k, v)| (*k, v.clone())).collect(),
+        };
+        Ok(self.files.save(FileKind::Drafts, &file)?)
+    }
+
+    /// Replaces the saved content cache in one atomic write. If the sealed file would exceed the
+    /// size limit, whole conversation timelines are evicted, least recently active first, until
+    /// it fits; dropping a timeline never makes the cache inconsistent. A directory so large
+    /// that nothing fits leaves no cache at all.
+    pub(crate) fn save_cache(&mut self, cache: ContentCache) -> Result<(), StoreError> {
+        self.save_cache_with_hook(cache, &mut |_| Ok(()))
+    }
+
+    pub(crate) fn save_cache_with_hook(
+        &mut self,
+        cache: ContentCache,
+        hook: &mut dyn FnMut(WriteStep) -> std::io::Result<()>,
+    ) -> Result<(), StoreError> {
+        self.check_writable(FileKind::Cache)?;
+        let mut cache = cache.bounded();
+        loop {
+            match self.files.save_with_hook(FileKind::Cache, &cache, hook) {
+                Ok(()) => return Ok(()),
+                Err(FileError::TooLarge { .. }) => {
+                    if !cache.shrink() {
+                        self.files.remove_current(FileKind::Cache);
+                        return Ok(());
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    /// Deletes the saved content cache.
+    pub(crate) fn discard_cache(&mut self) {
+        if !self.locked.contains(&FileKind::Cache) {
+            self.files.remove_current(FileKind::Cache);
+        }
+    }
+
+    /// Deletes all local state, including temporary and quarantined files.
+    pub(crate) fn wipe(&mut self) {
+        for kind in FileKind::ALL {
+            self.files.remove_all(kind);
+        }
+        // Position files written by earlier versions.
+        self.files.remove_legacy("cursors.enc");
+        self.journal.clear();
+        self.drafts.clear();
+        self.locked.clear();
+    }
+}
+
+fn truncate_to(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use lazy_domain::{EventSeq, MessageDocument, Timestamp, UserId};
+
+    use super::*;
+
+    fn entry(text: &str) -> JournalEntry {
+        JournalEntry {
+            operation_id: OperationId::generate(),
+            user_id: UserId::generate(),
+            conversation_id: ConversationId::generate(),
+            document: MessageDocument::from_plain_text(text).unwrap(),
+            submitted_at: Timestamp::now(),
+        }
+    }
+
+    const KEY: [u8; 32] = [3; 32];
+
+    #[test]
+    fn the_journal_survives_a_restart_until_settled() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = entry("one");
+        let second = entry("two");
+        {
+            let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+            assert!(recovered.journal.is_empty());
+            store.add_journal(first.clone()).unwrap();
+            store.add_journal(second.clone()).unwrap();
+            store.add_journal(second.clone()).unwrap();
+            store.settle(first.operation_id).unwrap();
+        }
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(recovered.journal, vec![second]);
+        assert!(recovered.problems.is_empty());
+    }
+
+    #[test]
+    fn the_journal_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        for _ in 0..MAX_JOURNAL_ENTRIES {
+            store.add_journal(entry("x")).unwrap();
+        }
+        assert!(matches!(
+            store.add_journal(entry("overflow")),
+            Err(StoreError::JournalFull)
+        ));
+    }
+
+    #[test]
+    fn a_failed_write_does_not_pretend_the_entry_was_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let kept = entry("kept");
+        store.add_journal(kept.clone()).unwrap();
+
+        // Make the directory unwritable by replacing it with a file path.
+        let missing = dir.path().join("gone");
+        let (mut broken, _) = StateStore::open(missing, &KEY);
+        assert!(broken.add_journal(entry("lost")).is_err());
+        assert!(
+            broken.journal.is_empty(),
+            "memory matches disk after a failed write"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_journal_is_reported_and_not_silently_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+            store.add_journal(entry("x")).unwrap();
+        }
+        let path = dir.path().join("journal.enc");
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &bytes[..10]).unwrap();
+
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(recovered.journal.is_empty());
+        assert_eq!(recovered.problems.len(), 1);
+        assert!(recovered.problems[0].contains("set aside"));
+        assert!(dir.path().read_dir().unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("journal.enc.corrupt-")
+        }));
+        store.add_journal(entry("works again")).unwrap();
+    }
+
+    #[test]
+    fn a_journal_from_a_newer_version_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+            store.add_journal(entry("x")).unwrap();
+        }
+        let path = dir.path().join("journal.enc");
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[4..6].copy_from_slice(&99u16.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(recovered.problems.len(), 1);
+        assert!(matches!(
+            store.add_journal(entry("y")),
+            Err(StoreError::Locked(_))
+        ));
+        assert!(matches!(
+            store.settle(OperationId::generate()),
+            Err(StoreError::Locked(_))
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn drafts_round_trip_with_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = ConversationId::generate();
+        {
+            let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+            let long = "é".repeat(MAX_DRAFT_BYTES);
+            store.save_drafts(&[(conversation, long)]).unwrap();
+        }
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        let draft = &recovered.drafts[&conversation];
+        assert!(draft.len() <= MAX_DRAFT_BYTES);
+        assert!(
+            draft.chars().all(|c| c == 'é'),
+            "truncation respects characters"
+        );
+    }
+
+    // ----- Content cache -----
+
+    fn cache_of(timelines: usize, messages: usize, text_bytes: usize, cursor: i64) -> ContentCache {
+        use lazy_client_core::{CachedTimeline, CachedWorkspace};
+        use lazy_domain::{
+            ChannelName, ChannelVisibility, DisplayName, MessageDocument, MessageId, UserId,
+            Username, WorkspaceId, WorkspaceRole,
+        };
+        use lazy_protocol::{Conversation, Message, User, Workspace};
+        let me = User {
+            id: UserId::generate(),
+            username: Username::parse("cacher").unwrap(),
+            display_name: DisplayName::parse("Cacher").unwrap(),
+        };
+        let workspace = Workspace {
+            id: WorkspaceId::generate(),
+            name: "W".into(),
+        };
+        let mut conversations = Vec::new();
+        let mut cached = Vec::new();
+        for index in 0..timelines {
+            let conversation = Conversation {
+                id: ConversationId::generate(),
+                workspace_id: workspace.id,
+                name: ChannelName::parse(&format!("channel-{index}")).unwrap(),
+                topic: None,
+                visibility: ChannelVisibility::Public,
+                archived: false,
+            };
+            let text = "x".repeat(text_bytes);
+            cached.push(CachedTimeline {
+                conversation: conversation.id,
+                // Later conversations are more recently active.
+                messages: (0..messages)
+                    .map(|m| Message {
+                        id: MessageId::generate(),
+                        conversation_id: conversation.id,
+                        author_id: me.id,
+                        document: MessageDocument::from_plain_text(&text).unwrap(),
+                        created_at: Timestamp::now(),
+                        revision: 1,
+                        seq: EventSeq::new((index * 1000 + m + 1) as i64).unwrap(),
+                    })
+                    .collect(),
+                has_more: false,
+            });
+            conversations.push(conversation);
+        }
+        ContentCache {
+            user: me.clone(),
+            workspaces: vec![CachedWorkspace {
+                workspace,
+                role: WorkspaceRole::Member,
+                conversations,
+                members: vec![me],
+                cursor: EventSeq::new(cursor).unwrap(),
+                timelines: cached,
+            }],
+        }
+    }
+
+    #[test]
+    fn the_cache_round_trips_with_its_cursor_in_one_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = cache_of(2, 5, 20, 77);
+        {
+            let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+            assert!(recovered.cache.is_none());
+            store.save_cache(cache.clone()).unwrap();
+        }
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(recovered.cache, Some(cache));
+        assert!(recovered.problems.is_empty());
+    }
+
+    #[test]
+    fn a_crash_during_a_cache_write_leaves_the_old_cache_whole_never_a_mixture() {
+        let old = cache_of(1, 3, 10, 10);
+        let new = cache_of(1, 6, 10, 20);
+        for (crash_after, expect_new) in [
+            (WriteStep::TempWritten, false),
+            (WriteStep::TempSynced, false),
+            (WriteStep::Renamed, true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+            store.save_cache(old.clone()).unwrap();
+            let result = store.save_cache_with_hook(new.clone(), &mut |step| {
+                if step == crash_after {
+                    Err(std::io::Error::other("simulated crash"))
+                } else {
+                    Ok(())
+                }
+            });
+            assert!(result.is_err());
+
+            let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+            let found = recovered.cache.expect("a cache survives the crash");
+            // Whatever survived is exactly one of the two writes: the cursor and the messages
+            // always come from the same one.
+            assert_eq!(
+                found,
+                if expect_new { new.clone() } else { old.clone() },
+                "{crash_after:?}"
+            );
+            assert!(recovered.problems.is_empty());
+        }
+    }
+
+    #[test]
+    fn an_oversized_cache_evicts_whole_timelines_least_recent_first_until_it_fits() {
+        let dir = tempfile::tempdir().unwrap();
+        // About 4 x 100 x 20 KB = 8 MB of text, far over the 4 MiB limit.
+        let cache = cache_of(4, 100, 20_000, 5000);
+        let most_recent = cache.workspaces[0].timelines[3].conversation;
+        let least_recent = cache.workspaces[0].timelines[0].conversation;
+        {
+            let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+            store.save_cache(cache).unwrap();
+        }
+        let size = std::fs::metadata(dir.path().join("cache.enc"))
+            .unwrap()
+            .len();
+        assert!(size <= lazy_client_core::MAX_CACHE_BYTES, "{size} bytes");
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        let kept = recovered.cache.expect("the cache fits after eviction");
+        let ids: Vec<_> = kept.workspaces[0]
+            .timelines
+            .iter()
+            .map(|t| t.conversation)
+            .collect();
+        assert!(!ids.is_empty() && ids.len() < 4);
+        assert!(
+            ids.contains(&most_recent),
+            "the most recently active timeline is kept"
+        );
+        assert!(
+            !ids.contains(&least_recent),
+            "the least recently active is evicted first"
+        );
+        assert_eq!(
+            kept.workspaces[0].cursor.get(),
+            5000,
+            "the cursor is unchanged by eviction"
+        );
+        assert_eq!(
+            kept.workspaces[0].conversations.len(),
+            4,
+            "the directory is untouched"
+        );
+    }
+
+    #[test]
+    fn counts_are_bounded_when_loading_a_file_that_exceeds_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        // Written behind the store's back, as an older or hand-edited file might be.
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+
+        let too_many_conversations = cache_of(60, 3, 5, 9);
+        files
+            .save(FileKind::Cache, &too_many_conversations)
+            .unwrap();
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(
+            recovered.cache.unwrap().timeline_count(),
+            lazy_client_core::MAX_CACHED_CONVERSATIONS
+        );
+
+        let too_many_messages = cache_of(2, lazy_client_core::MAX_CACHED_MESSAGES + 20, 5, 9);
+        files.save(FileKind::Cache, &too_many_messages).unwrap();
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        let loaded = recovered.cache.unwrap();
+        assert!(
+            loaded.workspaces[0].timelines.iter().all(|t| {
+                t.messages.len() == lazy_client_core::MAX_CACHED_MESSAGES && t.has_more
+            })
+        );
+    }
+
+    #[test]
+    fn a_corrupt_cache_is_set_aside_reported_and_discarded() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+            store.save_cache(cache_of(1, 3, 10, 5)).unwrap();
+        }
+        let path = dir.path().join("cache.enc");
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
+
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "the app falls back to a first run"
+        );
+        assert_eq!(recovered.problems.len(), 1);
+        assert!(recovered.problems[0].contains("set aside"));
+        assert!(dir.path().read_dir().unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("cache.enc.corrupt-")
+        }));
+        store.save_cache(cache_of(1, 1, 5, 6)).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(again.cache.is_some() && again.problems.is_empty());
+    }
+
+    #[test]
+    fn a_cache_from_a_newer_version_is_neither_used_nor_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+            store.save_cache(cache_of(1, 2, 5, 3)).unwrap();
+        }
+        let path = dir.path().join("cache.enc");
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[4..6].copy_from_slice(&99u16.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(recovered.cache.is_none());
+        assert_eq!(recovered.problems.len(), 1);
+        assert!(matches!(
+            store.save_cache(cache_of(1, 1, 5, 4)),
+            Err(StoreError::Locked(_))
+        ));
+        store.discard_cache();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "left untouched");
+    }
+
+    #[test]
+    fn discarding_removes_only_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        store.save_cache(cache_of(1, 1, 5, 1)).unwrap();
+        store.add_journal(entry("keep me")).unwrap();
+        store.discard_cache();
+        assert!(!dir.path().join("cache.enc").exists());
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(recovered.journal.len(), 1);
+        assert!(recovered.cache.is_none());
+    }
+
+    #[test]
+    fn wipe_removes_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        store.add_journal(entry("x")).unwrap();
+        store
+            .save_drafts(&[(ConversationId::generate(), "d".into())])
+            .unwrap();
+        store.save_cache(cache_of(1, 1, 5, 1)).unwrap();
+        std::fs::write(dir.path().join("cursors.enc"), b"legacy").unwrap();
+        store.wipe();
+        assert_eq!(dir.path().read_dir().unwrap().count(), 0);
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(recovered.journal.is_empty() && recovered.drafts.is_empty());
+    }
+}

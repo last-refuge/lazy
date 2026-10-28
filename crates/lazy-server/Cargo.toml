@@ -1,0 +1,45 @@
+[package]
+name = "lazy-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "lazy_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lazy-server"
+path = "src/main.rs"
+
+[features]
+# Test helpers (`lazy_server::testing`) for in-process end-to-end tests, including from other crates.
+testing = []
+
+[dependencies]
+lazy-domain.workspace = true
+lazy-protocol.workspace = true
+argon2.workspace = true
+axum.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tower-http = { workspace = true, features = ["timeout"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# Integration tests use the in-process test server.
+lazy-server = { path = ".", features = ["testing"] }
+reqwest.workspace = true
+tokio-tungstenite.workspace = true

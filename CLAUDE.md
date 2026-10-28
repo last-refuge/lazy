@@ -1,0 +1,29 @@
+# Lazy: repository instructions
+
+A Rust and GPUI Slack-style chat app: Axum and Postgres server, shared client core, GPUI desktop client. Plan and decisions are in `llm-docs/` (`PLAN.md`, `IMPLEMENTATION_PLAN.md`, `DECISIONS.md`, `SERVER.md`, `CLIENT.md`, `VERIFICATION.md`); run instructions are in `README.md`.
+
+## Commands
+
+```sh
+scripts/dev-db.sh start                      # project-local Postgres on 127.0.0.1:54329; needed by server and e2e tests
+cargo fmt --all --check
+cargo clippy --workspace --all-targets
+cargo test --workspace
+scripts/check-core-deps.sh                   # shared crates must not depend on UI, async runtime, HTTP, or SQL crates
+scripts/run-server.sh                        # server on 127.0.0.1:8080
+scripts/run-client.sh alice                  # desktop client with its own disposable profile
+```
+
+## Rules
+
+- **Plan bookkeeping.** When a task or subtask in `llm-docs/IMPLEMENTATION_PLAN.md` is finished and verified, change its `[ ]` to `[X]`. Mark a parent only when every child is done. Record outcomes as measured, observed, failed, or unverified in `llm-docs/VERIFICATION.md`; a clean compile or unit test does not establish IME, screen reader, scaling, or long-session behavior.
+- **Crate boundaries.** `lazy-domain`, `lazy-protocol`, and `lazy-client-core` stay free of GPUI, Tokio, HTTP, SQL, and keyring dependencies (phone clients reuse them). `lazy-ui` reaches the runtime only through the `EffectSink` trait. Nothing in `render` performs I/O.
+- **Wire contract.** `lazy-protocol` is the only definition of what crosses the network. Change it deliberately and bump `PROTOCOL_VERSION` for incompatible changes.
+- **Mutations.** A client generates an operation id per user action and journals it before sending. An unknown outcome is reconciled by asking the server; never create a fresh operation for it. Acknowledge only after commit.
+- **Ordering.** Event positions are assigned under the workspace row lock (see `DECISIONS.md` D3). Never order by timestamp or a raw sequence.
+- **SQL.** Use runtime-checked SQLx queries, not the `query!` macros, so builds need no database. Dynamic SQL needs `sqlx::AssertSqlSafe` and a reason.
+- **GPUI.** `gpui` and `gpui_platform` stay on one pinned Zed revision (root `Cargo.toml`). Read the pinned source in `~/.cargo/git/checkouts/zed-*` before relying on an API. Scroll callbacks run while list state is borrowed: defer anything that splices it.
+- **Tests.** Wait on events or conditions with bounded deadlines, not sleeps. End-to-end tests live in `crates/lazy-e2e`; start a client with its own profile directory and a `MemoryStorage`.
+- **Looking at the UI.** Render it offscreen with `cargo run -p lazy-ui --example screens -- .dev/screens` (GPUI's headless wgpu renderer: no window, no display) and read the PNGs. `crates/lazy-e2e/tests/gui.rs` drives two real clients headlessly and can save their windows with `LAZY_SCREENSHOT_DIR`. Label interactive elements with `.debug_selector(..)` so tests can find and click them; it costs nothing outside tests.
+- **Native automation.** Launch only your own test windows with disposable profiles and stop them by PID. Never capture the screen by region, and do not send input to windows you did not verify you own.
+- Do not commit unless asked.
