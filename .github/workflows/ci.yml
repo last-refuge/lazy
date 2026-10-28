@@ -1,9 +1,9 @@
 name: ci
 
+# Manual only, by choice: the full suite is slow, so it does not run on every push or pull
+# request. Run it from the Actions tab (ci, Run workflow) or with `gh workflow run ci`.
 on:
-  push:
-    branches: [main, master]
-  pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
