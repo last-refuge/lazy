@@ -26,6 +26,7 @@ use lazy_protocol::{
     Workspace, WorkspaceBootstrap,
 };
 use lazy_ui::app_model::{AppModel, EffectSink};
+use lazy_ui::commands::{AppSnapshot, CommandId, availability};
 use lazy_ui::root_view::RootView;
 use lazy_ui::shell::ShellDialog;
 
@@ -217,9 +218,22 @@ impl World {
         cx.run_until_parked();
     }
 
-    /// Opens the dialog the way a person does: from the sidebar.
+    /// Opens the dialog the way a person does: Menu, Workspace, User groups.
     fn open_dialog(&self, cx: &mut VisualTestContext) {
-        self.click(cx, "sidebar-user-groups");
+        self.click(cx, "sidebar-menu");
+        self.click(cx, "command-menu-tab-Workspace");
+        self.click(cx, "command-menu-UserGroups");
+        assert!(self.on_screen(cx, "groups-list"), "the list dialog is open");
+    }
+
+    /// Opens the dialog where the keyboard is, without going through the Menu (which would take
+    /// the keyboard and give it back to its own button first).
+    fn open_in_place(&self, cx: &mut VisualTestContext) {
+        self.root.update_in(cx, |root, window, cx| {
+            root.shell().unwrap().update(cx, |shell, cx| {
+                shell.open_dialog(ShellDialog::Groups, window, cx)
+            });
+        });
         assert!(self.on_screen(cx, "groups-list"), "the list dialog is open");
     }
 
@@ -250,6 +264,8 @@ impl World {
         );
     }
 
+    /// A control in the sidebar to give the keyboard to before opening the dialog: the person's
+    /// own row. The dialog hands the keyboard back to whatever had it.
     fn groups_focus(&self, cx: &mut VisualTestContext) -> gpui::FocusHandle {
         self.root.read_with(cx, |root, cx| {
             root.shell()
@@ -257,7 +273,7 @@ impl World {
                 .read(cx)
                 .sidebar()
                 .read(cx)
-                .groups_focus()
+                .prefs_focus()
         })
     }
 
@@ -275,7 +291,7 @@ impl World {
 // ---- The entry point --------------------------------------------------------------------------------
 
 #[gpui::test]
-fn only_admins_and_owners_get_the_entry(cx: &mut TestAppContext) {
+fn only_admins_and_owners_can_run_the_command(cx: &mut TestAppContext) {
     for (role, expected) in [
         (WorkspaceRole::Member, false),
         (WorkspaceRole::Admin, true),
@@ -283,10 +299,17 @@ fn only_admins_and_owners_get_the_entry(cx: &mut TestAppContext) {
     ] {
         let (world, cx) = start(cx);
         world.reach_as(cx, role);
+        let snapshot = world
+            .model
+            .read_with(cx, |model, _| AppSnapshot::from_core(model.core()));
         assert_eq!(
-            world.on_screen(cx, "sidebar-user-groups"),
+            availability(CommandId::UserGroups, &snapshot).is_enabled(),
             expected,
             "{role:?}"
+        );
+        assert!(
+            !world.on_screen(cx, "sidebar-user-groups"),
+            "the sidebar has no link: the command is in the Menu"
         );
     }
 }
@@ -674,10 +697,9 @@ fn escape_steps_back_one_view_at_a_time_and_focus_returns_to_the_entry(cx: &mut 
     let (world, cx) = start(cx);
     world.admin(cx);
     let entry = world.groups_focus(cx);
-    // Open from the keyboard: focus the sidebar entry and press Enter.
+    // Open with the keyboard on a sidebar control: the dialog takes it and gives it back.
     cx.update(|window, cx| window.focus(&entry, cx));
-    cx.simulate_keystrokes("enter");
-    assert!(world.on_screen(cx, "groups-list"), "Enter opens the dialog");
+    world.open_in_place(cx);
     assert!(
         !cx.update(|window, _| entry.is_focused(window)),
         "focus moved into the dialog"

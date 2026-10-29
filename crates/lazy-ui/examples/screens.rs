@@ -8352,7 +8352,7 @@ fn main() {
             },
         },
         Scene {
-            name: "3f-20-sidebar-admin-narrow-light",
+            name: "3f-20-sidebar-narrow-light",
             width: 640.0,
             height: 480.0,
             appearance: WindowAppearance::Light,
@@ -8361,7 +8361,7 @@ fn main() {
             },
         },
         Scene {
-            name: "3f-21-sidebar-admin-narrow-dark",
+            name: "3f-21-sidebar-narrow-dark",
             width: 640.0,
             height: 480.0,
             appearance: WindowAppearance::Dark,

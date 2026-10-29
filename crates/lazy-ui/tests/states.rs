@@ -300,6 +300,13 @@ impl World {
         cx.run_until_parked();
     }
 
+    /// Opens the custom emoji dialog the way a person does: Menu, Workspace, Custom emoji.
+    fn open_emoji_admin(&self, cx: &mut VisualTestContext) {
+        self.click(cx, "sidebar-menu");
+        self.click(cx, "command-menu-tab-Workspace");
+        self.click(cx, "command-menu-CustomEmoji");
+    }
+
     fn history_requests(&self) -> Vec<(Option<EventSeq>, u64)> {
         self.take_effects()
             .into_iter()
@@ -670,7 +677,7 @@ fn the_pickers_empty_custom_section_says_so_and_only_an_admin_is_offered_to_add(
 fn an_empty_admin_dialog_says_what_it_is_for_and_the_keyboard_is_on_add(cx: &mut TestAppContext) {
     let (world, cx) = start(cx);
     world.reach_as(cx, WorkspaceRole::Owner);
-    world.click(cx, "sidebar-custom-emoji");
+    world.open_emoji_admin(cx);
     assert!(world.on_screen(cx, "emoji-admin-empty"));
     assert!(world.on_screen(cx, "emoji-admin-add"));
     cx.simulate_keystrokes("enter");
@@ -688,7 +695,7 @@ fn a_picture_that_cannot_be_fetched_is_marked_in_the_admin_list_and_the_row_stil
     world.emoji.borrow_mut().push(world.live_emoji("shipit"));
     let id = world.emoji.borrow()[0].id;
     world.reach_as(cx, WorkspaceRole::Admin);
-    world.click(cx, "sidebar-custom-emoji");
+    world.open_emoji_admin(cx);
     assert!(
         world.on_screen(cx, "emoji-picture-loading"),
         "a quiet square while it loads"
@@ -717,7 +724,7 @@ fn a_failed_add_says_why_in_place_and_the_button_reads_try_again(cx: &mut TestAp
     use lazy_client_core::{ActionKind, ActionState};
     let (world, cx) = start(cx);
     world.reach_as(cx, WorkspaceRole::Admin);
-    world.click(cx, "sidebar-custom-emoji");
+    world.open_emoji_admin(cx);
     world.click(cx, "emoji-admin-add");
     let dir = std::env::temp_dir().join(format!("lazy-ui-states-{}", UserId::generate()));
     std::fs::create_dir_all(&dir).unwrap();

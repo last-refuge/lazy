@@ -17,7 +17,7 @@ guide: please report it.
   On the client's sign-in screen, choose that address under **Server** (it is remembered).
 - **An account.** The person who set up the server creates the owner account first, with the server's
   setup code typed into the **Invitation or setup code** field. Everyone else joins with an
-  **invitation code**: the owner opens **Invite people…** at the bottom of the sidebar, creates an
+  **invitation code**: the owner opens **Invite people…** under **Menu**, **Workspace**, creates an
   invitation (an hour to 30 days, one use or many), and sends the code, which is shown once.
 
 For development instead (everything on one machine, no installers): `scripts/run-server.sh` and

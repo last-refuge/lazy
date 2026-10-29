@@ -21,17 +21,17 @@ use crate::states;
 use crate::theme::{Theme, avatar_color};
 use crate::tooltip::TextTooltip;
 
-/// Below this window width the sidebar is in its compact layout (the shell narrows it too).
+/// Below this window width the sidebar is in its compact layout (the shell narrows it too): the
+/// app's symbol at the top gives way to the workspace's name.
 const COMPACT_BELOW: f32 = 760.0;
 
 /// One of the two finders at the top: what it is called, its key, and what it does.
 struct Finder {
     selector: &'static str,
-    hint_selector: &'static str,
     aria: &'static str,
-    label: &'static str,
-    /// The name in the compact layout, where the key is left out.
+    /// The name on the button.
     short: &'static str,
+    /// The key: in the tooltip and the accessible name, not on the button.
     hint: &'static str,
     event: SidebarEvent,
 }
@@ -46,10 +46,6 @@ pub enum SidebarEvent {
     CreateChannel,
     BrowseChannels,
     NewMessage,
-    /// Open the user groups dialog (admins and owners only).
-    ManageGroups,
-    /// Open the custom emoji dialog (admins and owners only).
-    ManageEmoji,
     /// Open search (the same as Ctrl+F).
     Search,
     /// Open the thread inbox.
@@ -60,12 +56,8 @@ pub enum SidebarEvent {
     People,
     /// Open the quick switcher (the same as Ctrl+K).
     QuickSwitcher,
-    /// Open the preferences dialog.
+    /// Open the preferences dialog (the person's own row at the bottom).
     Preferences,
-    /// Open the workspace settings (admins and owners).
-    WorkspaceSettings,
-    /// Open the invitations (admins and owners).
-    InvitePeople,
 }
 
 /// Unread counts above this show as `99+`.
@@ -116,22 +108,15 @@ pub struct SidebarView {
     add_message_focus: FocusHandle,
     browse_link_focus: FocusHandle,
     message_link_focus: FocusHandle,
-    groups_focus: FocusHandle,
-    emoji_focus: FocusHandle,
     search_focus: FocusHandle,
     switcher_focus: FocusHandle,
     threads_focus: FocusHandle,
     saved_focus: FocusHandle,
     people_focus: FocusHandle,
+    /// The person's own row at the bottom, which opens Preferences.
     prefs_focus: FocusHandle,
-    settings_focus: FocusHandle,
-    invite_focus: FocusHandle,
     menu: Option<Entity<Menu>>,
     _menu_subscription: Option<Subscription>,
-    /// The footer's "Admin" menu, which holds the administration links in a narrow window.
-    admin_focus: FocusHandle,
-    admin_menu: Option<Entity<Menu>>,
-    _admin_subscription: Option<Subscription>,
 }
 
 impl EventEmitter<SidebarEvent> for SidebarView {}
@@ -153,28 +138,15 @@ impl SidebarView {
             add_message_focus: cx.focus_handle().tab_stop(true),
             browse_link_focus: cx.focus_handle().tab_stop(true),
             message_link_focus: cx.focus_handle().tab_stop(true),
-            groups_focus: cx.focus_handle().tab_stop(true),
-            emoji_focus: cx.focus_handle().tab_stop(true),
             search_focus: cx.focus_handle().tab_stop(true),
             switcher_focus: cx.focus_handle().tab_stop(true),
             threads_focus: cx.focus_handle().tab_stop(true),
             saved_focus: cx.focus_handle().tab_stop(true),
             people_focus: cx.focus_handle().tab_stop(true),
             prefs_focus: cx.focus_handle().tab_stop(true),
-            settings_focus: cx.focus_handle().tab_stop(true),
-            invite_focus: cx.focus_handle().tab_stop(true),
             menu: None,
             _menu_subscription: None,
-            admin_focus: cx.focus_handle().tab_stop(true),
-            admin_menu: None,
-            _admin_subscription: None,
         }
-    }
-
-    /// The focus handle of the "User groups" link in the footer (admins and owners), for a dialog
-    /// to return to.
-    pub fn groups_focus(&self) -> FocusHandle {
-        self.groups_focus.clone()
     }
 
     /// The focus handle of the Threads entry, for a view to return to.
@@ -197,17 +169,7 @@ impl SidebarView {
         self.switcher_focus.clone()
     }
 
-    /// The focus handle of the "Workspace settings" link in the footer (admins and owners).
-    pub fn settings_focus(&self) -> FocusHandle {
-        self.settings_focus.clone()
-    }
-
-    /// The focus handle of the "Invite people" link in the footer (admins and owners).
-    pub fn invite_focus(&self) -> FocusHandle {
-        self.invite_focus.clone()
-    }
-
-    /// The focus handle of the Preferences link in the footer.
+    /// The focus handle of the person's own row in the footer, which opens Preferences.
     pub fn prefs_focus(&self) -> FocusHandle {
         self.prefs_focus.clone()
     }
@@ -215,12 +177,6 @@ impl SidebarView {
     /// The focus handle of the Search entry at the top, for tests and for the shell to return to.
     pub fn search_focus(&self) -> FocusHandle {
         self.search_focus.clone()
-    }
-
-    /// The focus handle of the "Custom emoji" link in the footer (admins and owners), for a dialog
-    /// to return to.
-    pub fn emoji_focus(&self) -> FocusHandle {
-        self.emoji_focus.clone()
     }
 
     /// The focus handle of the "+" next to Channels, for a dialog to return to.
@@ -257,51 +213,6 @@ impl SidebarView {
             .collect()
     }
 
-    /// The footer's "Admin" menu: the administration links, for a narrow window where they would
-    /// take a line each.
-    fn open_admin_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (workspace, groups, emoji) = {
-            let core = self.model.read(cx).core();
-            (
-                core.can_manage_workspace(),
-                core.can_manage_groups(),
-                core.can_manage_emoji(),
-            )
-        };
-        let mut items = Vec::new();
-        if workspace {
-            items.push(MenuItem::new("settings", "Workspace settings…"));
-            items.push(MenuItem::new("invite", "Invite people…"));
-        }
-        if groups {
-            items.push(MenuItem::new("groups", "User groups…"));
-        }
-        if emoji {
-            items.push(MenuItem::new("emoji", "Custom emoji…"));
-        }
-        if items.is_empty() {
-            return;
-        }
-        let menu = cx.new(|cx| Menu::new("admin-menu", items, cx));
-        self._admin_subscription =
-            Some(cx.subscribe(&menu, |this, _menu, event: &MenuEvent, cx| {
-                if let MenuEvent::Select(id) = event {
-                    match id.as_ref() {
-                        "settings" => cx.emit(SidebarEvent::WorkspaceSettings),
-                        "invite" => cx.emit(SidebarEvent::InvitePeople),
-                        "groups" => cx.emit(SidebarEvent::ManageGroups),
-                        "emoji" => cx.emit(SidebarEvent::ManageEmoji),
-                        _ => {}
-                    }
-                }
-                this.admin_menu = None;
-                cx.notify();
-            }));
-        menu.update(cx, |menu, cx| menu.open(window, cx));
-        self.admin_menu = Some(menu);
-        cx.notify();
-    }
-
     fn select(&mut self, id: ConversationId, cx: &mut Context<Self>) {
         self.model.update(cx, |model, cx| {
             model.dispatch(Input::SelectConversation(id), cx)
@@ -315,20 +226,16 @@ impl SidebarView {
             crate::commands::CommandId::CreateChannel,
             &crate::commands::AppSnapshot::from_core(self.model.read(cx).core()),
         );
-        let may_create = create.is_enabled();
+        // Only a reason is worth a second line; what an item does is in its name.
+        let mut create_item =
+            MenuItem::new("create", "Create a channel").enabled(create.is_enabled());
+        if let crate::commands::Availability::Disabled(reason) = create {
+            create_item = create_item.detail(reason);
+        }
         let menu = cx.new(|cx| {
             Menu::new(
                 "channels-menu",
-                vec![
-                    MenuItem::new("create", "Create a channel")
-                        .detail(match create {
-                            crate::commands::Availability::Disabled(reason) => reason,
-                            _ => "Start a new public or private channel",
-                        })
-                        .enabled(may_create),
-                    MenuItem::new("browse", "Browse channels")
-                        .detail("Find a public channel to join"),
-                ],
+                vec![create_item, MenuItem::new("browse", "Browse channels")],
                 cx,
             )
         });
@@ -656,12 +563,11 @@ impl SidebarView {
 }
 
 impl SidebarView {
-    /// A text link in the sidebar's footer (Tab-reachable, Enter and Space activate it).
-    #[allow(clippy::too_many_arguments)]
-    fn footer_link(
+    /// A quiet text link under a section's heading, in place of an explanation (Tab-reachable,
+    /// Enter and Space activate it). Its text lines up with the names of the rows above and below.
+    fn quiet_link(
         &self,
         selector: &'static str,
-        label: &'static str,
         text: &'static str,
         focus: &FocusHandle,
         event: SidebarEvent,
@@ -673,7 +579,7 @@ impl SidebarView {
             .id(selector)
             .debug_selector(move || selector.into())
             .role(Role::Button)
-            .aria_label(label)
+            .aria_label(text)
             .track_focus(focus)
             .border_1()
             .border_color(transparent_black())
@@ -685,8 +591,10 @@ impl SidebarView {
                 }
             }))
             .cursor_pointer()
-            .px_2()
-            .py_0p5()
+            // A row's own padding (8), its glyph column (16), and the gap after it (8).
+            .pl(px(32.))
+            .pr_2()
+            .py_1()
             .rounded(theme.radii.small)
             .text_size(theme.type_scale.small)
             .text_color(colors.sidebar_text_muted)
@@ -701,47 +609,11 @@ impl SidebarView {
 }
 
 impl SidebarView {
-    /// The footer's "Admin" button, which opens the menu of administration links.
-    fn admin_link(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let colors = theme.colors;
-        div()
-            .id("sidebar-admin")
-            .debug_selector(|| "sidebar-admin".into())
-            .role(Role::Button)
-            .aria_label("Administration")
-            .track_focus(&self.admin_focus)
-            .border_1()
-            .border_color(transparent_black())
-            .focus_visible(move |style| style.border_color(colors.focus_ring))
-            .on_key_down(cx.listener(|this, key: &KeyDownEvent, window, cx| {
-                if keyboard::is_activation(key) {
-                    this.open_admin_menu(window, cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .cursor_pointer()
-            .px_2()
-            .py_0p5()
-            .rounded(theme.radii.small)
-            .text_size(theme.type_scale.small)
-            .text_color(colors.sidebar_text_muted)
-            .hover(move |style| {
-                style
-                    .bg(colors.sidebar_hover)
-                    .text_color(colors.sidebar_text)
-            })
-            .on_click(cx.listener(|this, _, window, cx| this.open_admin_menu(window, cx)))
-            .child("Admin ▾")
-            .into_any_element()
-    }
-
-    /// A finder button: Search or the quick switcher. Wide, it names itself and its key; compact,
-    /// it shares a row with the other and shows only a short name (the key is in the tooltip and
-    /// the accessible name).
+    /// A finder button: Search or the quick switcher. It shows a short name and shares a row with
+    /// the other; its key is in the tooltip and the accessible name, and in the shortcuts list.
     fn finder_button(
         &self,
         theme: &Theme,
-        compact: bool,
         finder: Finder,
         focus: &FocusHandle,
         cx: &mut Context<Self>,
@@ -755,9 +627,7 @@ impl SidebarView {
             .debug_selector(move || selector.into())
             .role(Role::Button)
             .aria_label(format!("{}, {hint}", finder.aria))
-            .when(compact, |button| {
-                button.tooltip(move |_, cx| TextTooltip::view(hint, cx))
-            })
+            .tooltip(move |_, cx| TextTooltip::view(hint, cx))
             .track_focus(focus)
             .flex()
             .flex_1()
@@ -782,17 +652,7 @@ impl SidebarView {
             .text_color(colors.sidebar_text_muted)
             .hover(move |style| style.text_color(colors.sidebar_text))
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(event)))
-            .child(div().flex_1().min_w_0().truncate().child(if compact {
-                finder.short
-            } else {
-                finder.label
-            }))
-            .children((!compact).then(|| {
-                div()
-                    .debug_selector(move || finder.hint_selector.into())
-                    .text_color(colors.sidebar_text_muted)
-                    .child(hint)
-            }))
+            .child(div().flex_1().min_w_0().truncate().child(finder.short))
             .into_any_element()
     }
 }
@@ -801,7 +661,7 @@ impl Render for SidebarView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *Theme::get(cx);
         let colors = theme.colors;
-        // The window is narrow (the shell narrows the sidebar then too): keep the top compact.
+        // The window is narrow (the shell narrows the sidebar then too).
         let compact = f32::from(window.viewport_size().width) < COMPACT_BELOW;
         // The person's own picture, in the footer.
         let me_id = self.model.read(cx).core().me().map(|user| user.id);
@@ -816,14 +676,7 @@ impl Render for SidebarView {
             )
         });
         let sections = self.model.read(cx).core().sidebar();
-        let (
-            workspace_name,
-            me_name,
-            me_seed,
-            can_manage_groups,
-            can_manage_emoji,
-            can_manage_workspace,
-        ) = {
+        let (workspace_name, me_name, me_seed) = {
             let core = self.model.read(cx).core();
             (
                 core.primary_workspace()
@@ -832,14 +685,8 @@ impl Render for SidebarView {
                     .map(|u| u.display_name.to_string())
                     .unwrap_or_default(),
                 core.me().map_or(0, |u| u.id.as_uuid().as_u128()),
-                core.can_manage_groups(),
-                core.can_manage_emoji(),
-                core.can_manage_workspace(),
             )
         };
-        // Everyone has Preferences, so the footer always has links.
-        let has_links = true;
-        let has_admin_links = can_manage_workspace || can_manage_groups || can_manage_emoji;
         let (inbox_open, inbox_unread, saved_open, people_open, my_status, paused) = {
             let core = self.model.read(cx).core();
             let me = core.me().map(|user| user.id);
@@ -907,34 +754,14 @@ impl Render for SidebarView {
                     .is_none_or(|c| c.kind != ConversationKind::Channel)
             })
         {
-            let browse_to = this.clone();
-            list = list.child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(theme.type_scale.small)
-                            .text_color(colors.sidebar_text_muted)
-                            .child("You haven't joined any channels."),
-                    )
-                    .child(form::button(
-                        &theme,
-                        "sidebar-browse-channels",
-                        "Browse channels",
-                        ButtonKind::Secondary,
-                        true,
-                        &self.browse_link_focus,
-                        move |_, cx| {
-                            browse_to
-                                .update(cx, |_, cx| cx.emit(SidebarEvent::BrowseChannels))
-                                .ok();
-                        },
-                    )),
-            );
+            list = list.child(self.quiet_link(
+                "sidebar-browse-channels",
+                "Browse channels",
+                &self.browse_link_focus,
+                SidebarEvent::BrowseChannels,
+                &theme,
+                cx,
+            ));
         }
         for row in channel_rows {
             list = list.child(self.row(&row, &theme, cx));
@@ -953,34 +780,14 @@ impl Render for SidebarView {
         list = list.child(self.section_header(&theme, "Direct messages", Some(new_message_plus)));
         let people_rows = self.rows(&sections.direct_and_group, cx);
         if people_rows.is_empty() {
-            let message_to = this.clone();
-            list = list.child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(theme.type_scale.small)
-                            .text_color(colors.sidebar_text_muted)
-                            .child("Say hello. Find a teammate and send them a message."),
-                    )
-                    .child(form::button(
-                        &theme,
-                        "sidebar-new-message",
-                        "Find people",
-                        ButtonKind::Secondary,
-                        true,
-                        &self.message_link_focus,
-                        move |_, cx| {
-                            message_to
-                                .update(cx, |_, cx| cx.emit(SidebarEvent::NewMessage))
-                                .ok();
-                        },
-                    )),
-            );
+            list = list.child(self.quiet_link(
+                "sidebar-new-message",
+                "Find people",
+                &self.message_link_focus,
+                SidebarEvent::NewMessage,
+                &theme,
+                cx,
+            ));
         }
         for row in people_rows {
             list = list.child(self.row(&row, &theme, cx));
@@ -1039,23 +846,19 @@ impl Render for SidebarView {
                     })),
             )
             .child(
-                // Search and the quick switcher: one under the other, with their keys, and side by
-                // side with short names in a narrow window, where height is what is short.
+                // Search and the quick switcher, side by side. Their keys are in the tooltips and
+                // the shortcuts list (Help), not on the buttons.
                 div()
                     .flex_none()
                     .px_3()
                     .pt_2()
                     .flex()
-                    .when(!compact, |row| row.flex_col().gap_1())
-                    .when(compact, |row| row.gap_1())
+                    .gap_1()
                     .child(self.finder_button(
                         &theme,
-                        compact,
                         Finder {
                             selector: "sidebar-search",
-                            hint_selector: "sidebar-search-hint",
                             aria: "Search",
-                            label: "Search",
                             short: "Search",
                             hint: if cfg!(target_os = "macos") {
                                 "⌘F"
@@ -1069,12 +872,9 @@ impl Render for SidebarView {
                     ))
                     .child(self.finder_button(
                         &theme,
-                        compact,
                         Finder {
                             selector: "sidebar-switcher",
-                            hint_selector: "sidebar-switcher-hint",
                             aria: "Quick switcher",
-                            label: "Quick switcher",
                             short: "Jump to",
                             hint: if cfg!(target_os = "macos") {
                                 "⌘K"
@@ -1096,143 +896,93 @@ impl Render for SidebarView {
                     .pb_2()
                     .child(list),
             )
-            .children(has_links.then(|| {
+            .child(
+                // The person's own row. Their picture and name open Preferences; everything else
+                // (workspace settings, invitations, user groups, custom emoji, sign out) is in the
+                // Menu at the top, so the only other thing here is Sign out.
                 div()
                     .flex_none()
                     .px_3()
-                    .pt_2()
+                    .py_2()
                     .border_t_1()
                     .border_color(colors.border)
                     .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    // Preferences is everyone's; the rest are for admins. Wide, the links flow in
-                    // one wrapping row; narrow, they would take a line each, so they sit in one
-                    // "Admin" menu beside Preferences.
-                    .child(
-                        div()
-                            .relative()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap_x_1()
-                            .child(self.footer_link(
-                                "sidebar-preferences",
-                                "Preferences",
-                                "Preferences…",
-                                &self.prefs_focus,
-                                SidebarEvent::Preferences,
-                                &theme,
-                                cx,
-                            ))
-                            .children(
-                                (compact && has_admin_links).then(|| self.admin_link(&theme, cx)),
-                            )
-                            .children((!compact && can_manage_workspace).then(|| {
-                                self.footer_link(
-                                    "sidebar-workspace-settings",
-                                    "Workspace settings",
-                                    "Workspace settings…",
-                                    &self.settings_focus,
-                                    SidebarEvent::WorkspaceSettings,
-                                    &theme,
-                                    cx,
-                                )
-                            }))
-                            .children((!compact && can_manage_workspace).then(|| {
-                                self.footer_link(
-                                    "sidebar-invite-people",
-                                    "Invite people",
-                                    "Invite people…",
-                                    &self.invite_focus,
-                                    SidebarEvent::InvitePeople,
-                                    &theme,
-                                    cx,
-                                )
-                            }))
-                            .children((!compact && can_manage_groups).then(|| {
-                                self.footer_link(
-                                    "sidebar-user-groups",
-                                    "User groups",
-                                    "User groups…",
-                                    &self.groups_focus,
-                                    SidebarEvent::ManageGroups,
-                                    &theme,
-                                    cx,
-                                )
-                            }))
-                            .children((!compact && can_manage_emoji).then(|| {
-                                self.footer_link(
-                                    "sidebar-custom-emoji",
-                                    "Custom emoji",
-                                    "Custom emoji…",
-                                    &self.emoji_focus,
-                                    SidebarEvent::ManageEmoji,
-                                    &theme,
-                                    cx,
-                                )
-                            }))
-                            .children(self.admin_menu.clone().map(|menu| {
-                                gpui::deferred(
-                                    div().absolute().bottom(px(28.)).right_0().child(menu),
-                                )
-                                .with_priority(2)
-                            })),
-                    )
-            }))
-            .child(
-                div()
-                    .flex_none()
-                    .px_3()
-                    .py_3()
-                    .when(!has_links, |footer| {
-                        footer.border_t_1().border_color(colors.border)
-                    })
-                    .flex()
                     .items_center()
-                    .gap_2()
-                    .child(
-                        crate::avatar::Avatar::new(me_seed, me_name.clone(), 28.)
-                            .text_size(theme.type_scale.body)
-                            .image(my_picture.clone())
-                            .into_div()
-                            .debug_selector(|| "sidebar-me-avatar".into()),
-                    )
+                    .gap_1()
                     .child(
                         div()
+                            .id("sidebar-preferences")
+                            .debug_selector(|| "sidebar-preferences".into())
+                            .role(Role::Button)
+                            .aria_label("Preferences")
+                            .track_focus(&self.prefs_focus)
                             .flex_1()
                             .min_w_0()
                             .flex()
                             .items_center()
-                            .gap_1()
+                            .gap_2()
+                            .px_1()
+                            .py_1()
+                            .border_1()
+                            .border_color(transparent_black())
+                            .focus_visible(move |style| style.border_color(colors.focus_ring))
+                            .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
+                                if keyboard::is_activation(event) {
+                                    cx.emit(SidebarEvent::Preferences);
+                                    cx.stop_propagation();
+                                }
+                            }))
+                            .cursor_pointer()
+                            .rounded(theme.radii.small)
+                            .hover(move |style| style.bg(colors.sidebar_hover))
+                            .on_click(
+                                cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Preferences)),
+                            )
+                            .child(
+                                crate::avatar::Avatar::new(me_seed, me_name.clone(), 28.)
+                                    .text_size(theme.type_scale.body)
+                                    .image(my_picture.clone())
+                                    .into_div()
+                                    .debug_selector(|| "sidebar-me-avatar".into()),
+                            )
                             .child(
                                 div()
+                                    .flex_1()
                                     .min_w_0()
-                                    .truncate()
-                                    .text_size(theme.type_scale.body)
-                                    .text_color(colors.sidebar_text)
-                                    .child(me_name),
-                            )
-                            .children(my_status.map(|mark| {
-                                crate::status_mark::view(
-                                    "sidebar-status",
-                                    "sidebar-status".into(),
-                                    &mark,
-                                    theme.type_scale.body,
-                                )
-                            }))
-                            .children(paused.map(|until| {
-                                let tip = states::paused_tooltip(until.as_deref());
-                                div()
-                                    .id("sidebar-paused")
-                                    .debug_selector(|| "sidebar-paused".into())
-                                    .flex_none()
-                                    .role(Role::Image)
-                                    .aria_label(tip.clone())
-                                    .tooltip(move |_, cx| TextTooltip::view(tip.clone(), cx))
-                                    .text_size(theme.type_scale.body)
-                                    .child(emoji_font::glyphs("🔕"))
-                            })),
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(theme.type_scale.body)
+                                            .text_color(colors.sidebar_text)
+                                            .child(me_name),
+                                    )
+                                    .children(my_status.map(|mark| {
+                                        crate::status_mark::view(
+                                            "sidebar-status",
+                                            "sidebar-status".into(),
+                                            &mark,
+                                            theme.type_scale.body,
+                                        )
+                                    }))
+                                    .children(paused.map(|until| {
+                                        let tip = states::paused_tooltip(until.as_deref());
+                                        div()
+                                            .id("sidebar-paused")
+                                            .debug_selector(|| "sidebar-paused".into())
+                                            .flex_none()
+                                            .role(Role::Image)
+                                            .aria_label(tip.clone())
+                                            .tooltip(move |_, cx| {
+                                                TextTooltip::view(tip.clone(), cx)
+                                            })
+                                            .text_size(theme.type_scale.body)
+                                            .child(emoji_font::glyphs("🔕"))
+                                    })),
+                            ),
                     )
                     .child(
                         div()

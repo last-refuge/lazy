@@ -331,3 +331,9 @@ While trying to see the running app, I took one screenshot of a screen region co
 - *Never seen:* nothing has been rendered with the new theme or fonts. Review the `screens` workflow's artifact first (`gh workflow run screens`, then download the run's `screens` artifact), then the packages' icons on each platform.
 - *Known visual risks:* DM Sans widths against the fixed-height rows; dark-theme selection pairs just under 4.5:1; GPUI honors a window icon on X11 only; the macOS and Windows icons come straight from the kit (`lazy-app.icns`, `lazy-app.ico`) and were not opened on those systems.
 
+
+## A quieter sidebar (D27)
+
+- *Written, not run:* the sidebar change (`sidebar.rs`, `shell.rs`) and the tests rewritten for it: `tests/administration.rs` (who may run the administration commands, the Workspace menu opening the dialogs, the finders and footer at 640x480 and 1500x1600), `tests/custom_emoji.rs`, `tests/groups.rs`, `tests/states.rs` (the dialogs opened through Menu, Workspace), `tests/discovery.rs` (the finders share a row; order by row then column). The old tests of the footer links, the "Admin" menu, and the key hints were replaced, not deleted: each claim is now made about the Menu or the command registry. The two screens scenes `3f-20` and `3f-21` were renamed `...sidebar-narrow-...`.
+- *Not checked:* how the quiet links line up with the rows' names (a 32 px indent computed from the row padding), the two finders' width in the narrow 208 px sidebar with DM Sans, and that the name-and-picture row reads as a button. Look at the `screens` artifact (`3f-20`, `3f-21`, and the main window scenes).
+- *Unchanged and still manual:* screen reader names for the new row ("Preferences") and the finders ("Search, Ctrl+F").

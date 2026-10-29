@@ -35,6 +35,7 @@ use lazy_protocol::{
     ReactionSummary, ServerFrame, ThreadSummary, User, Workspace, WorkspaceBootstrap,
 };
 use lazy_ui::app_model::{AppModel, EffectSink};
+use lazy_ui::commands::{AppSnapshot, CommandId, availability};
 use lazy_ui::image_store::{ImageKey, ImageStore, Slot};
 use lazy_ui::root_view::RootView;
 use lazy_ui::shell::ShellDialog;
@@ -1281,8 +1282,11 @@ fn admin(cx: &mut TestAppContext) -> (World, &mut VisualTestContext) {
 }
 
 impl World {
+    /// Opens the dialog the way a person does: Menu, Workspace, Custom emoji.
     fn open_dialog(&self, cx: &mut VisualTestContext) {
-        self.click(cx, "sidebar-custom-emoji");
+        self.click(cx, "sidebar-menu");
+        self.click(cx, "command-menu-tab-Workspace");
+        self.click(cx, "command-menu-CustomEmoji");
         assert!(
             self.on_screen(cx, "emoji-admin-close"),
             "the dialog is open"
@@ -1336,7 +1340,7 @@ impl World {
 }
 
 #[gpui::test]
-fn only_admins_and_owners_get_the_link_and_no_other_route_opens_the_dialog(
+fn only_admins_and_owners_can_run_the_command_and_no_other_route_opens_the_dialog(
     cx: &mut TestAppContext,
 ) {
     for (role, expected) in [
@@ -1346,10 +1350,17 @@ fn only_admins_and_owners_get_the_link_and_no_other_route_opens_the_dialog(
     ] {
         let (world, cx) = start(cx);
         world.reach_as(cx, role, vec![]);
+        let snapshot = world
+            .model
+            .read_with(cx, |model, _| AppSnapshot::from_core(model.core()));
         assert_eq!(
-            world.on_screen(cx, "sidebar-custom-emoji"),
+            availability(CommandId::CustomEmoji, &snapshot).is_enabled(),
             expected,
             "{role:?}"
+        );
+        assert!(
+            !world.on_screen(cx, "sidebar-custom-emoji"),
+            "the sidebar has no link: the command is in the Menu"
         );
         if !expected {
             world.root.update_in(cx, |root, window, cx| {
@@ -1366,32 +1377,23 @@ fn only_admins_and_owners_get_the_link_and_no_other_route_opens_the_dialog(
 }
 
 #[gpui::test]
-fn the_link_sits_beside_user_groups_and_opens_with_the_keyboard(cx: &mut TestAppContext) {
+fn the_workspace_menu_lists_custom_emoji_beside_user_groups_and_opens_with_the_keyboard(
+    cx: &mut TestAppContext,
+) {
     let (world, cx) = admin(cx);
+    world.click(cx, "sidebar-menu");
+    world.click(cx, "command-menu-tab-Workspace");
     assert!(
-        world.on_screen(cx, "sidebar-user-groups") && world.on_screen(cx, "sidebar-custom-emoji")
+        world.on_screen(cx, "command-menu-UserGroups")
+            && world.on_screen(cx, "command-menu-CustomEmoji")
     );
-    let groups = cx.debug_bounds("sidebar-user-groups").unwrap();
-    let emoji = cx.debug_bounds("sidebar-custom-emoji").unwrap();
-    // The footer links flow in one wrapping row, so Custom emoji comes right after User groups in
-    // reading order: on the same line, or at the start of the next.
-    assert!(
-        (groups.center().y == emoji.center().y && emoji.left() >= groups.right())
-            || emoji.top() >= groups.bottom(),
-        "after it: {groups:?} then {emoji:?}"
-    );
+    let groups = cx.debug_bounds("command-menu-UserGroups").unwrap();
+    let emoji = cx.debug_bounds("command-menu-CustomEmoji").unwrap();
+    assert!(emoji.top() >= groups.bottom(), "after it: {groups:?} then {emoji:?}");
 
-    // Focus the link from the sidebar's own focus handle and press Enter.
-    let focus = world.root.read_with(cx, |root, app| {
-        root.shell()
-            .unwrap()
-            .read(app)
-            .sidebar()
-            .read(app)
-            .emoji_focus()
-    });
-    cx.update(|window, app| window.focus(&focus, app));
-    cx.simulate_keystrokes("enter");
+    // Down to Custom emoji (after Workspace settings, Invite people, and User groups, with the
+    // first item highlighted when the menu opens) and press Enter.
+    cx.simulate_keystrokes("down down down enter");
     assert!(world.on_screen(cx, "emoji-admin-close"));
 }
 

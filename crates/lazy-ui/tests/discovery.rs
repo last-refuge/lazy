@@ -1630,7 +1630,7 @@ fn the_directory_says_what_it_found_or_why_not(cx: &mut TestAppContext) {
 // ----- The sidebar -----
 
 #[gpui::test]
-fn the_sidebar_has_the_switcher_hint_saved_and_people_in_tab_order(cx: &mut TestAppContext) {
+fn the_sidebar_has_the_finders_threads_saved_and_people_in_tab_order(cx: &mut TestAppContext) {
     let (world, cx) = start_member(cx);
     for selector in [
         "sidebar-search",
@@ -1644,10 +1644,10 @@ fn the_sidebar_has_the_switcher_hint_saved_and_people_in_tab_order(cx: &mut Test
             "{selector} is in the sidebar"
         );
     }
-    assert!(world.on_screen(cx, "sidebar-switcher-hint"));
     let bounds =
         |cx: &mut VisualTestContext, selector: &'static str| cx.debug_bounds(selector).unwrap();
-    let tops: Vec<_> = [
+    // The two finders share a row, so the order is by row and then by column.
+    let places: Vec<(f32, f32)> = [
         "sidebar-search",
         "sidebar-switcher",
         "sidebar-threads",
@@ -1655,11 +1655,14 @@ fn the_sidebar_has_the_switcher_hint_saved_and_people_in_tab_order(cx: &mut Test
         "sidebar-people",
     ]
     .into_iter()
-    .map(|selector| bounds(cx, selector).top())
+    .map(|selector| {
+        let found = bounds(cx, selector);
+        (f32::from(found.top()), f32::from(found.left()))
+    })
     .collect();
     assert!(
-        tops.windows(2).all(|pair| pair[0] < pair[1]),
-        "in this order"
+        places.windows(2).all(|pair| pair[0] < pair[1]),
+        "in this order: {places:?}"
     );
     // The entries open their views from the keyboard: Enter on a focused entry.
     world.click(cx, "sidebar-people");

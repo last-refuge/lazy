@@ -1,4 +1,5 @@
-//! Slice 3F on GPUI's test platform: the sidebar's administration links, the workspace settings
+//! Slice 3F on GPUI's test platform: the administration commands (the Workspace menu, and who may
+//! run them), the sidebar's finders and footer, the workspace settings
 //! dialog, the invitations dialog and the one-time code, roles and deactivation in the profile,
 //! the people directory's deactivated rows, the register form's invitation code, the no-access
 //! screen, and the new-channel affordance under the channel policy. The real views and the real
@@ -28,6 +29,7 @@ use lazy_protocol::{
     User, Workspace, WorkspaceBootstrap,
 };
 use lazy_ui::app_model::{AppModel, EffectSink};
+use lazy_ui::commands::CommandId;
 use lazy_ui::root_view::RootView;
 use lazy_ui::workspace_form::{Expiry, Uses};
 
@@ -344,6 +346,13 @@ impl World {
         draw(cx);
     }
 
+    /// Whether the registry lets the person run `id` now (the rule every button, menu item, and
+    /// shortcut asks).
+    fn can_run(&self, cx: &VisualTestContext, id: CommandId) -> bool {
+        let snapshot = self.core(cx, lazy_ui::commands::AppSnapshot::from_core);
+        lazy_ui::commands::availability(id, &snapshot).is_enabled()
+    }
+
     fn open_dialog(&self, cx: &mut VisualTestContext, dialog: lazy_ui::shell::ShellDialog) {
         let shell = self.shell(cx);
         cx.update(|window, app| {
@@ -474,19 +483,21 @@ impl World {
 
 use lazy_protocol::{ApiError, ErrorCode, Event, EventEnvelope, ServerFrame};
 
-// ----- The sidebar -----
+// ----- The sidebar and the Workspace menu -----
 
 #[gpui::test]
-fn admins_and_owners_have_the_administration_links_and_members_do_not(cx: &mut TestAppContext) {
+fn admins_and_owners_can_run_the_administration_commands_and_members_cannot(
+    cx: &mut TestAppContext,
+) {
     let (world, cx) = start(cx);
     world.reach_as(cx, WorkspaceRole::Member);
-    assert!(!world.on_screen(cx, "sidebar-workspace-settings"));
-    assert!(!world.on_screen(cx, "sidebar-invite-people"));
+    assert!(!world.can_run(cx, CommandId::WorkspaceSettings));
+    assert!(!world.can_run(cx, CommandId::InvitePeople));
     assert!(
         world.on_screen(cx, "sidebar-preferences"),
-        "Preferences is everyone's"
+        "Preferences is everyone's: the person's own row opens it"
     );
-    // Being made an admin shows them at once, being demoted takes them away at once.
+    // Being made an admin allows them at once, being demoted takes them away at once.
     world.event(
         cx,
         10,
@@ -495,8 +506,8 @@ fn admins_and_owners_have_the_administration_links_and_members_do_not(cx: &mut T
             role: WorkspaceRole::Admin,
         },
     );
-    assert!(world.on_screen(cx, "sidebar-workspace-settings"));
-    assert!(world.on_screen(cx, "sidebar-invite-people"));
+    assert!(world.can_run(cx, CommandId::WorkspaceSettings));
+    assert!(world.can_run(cx, CommandId::InvitePeople));
     world.event(
         cx,
         11,
@@ -505,19 +516,23 @@ fn admins_and_owners_have_the_administration_links_and_members_do_not(cx: &mut T
             role: WorkspaceRole::Member,
         },
     );
-    assert!(!world.on_screen(cx, "sidebar-workspace-settings"));
-    assert!(!world.on_screen(cx, "sidebar-invite-people"));
+    assert!(!world.can_run(cx, CommandId::WorkspaceSettings));
+    assert!(!world.can_run(cx, CommandId::InvitePeople));
 }
 
 #[gpui::test]
-fn the_links_open_their_dialogs_and_escape_returns_the_keyboard(cx: &mut TestAppContext) {
+fn the_workspace_menu_opens_the_dialogs_and_escape_returns_the_keyboard(cx: &mut TestAppContext) {
     let (world, cx) = start(cx);
     world.reach_as(cx, WorkspaceRole::Owner);
-    world.click(cx, "sidebar-workspace-settings");
+    world.click(cx, "sidebar-menu");
+    world.click(cx, "command-menu-tab-Workspace");
+    world.click(cx, "command-menu-WorkspaceSettings");
     assert!(world.on_screen(cx, "settings-save"));
     cx.simulate_keystrokes("escape");
     assert!(!world.on_screen(cx, "settings-save"));
-    world.click(cx, "sidebar-invite-people");
+    world.click(cx, "sidebar-menu");
+    world.click(cx, "command-menu-tab-Workspace");
+    world.click(cx, "command-menu-InvitePeople");
     assert!(world.on_screen(cx, "invite-create"));
     assert!(world.on_screen(cx, "invite-loading"), "the list is loading");
     cx.simulate_keystrokes("escape");
@@ -529,69 +544,41 @@ fn the_links_open_their_dialogs_and_escape_returns_the_keyboard(cx: &mut TestApp
 }
 
 #[gpui::test]
-fn a_narrow_sidebar_folds_the_admin_links_into_one_menu_and_the_finders_share_a_row(
+fn the_finders_share_a_row_and_the_footer_is_only_the_person_and_sign_out(
     cx: &mut TestAppContext,
 ) {
     let (world, cx) = start(cx);
     world.reach_as(cx, WorkspaceRole::Owner);
-    cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(480.)));
-    draw(cx);
-    let height = 480.0_f32;
-    // Preferences and the Admin button share one footer line, inside the window.
-    let prefs = cx.debug_bounds("sidebar-preferences").expect("Preferences");
-    let admin = cx.debug_bounds("sidebar-admin").expect("the Admin button");
-    assert_eq!(prefs.top(), admin.top(), "one line for both");
-    assert!(f32::from(admin.bottom()) <= height && f32::from(prefs.bottom()) <= height);
-    for selector in [
-        "sidebar-workspace-settings",
-        "sidebar-invite-people",
-        "sidebar-user-groups",
-        "sidebar-custom-emoji",
-    ] {
-        assert!(
-            !world.on_screen(cx, selector),
-            "{selector} lives in the menu when narrow"
-        );
+    for (width, height) in [(640.0_f32, 480.0_f32), (1500.0, 1600.0)] {
+        cx.simulate_resize(gpui::size(gpui::px(width), gpui::px(height)));
+        draw(cx);
+        // The finders sit side by side, whatever the width, with no key hints on them.
+        let search = cx.debug_bounds("sidebar-search").unwrap();
+        let switcher = cx.debug_bounds("sidebar-switcher").unwrap();
+        assert_eq!(search.top(), switcher.top(), "side by side at {width}");
+        assert!(search.right() <= switcher.left(), "one beside the other");
+        // The footer is the person's own row (which opens Preferences) and Sign out, on one
+        // line, inside the window; the administration links are in the Menu only.
+        let person = cx
+            .debug_bounds("sidebar-preferences")
+            .expect("the person's row");
+        let sign_out = cx.debug_bounds("sign-out").expect("Sign out");
+        assert!(f32::from(person.bottom()) <= height && f32::from(sign_out.bottom()) <= height);
+        let apart = f32::from(person.center().y) - f32::from(sign_out.center().y);
+        assert!(apart.abs() < 1.0, "one line for both at {width}");
+        for selector in [
+            "sidebar-workspace-settings",
+            "sidebar-invite-people",
+            "sidebar-user-groups",
+            "sidebar-custom-emoji",
+            "sidebar-admin",
+        ] {
+            assert!(
+                !world.on_screen(cx, selector),
+                "{selector} lives in the Menu, not the sidebar, at {width}"
+            );
+        }
     }
-    // The menu holds them all, and Enter on its first item opens the settings.
-    world.click(cx, "sidebar-admin");
-    for selector in [
-        "admin-menu-settings",
-        "admin-menu-invite",
-        "admin-menu-groups",
-        "admin-menu-emoji",
-    ] {
-        assert!(world.on_screen(cx, selector), "{selector}");
-    }
-    cx.simulate_keystrokes("enter");
-    assert!(
-        world.on_screen(cx, "settings-save"),
-        "the first item opens the settings"
-    );
-    cx.simulate_keystrokes("escape");
-    // The finders sit side by side, without their key hints.
-    let search = cx.debug_bounds("sidebar-search").unwrap();
-    let switcher = cx.debug_bounds("sidebar-switcher").unwrap();
-    assert_eq!(search.top(), switcher.top(), "side by side when narrow");
-    assert!(
-        !world.on_screen(cx, "sidebar-search-hint"),
-        "and without their key hints"
-    );
-    // With room, the links are links and the finders stack.
-    cx.simulate_resize(gpui::size(gpui::px(1500.), gpui::px(1600.)));
-    draw(cx);
-    assert!(
-        world.on_screen(cx, "sidebar-workspace-settings")
-            && world.on_screen(cx, "sidebar-invite-people")
-    );
-    assert!(!world.on_screen(cx, "sidebar-admin"));
-    let search = cx.debug_bounds("sidebar-search").unwrap();
-    let switcher = cx.debug_bounds("sidebar-switcher").unwrap();
-    assert!(
-        search.top() < switcher.top(),
-        "one under the other when there is room"
-    );
-    assert!(world.on_screen(cx, "sidebar-search-hint"));
 }
 
 // ----- Workspace settings -----
