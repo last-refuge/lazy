@@ -45,13 +45,25 @@ else
 fi
 codesign --verify --deep --strict "$APP"
 
-DMG_DIR="$WORK/dmg"
-mkdir -p "$DMG_DIR"
-cp -R "$APP" "$DMG_DIR/Lazy.app"
-ln -s /Applications "$DMG_DIR/Applications"
+# The disk image is made at an explicit size: `hdiutil create -srcfolder` sizes it itself and failed
+# on a GitHub runner with "No space left on device" while 40 GB were free. Create an empty image,
+# mount it, copy the app in beside a link to /Applications, unmount it, and compress it.
 DMG="$OUT/Lazy-${VERSION}-macos-universal.dmg"
 rm -f "$DMG"
-hdiutil create -volname "Lazy" -srcfolder "$DMG_DIR" -ov -format UDZO "$DMG" >/dev/null
+APP_MB="$(du -sm "$APP" | cut -f1)"
+RW="$WORK/lazy-rw.dmg"
+hdiutil create -size "$((APP_MB + 64))m" -fs HFS+ -volname "Lazy" -ov "$RW" >/dev/null
+MOUNT="$(hdiutil attach "$RW" -nobrowse -noverify -noautoopen | awk -F'\t' '/\/Volumes\//{print $NF; exit}')"
+[ -n "$MOUNT" ] && [ -d "$MOUNT" ] || { echo "could not mount the disk image" >&2; exit 1; }
+ditto "$APP" "$MOUNT/Lazy.app"
+ln -s /Applications "$MOUNT/Applications"
+sync
+for attempt in 1 2 3 4 5; do
+  hdiutil detach "$MOUNT" >/dev/null 2>&1 && break
+  [ "$attempt" = 5 ] && hdiutil detach -force "$MOUNT" >/dev/null
+  sleep 2
+done
+hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -ov -o "$DMG" >/dev/null
 
 if [ "$IDENTITY" != "-" ]; then
   codesign --force --sign "$IDENTITY" --timestamp "$DMG"
