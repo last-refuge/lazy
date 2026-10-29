@@ -1,0 +1,1025 @@
+{
+  "product": "Lazy",
+  "direction": "Soft Signal",
+  "version": "1.0.0",
+  "approvedOn": "2026-10-29",
+  "scope": "Selected identity only; historical explorations and ZIPs excluded",
+  "fileCount": 138,
+  "files": [
+    {
+      "path": "ASSETS.md",
+      "bytes": 6181,
+      "sha256": "04bae703d802a930b5742e5afe453d07531c999c576bac51c61003e632f9683d"
+    },
+    {
+      "path": "BRAND-GUIDELINES.md",
+      "bytes": 10028,
+      "sha256": "91fe3f70863b1c3819f24a4b9c9184a15de8011c13328408c029c4e80920cb29"
+    },
+    {
+      "path": "README.md",
+      "bytes": 4483,
+      "sha256": "c460e2982ae2ad825c8d094769043aa3e408a757fea8874dd57153f5d695ff03"
+    },
+    {
+      "path": "STYLE-GUIDE.md",
+      "bytes": 9748,
+      "sha256": "d42ebf24902f57095d2f91bb5fbed09dce7d9c60e82936704e560b0269d0f35b"
+    },
+    {
+      "path": "VOICE-AND-COPY.md",
+      "bytes": 4094,
+      "sha256": "7326a2d9ee05e027e818a77cdd808460a9e7e60dc4d9610263b54ba78f44c214"
+    },
+    {
+      "path": "brand-guidelines.pdf",
+      "bytes": 6727981,
+      "sha256": "853cd6467008d95014d4c68bece80a7600639e694b74d31bf3a50745abe9a1b7"
+    },
+    {
+      "path": "fonts/dmsans/DMSans-Variable.ttf",
+      "bytes": 240164,
+      "sha256": "8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d"
+    },
+    {
+      "path": "fonts/dmsans/DMSans-Variable.woff2",
+      "bytes": 88884,
+      "sha256": "93952fe01215ecc118292bc573be98819797a399e9c37529180ac038d2a72ae0"
+    },
+    {
+      "path": "fonts/dmsans/OFL.txt",
+      "bytes": 4482,
+      "sha256": "9af36190332437f5ecd09974de43c1f7c77a310a996cdd8ceb25628b458840e1"
+    },
+    {
+      "path": "fonts/nunito/Nunito-Variable.ttf",
+      "bytes": 276932,
+      "sha256": "bb55a5ca5c2042335b3991af27c4d0705d0ef41cac6164ac737fd8f2a1e85207"
+    },
+    {
+      "path": "fonts/nunito/Nunito-Variable.woff2",
+      "bytes": 101100,
+      "sha256": "ee39383d663dca9a0a81b5afada112e8e2670e5517b6d78e4ccb061d92dbab9f"
+    },
+    {
+      "path": "fonts/nunito/OFL.txt",
+      "bytes": 4385,
+      "sha256": "580df76c95a1ec5ab878ceb25bb3d85c6a076804e9c970c8c6972aea775fdf65"
+    },
+    {
+      "path": "icons/android-chrome-192.png",
+      "bytes": 5026,
+      "sha256": "568cda26bf9c9e212954bdd0c3a7b80d85225fb8dd63be235a545c06a5188951",
+      "width": 192,
+      "height": 192,
+      "mode": "RGBA",
+      "hasTransparency": false
+    },
+    {
+      "path": "icons/android-chrome-512.png",
+      "bytes": 18410,
+      "sha256": "455876b3f2d8bc99558b4738b50006f4d1681fd93a954b9b932f3ce7caf71c51",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": false
+    },
+    {
+      "path": "icons/apple-touch-icon.png",
+      "bytes": 4627,
+      "sha256": "3b7680ee2bcad516078442f102553edc8389933420895a06d939dfe223d819dd",
+      "width": 180,
+      "height": 180,
+      "mode": "RGBA",
+      "hasTransparency": false
+    },
+    {
+      "path": "icons/favicon-16.png",
+      "bytes": 519,
+      "sha256": "aa604019be2241849a705e7784d3897f126635372933fae6e138fd329399490f",
+      "width": 16,
+      "height": 16,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/favicon-32.png",
+      "bytes": 1000,
+      "sha256": "b018f4b3bfac566d49d0c5d27f4310e159542ddc40be758d65aa3bd88c5cf568",
+      "width": 32,
+      "height": 32,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/favicon-48.png",
+      "bytes": 1529,
+      "sha256": "69ba38698b18bbd31e2324a0999307c2b2b5f359a80210e01dee00dade602b93",
+      "width": 48,
+      "height": 48,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/favicon.ico",
+      "bytes": 1896,
+      "sha256": "f0fdafb38c17a1faeda105d1c765409b2d9c70dcbd82e711f8c3189bc4b1d539",
+      "width": 16,
+      "height": 16,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/favicon.svg",
+      "bytes": 782,
+      "sha256": "06cb7e06125d5f455524e4891cdde2a29f1868552cd9993e9d764c8ddb541423",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "icons/lazy-app-1024.png",
+      "bytes": 58149,
+      "sha256": "ae9224beed48e0842c671574d712d5c7285c70b5bd64be79672a63a979653f9c",
+      "width": 1024,
+      "height": 1024,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/lazy-app-128.png",
+      "bytes": 4007,
+      "sha256": "ee2dc7aff65f9ec6e2bb6b29220b312a7e07cbf2c662388c20d14ca2c1c7dcf3",
+      "width": 128,
+      "height": 128,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/lazy-app-16.png",
+      "bytes": 519,
+      "sha256": "aa604019be2241849a705e7784d3897f126635372933fae6e138fd329399490f",
+      "width": 16,
+      "height": 16,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/lazy-app-24.png",
+      "bytes": 788,
+      "sha256": "3630f3633b26afb7cb8b655b297c563e0e919ebcef645309e67668b96864aa04",
+      "width": 24,
+      "height": 24,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/lazy-app-256.png",
+      "bytes": 8751,
+      "sha256": "c73cbe3d219463fce3e044daae5450c2e9b3b8daf8e66b1837b61c60ab40db57",
+      "width": 256,
+      "height": 256,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/lazy-app-32.png",
+      "bytes": 1000,
+      "sha256": "b018f4b3bfac566d49d0c5d27f4310e159542ddc40be758d65aa3bd88c5cf568",
+      "width": 32,
+      "height": 32,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/lazy-app-48.png",
+      "bytes": 1529,
+      "sha256": "69ba38698b18bbd31e2324a0999307c2b2b5f359a80210e01dee00dade602b93",
+      "width": 48,
+      "height": 48,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/lazy-app-512.png",
+      "bytes": 21788,
+      "sha256": "0571a3df6d539fe21ec2db5037162cf34c3cd49d657e261b444a5b5019c84a21",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/lazy-app-64.png",
+      "bytes": 1998,
+      "sha256": "5f6e556a6ad99428597a5d07a61e9ca784c1ddd73fe4662d6c70a7fd1526bb20",
+      "width": 64,
+      "height": 64,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/lazy-app.icns",
+      "bytes": 174938,
+      "sha256": "1126056c7b41c6a72802602de7666a5084bb2f2857c463f547569f52cd0a0f33",
+      "width": 1024,
+      "height": 1024,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/lazy-app.ico",
+      "bytes": 4416,
+      "sha256": "9eb278cfbc564c392fc6f8df5d1458aefff939832cb232258a89ccd62d284f17",
+      "width": 16,
+      "height": 16,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "icons/lazy-icon-forest-maskable.svg",
+      "bytes": 874,
+      "sha256": "b5ab669de205657e8aa5c60dc138d1b612e3bbb6df189143ddbfa5fb3741d24c",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "icons/lazy-icon-forest-rounded.svg",
+      "bytes": 880,
+      "sha256": "a2b0c25b3f8b95ccbc7507fc7675fb2e6aba47e2bf2507fd25637abc2566a7e1",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "icons/lazy-icon-forest-small.svg",
+      "bytes": 782,
+      "sha256": "06cb7e06125d5f455524e4891cdde2a29f1868552cd9993e9d764c8ddb541423",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "icons/lazy-icon-forest-square.svg",
+      "bytes": 870,
+      "sha256": "1a08afcd354b6bd936e228d364e8c3fc0a4adc4791c1a8c78c3bc264b68049d6",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "icons/lazy-icon-sage-maskable.svg",
+      "bytes": 870,
+      "sha256": "7546cb3ec4dc6c531c3696fa8ada786b343933d98dca524f015feebf94bf365e",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "icons/lazy-icon-sage-rounded.svg",
+      "bytes": 876,
+      "sha256": "497cdba80b95cf50f7c5dcc3ad63f6e885432de9f940715e8451e1c96dcd52be",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "icons/lazy-icon-sage-small.svg",
+      "bytes": 778,
+      "sha256": "254e90e3c25e05340fcb29f1db546bde5dff0ce2a931d5ea7bf1f2a81108e09d",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "icons/lazy-icon-sage-square.svg",
+      "bytes": 866,
+      "sha256": "e234f9633fa0d7d47b97ff896c2b59db814aab049b61ea878d585fe01960344c",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "icons/maskable-512.png",
+      "bytes": 16164,
+      "sha256": "14403c3ffd9dc38c7e5b361bd75c1f19c1a1fe9894373b6327cb15b742ebdd42",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": false
+    },
+    {
+      "path": "icons/site.webmanifest",
+      "bytes": 506,
+      "sha256": "192dca5477459174b14f300bcaa1827b06ab84d54d7365bffc0c6917be18d686"
+    },
+    {
+      "path": "illustrations/conversation-canopy-1536.webp",
+      "bytes": 258582,
+      "sha256": "0aa36a6be777656a06aad21328605e3f47263e705a786e6e448c77556823b170",
+      "width": 1536,
+      "height": 1024,
+      "mode": "RGB"
+    },
+    {
+      "path": "illustrations/conversation-canopy-480.webp",
+      "bytes": 29196,
+      "sha256": "c14c652e62d98507c41871bd34ebd40d305a455fdd42ac94726d81d78b01c9c6",
+      "width": 480,
+      "height": 320,
+      "mode": "RGB"
+    },
+    {
+      "path": "illustrations/conversation-canopy-960.webp",
+      "bytes": 99906,
+      "sha256": "d44a487987197792f5b6e10554847fe1a069a34c9aae221005cdcd16408329c7",
+      "width": 960,
+      "height": 640,
+      "mode": "RGB"
+    },
+    {
+      "path": "illustrations/conversation-canopy.png",
+      "bytes": 2507702,
+      "sha256": "a21185e90beb2d26b659861f1a991cd2e9e36f9d925a16ae71e6b8ac98ed68f0",
+      "width": 1536,
+      "height": 1024,
+      "mode": "RGB"
+    },
+    {
+      "path": "illustrations/conversation-leaves-pattern.svg",
+      "bytes": 510,
+      "sha256": "1e3764e01ab77aac2c212ab9cb3a3e231285656b4335ae717f178c77a8406042",
+      "viewBox": "0 0 480 320"
+    },
+    {
+      "path": "index.html",
+      "bytes": 27033,
+      "sha256": "b04b629f0979cca99204dd3b91eca082c7e25508c2963dab95052e1b446b69b3"
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-black-1200.png",
+      "bytes": 23686,
+      "sha256": "36b9a731cc5c6584d1b83d43bfe9c7282670af736a749cf6f01fe7ef5a39643e",
+      "width": 1200,
+      "height": 449,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-black-600.png",
+      "bytes": 9926,
+      "sha256": "20cf7bd7789ee3b47be395a4d33f7c2f0b87892a571a300ad52de70631e247d1",
+      "width": 600,
+      "height": 224,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-black.svg",
+      "bytes": 6859,
+      "sha256": "882d736098e90335e97c3caafd27857be4593e07b8e28909abd714b6ac253f2a",
+      "viewBox": "0 0 293.9 110"
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-forest-1200.png",
+      "bytes": 30158,
+      "sha256": "b59f3bd2e4581b412028324d36c2618e9e73131eb87b970d554e46e0a8e7987c",
+      "width": 1200,
+      "height": 449,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-forest-600.png",
+      "bytes": 12512,
+      "sha256": "56a30df1ec3b5ae064b3872c775ffb103718342c638873678cbfaf5c90f8155f",
+      "width": 600,
+      "height": 224,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-forest.svg",
+      "bytes": 6861,
+      "sha256": "d62ef1d64f251d1865a4e90d0d5f81f89facacbf31264b3cb295a72013a120c2",
+      "viewBox": "0 0 293.9 110"
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-paper-1200.png",
+      "bytes": 30054,
+      "sha256": "d1445ab5667a7d8d425f09917733a69f9e974c2b79b2c8cfa5ab7882e05721f6",
+      "width": 1200,
+      "height": 449,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-paper-600.png",
+      "bytes": 12499,
+      "sha256": "d31ea52a1a2310150bc497066a202086b0a893fc947bf8894271a11b8c86e1d1",
+      "width": 600,
+      "height": 224,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-paper.svg",
+      "bytes": 6859,
+      "sha256": "7aa1889cc3e8ecf7896a7e069eb3ebd1b537d47b6f1479e362695bf878b863f3",
+      "viewBox": "0 0 293.9 110"
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-sage-1200.png",
+      "bytes": 30335,
+      "sha256": "e275f66af23d54f9d32c22a2a4aefdc30cb657063c743d1b0f9ebc104d8344c1",
+      "width": 1200,
+      "height": 449,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-sage-600.png",
+      "bytes": 12656,
+      "sha256": "ecb151b5b193e8fc64b5d0d96c8aba67ab193e8740cbc399e45231fe186134b4",
+      "width": 600,
+      "height": 224,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-sage.svg",
+      "bytes": 6857,
+      "sha256": "49ecbeffc9b6e951f8e706beba77985ea6a23829c09acc5bb0e0a9ed3dbe599f",
+      "viewBox": "0 0 293.9 110"
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-white-1200.png",
+      "bytes": 22253,
+      "sha256": "3d89f602ee433aeece5a1cd74166e43b79ee0e2ccfa6990e37a6930642ad7f49",
+      "width": 1200,
+      "height": 449,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-white-600.png",
+      "bytes": 10039,
+      "sha256": "d0293b5f5f962771a6c0623607b57c4e6a19ece788aa873193ba071f43bc1dba",
+      "width": 600,
+      "height": 224,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/horizontal/lazy-logo-white.svg",
+      "bytes": 6859,
+      "sha256": "060cbeff14098a371373774d1ca3c3c988741aff7339b836183bbdfce9365230",
+      "viewBox": "0 0 293.9 110"
+    },
+    {
+      "path": "logos/stacked/lazy-stacked-black-600.png",
+      "bytes": 14076,
+      "sha256": "d4e80989f4282cdc6e595be3eb0c8bd1dc59df0141637f8e67d028c943f0db5d",
+      "width": 600,
+      "height": 520,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/stacked/lazy-stacked-black.svg",
+      "bytes": 6897,
+      "sha256": "2a2da4b693e05dabf8f64515dd3792344086d4edee448429d5557ab777dff8bf",
+      "viewBox": "0 0 300 260"
+    },
+    {
+      "path": "logos/stacked/lazy-stacked-forest-600.png",
+      "bytes": 18006,
+      "sha256": "0388c45d231e4c30d111ace6011bd442a43a5849f80486ceb38d0df557ad2688",
+      "width": 600,
+      "height": 520,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/stacked/lazy-stacked-forest.svg",
+      "bytes": 6899,
+      "sha256": "2bdc286c597a6d5f8497bf4f8cdafe9c0c068269e5e3b1957da2f20d4c80d25f",
+      "viewBox": "0 0 300 260"
+    },
+    {
+      "path": "logos/stacked/lazy-stacked-paper-600.png",
+      "bytes": 17971,
+      "sha256": "095fde6932eebe54e58398bc4380ecdf78e7bc8652d894cccc69c9fdd5f51d52",
+      "width": 600,
+      "height": 520,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/stacked/lazy-stacked-paper.svg",
+      "bytes": 6897,
+      "sha256": "b4e97616f43451a8bc6e53d8606b0aeb3692299bd320979335a9e0fce5b7449d",
+      "viewBox": "0 0 300 260"
+    },
+    {
+      "path": "logos/stacked/lazy-stacked-sage-600.png",
+      "bytes": 18173,
+      "sha256": "2964c680d10728c3ff1a2eb4e2889b6264507ebf922914206c9a5d9aa09198d8",
+      "width": 600,
+      "height": 520,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/stacked/lazy-stacked-sage.svg",
+      "bytes": 6895,
+      "sha256": "bd741f56e2b3211c844b077454c67abb8ea8963b784249d951794839c62f3fd5",
+      "viewBox": "0 0 300 260"
+    },
+    {
+      "path": "logos/stacked/lazy-stacked-white-600.png",
+      "bytes": 13533,
+      "sha256": "f23419c70ea3862ab0c80853ce17dec0f8c5f868d4f52bacf3fde373dc023695",
+      "width": 600,
+      "height": 520,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/stacked/lazy-stacked-white.svg",
+      "bytes": 6897,
+      "sha256": "e9f9605abedf27b2d366a7a33a7f990365af994c16c6bea7979ae1f95f812dbc",
+      "viewBox": "0 0 300 260"
+    },
+    {
+      "path": "logos/symbol/lazy-symbol-black-512.png",
+      "bytes": 13532,
+      "sha256": "e955a6fc669c4156fbadf3671707b3307acff2680b14e770f8568ff23ec14299",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/symbol/lazy-symbol-black.svg",
+      "bytes": 762,
+      "sha256": "fd83672c3d084fcf169587cefa890621e88be62cf6f47e37795d21743d507002",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "logos/symbol/lazy-symbol-forest-512.png",
+      "bytes": 17043,
+      "sha256": "00717e563f0888879d0884bb7e316d281f35402c7eb90073d06ec965a403c6d8",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/symbol/lazy-symbol-forest.svg",
+      "bytes": 764,
+      "sha256": "290f880c9d58dad7e62876990eb1ab81d8700bf34e7795e1fbd5341c09bcb511",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "logos/symbol/lazy-symbol-paper-512.png",
+      "bytes": 17023,
+      "sha256": "e075f253127e4293efc0a79a3f4f0498b1dbbd062cf76db02465d8023bdeccf1",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/symbol/lazy-symbol-paper.svg",
+      "bytes": 762,
+      "sha256": "8fefc1c66fdfe3b76f9d6ff6064cabf98ec38cbee641da2b2e88be1d8432ea27",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "logos/symbol/lazy-symbol-sage-512.png",
+      "bytes": 17239,
+      "sha256": "ecd464b21d39fd85ff053f43bb51c367450a30e0043eb158ada01c0c40371fd0",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/symbol/lazy-symbol-sage.svg",
+      "bytes": 760,
+      "sha256": "d5259a03594283a76718cb6eb48d701431b208f460758d876085274a07897a12",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "logos/symbol/lazy-symbol-small-forest.svg",
+      "bytes": 654,
+      "sha256": "8e4ca9be6574876b21163b3739b567cb6c5abb9161fedea067360c89166608a8",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "logos/symbol/lazy-symbol-white-512.png",
+      "bytes": 12507,
+      "sha256": "2444a1397063edd76af55a9353ba71ce02970b1a5a6e13714b48480496639c73",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/symbol/lazy-symbol-white.svg",
+      "bytes": 762,
+      "sha256": "f718a05ae0eca81e4d17a6af421b70799c7724ee6f912438ac50fd7266dec0cb",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "logos/wordmark/lazy-wordmark-black-600.png",
+      "bytes": 10054,
+      "sha256": "8f5bd1055565c0509a848338024344983d24c6244abf42fd9f34fe43b06248de",
+      "width": 600,
+      "height": 348,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/wordmark/lazy-wordmark-black.svg",
+      "bytes": 6231,
+      "sha256": "734a9b393820ecdb5660050377d4b8ecf41fce8798c06e7144b103874c453907",
+      "viewBox": "0 0 189.9 110"
+    },
+    {
+      "path": "logos/wordmark/lazy-wordmark-forest-600.png",
+      "bytes": 12618,
+      "sha256": "68574fe594533f6900354dc2216355f3cf38e1d899bf67fb736267394db2c0d8",
+      "width": 600,
+      "height": 348,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/wordmark/lazy-wordmark-forest.svg",
+      "bytes": 6231,
+      "sha256": "58551b0bfbc14db8166a8beaec1d3e5bb97972743de60bae91531b9584c96fc0",
+      "viewBox": "0 0 189.9 110"
+    },
+    {
+      "path": "logos/wordmark/lazy-wordmark-paper-600.png",
+      "bytes": 12583,
+      "sha256": "4efb35c6a45afce12c944cf21e5a61f4f1b0b3ab34f1315c214ae402e84619a1",
+      "width": 600,
+      "height": 348,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/wordmark/lazy-wordmark-paper.svg",
+      "bytes": 6231,
+      "sha256": "8eae390ee3034f031c746c213f7ac0427619caaa395c7e64b50e5fe059a1f1ed",
+      "viewBox": "0 0 189.9 110"
+    },
+    {
+      "path": "logos/wordmark/lazy-wordmark-sage-600.png",
+      "bytes": 12775,
+      "sha256": "9c702c2bd9c88fbd848ba86fab28e8cf5df5c0777a849703caf7309cd89617a5",
+      "width": 600,
+      "height": 348,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/wordmark/lazy-wordmark-sage.svg",
+      "bytes": 6231,
+      "sha256": "8dd80110f93906f054aca17364c1183c6371bf8aa7fb934287a491dc1d5299f6",
+      "viewBox": "0 0 189.9 110"
+    },
+    {
+      "path": "logos/wordmark/lazy-wordmark-white-600.png",
+      "bytes": 9539,
+      "sha256": "6c8da1afe63ca1b7e08fb09435d2428442c0b18ccd4185ceaf1075e08282ee25",
+      "width": 600,
+      "height": 348,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "logos/wordmark/lazy-wordmark-white.svg",
+      "bytes": 6231,
+      "sha256": "d3722b7c162293478a7e2f89992fdf7230ad14088865ca52b8492c6be24e7624",
+      "viewBox": "0 0 189.9 110"
+    },
+    {
+      "path": "mascot/moss-caught-up-256.webp",
+      "bytes": 14064,
+      "sha256": "ecf6b8cfc9dd37c6cff73453f3e73512530c0fd5a4947eabb76f01e1e738631b",
+      "width": 256,
+      "height": 256,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-caught-up-512.webp",
+      "bytes": 40964,
+      "sha256": "5a2d49d18bee7b766b54d3733b2a854a2b37297d3d28fb076a967826357db0ba",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-caught-up.png",
+      "bytes": 1475757,
+      "sha256": "20540dbb24c804ca95a71591668fed97f8765cef96be064ac55a01032410a464",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-caught-up.webp",
+      "bytes": 223184,
+      "sha256": "e527b521bca65c75e61facfa287b2fb16bbe23886bec5c0eddb203eec26a7ee1",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-celebrate-256.webp",
+      "bytes": 15788,
+      "sha256": "6bc3e202dd0aec7ee9c5987aee5b4b7c7231504dc876bf79e5c6e636cdcc1b62",
+      "width": 256,
+      "height": 256,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-celebrate-512.webp",
+      "bytes": 43372,
+      "sha256": "3b99bf4074d523458afa7f102d9672c3193c9cc4a58c90aa567ac93094b58a60",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-celebrate.png",
+      "bytes": 1270209,
+      "sha256": "0dba4921946e59db2710d6e8f5ebb1708580d32901af49990fb608a51d7058ad",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-celebrate.webp",
+      "bytes": 211456,
+      "sha256": "add173ee4f1ba60256ffe548fd179b1a1ea1c07c0b1deda522028ea6830e91a3",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-primary-256.webp",
+      "bytes": 13184,
+      "sha256": "e2df6a6c3f1a34bf385e9fa8e3f2e62f9268fb96ef930495a00e80028b4bb59b",
+      "width": 256,
+      "height": 256,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-primary-512.webp",
+      "bytes": 39010,
+      "sha256": "fd902ab979494423c78976ba582868b95019427a1c52d477b6bcb8098381854a",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-primary.png",
+      "bytes": 1380353,
+      "sha256": "0709d1adbfdadeb6743d1f36d673f9a213d32ed1ce30a4f3d6783845baf68d18",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-primary.webp",
+      "bytes": 216928,
+      "sha256": "ae25a9bc9e62898d9e457532197f35fb46755ec74d67f15ccf1edbbaac2e8eea",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-welcome-256.webp",
+      "bytes": 13940,
+      "sha256": "b8cdb69889b7bbd6b4e85860a58f21fce01642ebb45360055d2b0ec4d71687cd",
+      "width": 256,
+      "height": 256,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-welcome-512.webp",
+      "bytes": 40648,
+      "sha256": "806b4e968fe42b163f45792b5c5ff6d40cfebdbd74060a85c73245886de00bdb",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-welcome.png",
+      "bytes": 1384259,
+      "sha256": "66f1159f16d34d96521779ab251f332a56c6e09cc1c561c8356a8d45f5471896",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "mascot/moss-welcome.webp",
+      "bytes": 210974,
+      "sha256": "e49a82e66f169b7cd1762518984f4baf16cad77257bf83a6732c1a8e067f441d",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "hasTransparency": true
+    },
+    {
+      "path": "previews/approved-direction.png",
+      "bytes": 1272890,
+      "sha256": "aa97ff4109e01c6286b8a297ddc9daf4e47039b425ac76c1dce2bda73b9b819e",
+      "width": 1944,
+      "height": 1847,
+      "mode": "RGB"
+    },
+    {
+      "path": "previews/brand-library-cover.png",
+      "bytes": 250793,
+      "sha256": "f18773ddb6c3e924d8196186bc1d295f4b1f025d868ca5b35de6ef74e147f2bc",
+      "width": 1360,
+      "height": 1000,
+      "mode": "RGB"
+    },
+    {
+      "path": "previews/brand-library-dark.png",
+      "bytes": 1681939,
+      "sha256": "cdb96b9a76dd784706546542a114c1c8d563369324f4f9ee5ca25fa6063acf5b",
+      "width": 1360,
+      "height": 7774,
+      "mode": "RGB"
+    },
+    {
+      "path": "previews/brand-library-light.png",
+      "bytes": 1691901,
+      "sha256": "fb46313d77b7d5f2a5cda575261f8753040bdcd47b891043647b86bfe540af19",
+      "width": 1360,
+      "height": 7774,
+      "mode": "RGB"
+    },
+    {
+      "path": "previews/brand-library-mobile.png",
+      "bytes": 983506,
+      "sha256": "8dbc508b7c8408a90f2eee38b90fd96be52a6d79bf6f7c00d77cef0a275e3d73",
+      "width": 390,
+      "height": 11775,
+      "mode": "RGB"
+    },
+    {
+      "path": "previews/components-dark.png",
+      "bytes": 99397,
+      "sha256": "c55ac782a3fc1594a4101a1a0775407085d446d2e7886d06461f8db22af22a3d",
+      "width": 1200,
+      "height": 915,
+      "mode": "RGB"
+    },
+    {
+      "path": "previews/components-light.png",
+      "bytes": 99531,
+      "sha256": "ebf576b8452e497c13850e70f2280b1bef50cf59a9371e92d963376c24c57aae",
+      "width": 1200,
+      "height": 915,
+      "mode": "RGB"
+    },
+    {
+      "path": "previews/logo-system.png",
+      "bytes": 122333,
+      "sha256": "22edc9b8f20ca352d058d420d8a3661c6a6587c3ad94ac4731db55f3b1178861",
+      "width": 1200,
+      "height": 1121,
+      "mode": "RGB"
+    },
+    {
+      "path": "previews/moss-pose-library.png",
+      "bytes": 221279,
+      "sha256": "7729a74ac3afcce3190279f23844faa0fa79b5178783b7d989dadc6b821fe2a8",
+      "width": 1200,
+      "height": 654,
+      "mode": "RGB"
+    },
+    {
+      "path": "previews/print-guide.html",
+      "bytes": 15498,
+      "sha256": "ecde5887feb5a9d3d633feb0f6b69e2c24757329c1aa69502a0808e7de4d52b4"
+    },
+    {
+      "path": "previews/verification.json",
+      "bytes": 483,
+      "sha256": "70cf8af43689a652a4e2188db02c7a5ccb9b8a0ecffd6eeff7dcb02ac079e8b5"
+    },
+    {
+      "path": "social/lazy-open-graph-dark.png",
+      "bytes": 259419,
+      "sha256": "e51f44a56f8c954b8d545d4eef996543ca5e49e4dde5e1b0dd3cced2721bd47d",
+      "width": 1200,
+      "height": 630,
+      "mode": "RGB"
+    },
+    {
+      "path": "social/lazy-open-graph-light.png",
+      "bytes": 466768,
+      "sha256": "629356296c985f6e65cc5c5ccc49ed0c487a1bdfb8a2ca644c6acb173fdaa21a",
+      "width": 1200,
+      "height": 630,
+      "mode": "RGB"
+    },
+    {
+      "path": "social/lazy-profile.png",
+      "bytes": 13221,
+      "sha256": "75b2029f95364fef03ac9accc3980de6df584cea7083ff02d2208b2e0ce85c19",
+      "width": 400,
+      "height": 400,
+      "mode": "RGBA",
+      "hasTransparency": false
+    },
+    {
+      "path": "social/lazy-square.png",
+      "bytes": 304402,
+      "sha256": "70a806fc9872dbc3e32fecc22974dec63a5a19234800b13cbab0c5bc14ff9070",
+      "width": 1080,
+      "height": 1080,
+      "mode": "RGB"
+    },
+    {
+      "path": "social/metadata-example.html",
+      "bytes": 1667,
+      "sha256": "01018a7efd6d6ae6e3b07774a1efd058ee0908f6b7fe22ffb43b7acc206137d0"
+    },
+    {
+      "path": "source/approved-logo.svg",
+      "bytes": 6814,
+      "sha256": "9a3c8d56d52ce431d06a26119f5f93d04530ef6e2e098167aaa70fadd5dd0ff6",
+      "viewBox": "0 0 293.9 110"
+    },
+    {
+      "path": "source/approved-symbol.svg",
+      "bytes": 729,
+      "sha256": "4b4cfbd0a90d8051f5d1698d7dad2dffd15e7f62c1436284ad3bf1193d32063f",
+      "viewBox": "0 0 96 96"
+    },
+    {
+      "path": "source/build_brand.py",
+      "bytes": 14162,
+      "sha256": "7c76ce5ae4c44214a0aee9fedbef4d2d5dc8a377b57556277e0a501a399b29df"
+    },
+    {
+      "path": "source/export_brand.cjs",
+      "bytes": 8588,
+      "sha256": "06535aa365dc300ae8553110ad051e349850ebc2498eae9768e8a836def80acc"
+    },
+    {
+      "path": "source/generation-manifest.json",
+      "bytes": 7267,
+      "sha256": "b296cdd3feca4e30d196d6dd800b0d85f90a6e97b77b273b55367873f4a72211"
+    },
+    {
+      "path": "source/mascot-poses.json",
+      "bytes": 4405,
+      "sha256": "53a8feffa207c26e651a788f02147809918dfc2ca30ef27ef65e5dd1f15a7aa7"
+    },
+    {
+      "path": "source/package_brand.py",
+      "bytes": 1974,
+      "sha256": "c8f6a0be47d7cdd33e590895734cbe61345e52c6e4fdd94c92e235606dabfe1c"
+    },
+    {
+      "path": "source/social-templates.html",
+      "bytes": 3058,
+      "sha256": "8cdba476ab1c2628115b96ffe26317ac52208967e82524cfa86024823cb426af"
+    },
+    {
+      "path": "styles/components.css",
+      "bytes": 4337,
+      "sha256": "e95b7e39ebd539b26a1c0588bfef049928422ed5fbf7ad055f63057f69d7d01d"
+    },
+    {
+      "path": "styles/contrast-report.json",
+      "bytes": 8382,
+      "sha256": "e2cb15109d6c7d47fbdfc2c518e6222824a09c2760133433db800d5f55406fe9"
+    },
+    {
+      "path": "styles/fonts.css",
+      "bytes": 387,
+      "sha256": "e30a1659542dc9223ec061d4f63b91cc4021c3abebb8638ed05da1bab2cbec57"
+    },
+    {
+      "path": "styles/tokens.css",
+      "bytes": 4978,
+      "sha256": "dedc1991f9331ca3968216de1cf8b9879f6e61ea5d5a7a982571a38a06c2c30c"
+    },
+    {
+      "path": "styles/tokens.json",
+      "bytes": 3907,
+      "sha256": "bdea5f87b38b985559ba70a2c7cb981f24f695df227285e12b8cfc42089eae68"
+    }
+  ]
+}

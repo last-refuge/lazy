@@ -1,0 +1,33 @@
+/* Lazy / Good Loop. Copy alongside ../fonts.css or adjust font URLs. */
+@import url("../fonts.css");
+:root {
+  --lazy-brand: #2448D8;
+  --lazy-on-brand: #F7F8F1;
+  --lazy-page: #F7F8F1;
+  --lazy-surface: #FFFFFF;
+  --lazy-text: #14203C;
+  --lazy-text-muted: #4C5872;
+  --lazy-accent: #DAEF71;
+  --lazy-on-accent: #14203C;
+  --lazy-support: #AABAF2;
+  --lazy-border: #D1D7E5;
+  --lazy-focus: #2448D8;
+  --lazy-font-display: "Space Grotesk", sans-serif;
+  --lazy-font-body: "IBM Plex Sans", sans-serif;
+  --lazy-space-unit: 4px;
+  --lazy-radius: 8px;
+  --lazy-button-radius: 8px;
+  --lazy-content-width: 1200px;
+  --lazy-transition: 160ms ease-out;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --lazy-page: #111A31;
+    --lazy-surface: #1A2845;
+    --lazy-text: #F7F8F1;
+    --lazy-text-muted: #BBC6DC;
+    --lazy-brand: #DAEF71;
+    --lazy-on-brand: #14203C;
+  }
+}
+@media (prefers-reduced-motion: reduce) { :root { --lazy-transition: 0ms; } }

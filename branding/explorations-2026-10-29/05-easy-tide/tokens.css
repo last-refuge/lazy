@@ -1,0 +1,33 @@
+/* Lazy / Easy Tide. Copy alongside ../fonts.css or adjust font URLs. */
+@import url("../fonts.css");
+:root {
+  --lazy-brand: #087A73;
+  --lazy-on-brand: #FFF3DF;
+  --lazy-page: #FFF3DF;
+  --lazy-surface: #FFFCF5;
+  --lazy-text: #183B42;
+  --lazy-text-muted: #47636A;
+  --lazy-accent: #F28C78;
+  --lazy-on-accent: #183B42;
+  --lazy-support: #A5D8CF;
+  --lazy-border: #BED1C6;
+  --lazy-focus: #087A73;
+  --lazy-font-display: "Bricolage Grotesque", sans-serif;
+  --lazy-font-body: "DM Sans", sans-serif;
+  --lazy-space-unit: 4px;
+  --lazy-radius: 24px;
+  --lazy-button-radius: 999px;
+  --lazy-content-width: 1200px;
+  --lazy-transition: 160ms ease-out;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --lazy-page: #102C31;
+    --lazy-surface: #183B42;
+    --lazy-text: #FFF3DF;
+    --lazy-text-muted: #B7D5D0;
+    --lazy-brand: #A5D8CF;
+    --lazy-on-brand: #102C31;
+  }
+}
+@media (prefers-reduced-motion: reduce) { :root { --lazy-transition: 0ms; } }

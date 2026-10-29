@@ -1,0 +1,47 @@
+{
+  "Soft Signal": {
+    "Body on background": 10.34,
+    "Secondary text on background": 5.56,
+    "Primary button label": 10.34,
+    "Accent label": 5.6,
+    "Dark mode body": 13.29,
+    "Dark mode secondary text": 9.03,
+    "Dark mode primary button label": 7.85
+  },
+  "Good Loop": {
+    "Body on background": 15.1,
+    "Secondary text on background": 6.67,
+    "Primary button label": 6.56,
+    "Accent label": 12.73,
+    "Dark mode body": 16.16,
+    "Dark mode secondary text": 10.05,
+    "Dark mode primary button label": 12.73
+  },
+  "Afterglow": {
+    "Body on background": 15.41,
+    "Secondary text on background": 9.74,
+    "Primary button label": 9.46,
+    "Accent label": 9.93,
+    "Dark mode body": 15.41,
+    "Dark mode secondary text": 9.74,
+    "Dark mode primary button label": 9.46
+  },
+  "Common Ground": {
+    "Body on background": 11.15,
+    "Secondary text on background": 5.5,
+    "Primary button label": 5.13,
+    "Accent label": 5.59,
+    "Dark mode body": 13.59,
+    "Dark mode secondary text": 8.82,
+    "Dark mode primary button label": 6.81
+  },
+  "Easy Tide": {
+    "Body on background": 10.98,
+    "Secondary text on background": 5.87,
+    "Primary button label": 4.74,
+    "Accent label": 5.05,
+    "Dark mode body": 13.41,
+    "Dark mode secondary text": 9.42,
+    "Dark mode primary button label": 9.34
+  }
+}

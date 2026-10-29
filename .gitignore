@@ -3,3 +3,6 @@
 /.dev
 *.swp
 .DS_Store
+
+# Regenerable brand-kit archives (rebuild with branding/source/package_brand.py)
+/branding/*.zip

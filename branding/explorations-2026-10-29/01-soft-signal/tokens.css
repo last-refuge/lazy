@@ -1,0 +1,33 @@
+/* Lazy / Soft Signal. Copy alongside ../fonts.css or adjust font URLs. */
+@import url("../fonts.css");
+:root {
+  --lazy-brand: #183F35;
+  --lazy-on-brand: #F5F1E7;
+  --lazy-page: #F5F1E7;
+  --lazy-surface: #FFFDFA;
+  --lazy-text: #183F35;
+  --lazy-text-muted: #50655A;
+  --lazy-accent: #E9A38D;
+  --lazy-on-accent: #183F35;
+  --lazy-support: #A9C3A0;
+  --lazy-border: #CDD7C7;
+  --lazy-focus: #326B58;
+  --lazy-font-display: "Nunito", sans-serif;
+  --lazy-font-body: "DM Sans", sans-serif;
+  --lazy-space-unit: 4px;
+  --lazy-radius: 20px;
+  --lazy-button-radius: 999px;
+  --lazy-content-width: 1200px;
+  --lazy-transition: 160ms ease-out;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --lazy-page: #142B24;
+    --lazy-surface: #1F3A31;
+    --lazy-text: #F5F1E7;
+    --lazy-text-muted: #BDCDBF;
+    --lazy-brand: #A9C3A0;
+    --lazy-on-brand: #142B24;
+  }
+}
+@media (prefers-reduced-motion: reduce) { :root { --lazy-transition: 0ms; } }

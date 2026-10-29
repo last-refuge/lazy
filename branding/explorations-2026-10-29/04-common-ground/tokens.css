@@ -1,0 +1,33 @@
+/* Lazy / Common Ground. Copy alongside ../fonts.css or adjust font URLs. */
+@import url("../fonts.css");
+:root {
+  --lazy-brand: #A54832;
+  --lazy-on-brand: #F6EFDF;
+  --lazy-page: #F6EFDF;
+  --lazy-surface: #FFFBF2;
+  --lazy-text: #3C3027;
+  --lazy-text-muted: #6E5D4B;
+  --lazy-accent: #D3A44C;
+  --lazy-on-accent: #3C3027;
+  --lazy-support: #4B5B3B;
+  --lazy-border: #D5C6AC;
+  --lazy-focus: #4B5B3B;
+  --lazy-font-display: "Fraunces", sans-serif;
+  --lazy-font-body: "DM Sans", sans-serif;
+  --lazy-space-unit: 4px;
+  --lazy-radius: 8px;
+  --lazy-button-radius: 8px;
+  --lazy-content-width: 1200px;
+  --lazy-transition: 160ms ease-out;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --lazy-page: #28231D;
+    --lazy-surface: #393027;
+    --lazy-text: #F6EFDF;
+    --lazy-text-muted: #D1C1A7;
+    --lazy-brand: #D3A44C;
+    --lazy-on-brand: #28231D;
+  }
+}
+@media (prefers-reduced-motion: reduce) { :root { --lazy-transition: 0ms; } }

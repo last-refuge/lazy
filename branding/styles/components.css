@@ -1,0 +1,38 @@
+/* Optional reference components. Import fonts.css and tokens.css before this file. */
+*,*::before,*::after{box-sizing:border-box}
+.lazy-page{margin:0;background:var(--lazy-page);color:var(--lazy-text);font-family:var(--lazy-font-body);font-size:var(--lazy-body-size);line-height:var(--lazy-body-lineHeight);-webkit-font-smoothing:antialiased}
+.lazy-container{width:min(var(--lazy-content-width),calc(100% - var(--lazy-gutter)*2));margin-inline:auto}
+.lazy-display,.lazy-h1,.lazy-h2,.lazy-h3{font-family:var(--lazy-font-display);margin:0;text-wrap:balance}
+.lazy-display{font-size:var(--lazy-display-size);line-height:var(--lazy-display-lineHeight);font-weight:var(--lazy-display-weight);letter-spacing:var(--lazy-display-tracking)}
+.lazy-h1{font-size:var(--lazy-h1-size);line-height:var(--lazy-h1-lineHeight);font-weight:var(--lazy-h1-weight);letter-spacing:var(--lazy-h1-tracking)}
+.lazy-h2{font-size:var(--lazy-h2-size);line-height:var(--lazy-h2-lineHeight);font-weight:var(--lazy-h2-weight);letter-spacing:var(--lazy-h2-tracking)}
+.lazy-h3{font-size:var(--lazy-h3-size);line-height:var(--lazy-h3-lineHeight);font-weight:var(--lazy-h3-weight);letter-spacing:var(--lazy-h3-tracking)}
+.lazy-lead{font-size:var(--lazy-lead-size);line-height:var(--lazy-lead-lineHeight);color:var(--lazy-text-muted);max-width:58ch}
+.lazy-small{font-size:var(--lazy-small-size);line-height:var(--lazy-small-lineHeight)}
+.lazy-muted{color:var(--lazy-text-muted)}
+.lazy-link{color:var(--lazy-link);text-underline-offset:.2em;text-decoration-thickness:1px}
+.lazy-link:hover{text-decoration-thickness:2px}
+.lazy-button{display:inline-flex;align-items:center;justify-content:center;gap:var(--lazy-space-2);min-height:44px;padding:12px 22px;border:1px solid transparent;border-radius:var(--lazy-radius-pill);background:var(--lazy-brand);color:var(--lazy-on-brand);font:600 1rem/1.2 var(--lazy-font-body);text-decoration:none;cursor:pointer;transition:background-color var(--lazy-motion) var(--lazy-easing),transform var(--lazy-motion) var(--lazy-easing)}
+.lazy-button:hover{background:var(--lazy-brand-hover)}
+.lazy-button:active{background:var(--lazy-brand-active);transform:translateY(1px)}
+.lazy-button--secondary{background:transparent;border-color:var(--lazy-control-border);color:var(--lazy-text)}
+.lazy-button--secondary:hover{background:var(--lazy-selected)}
+.lazy-button--secondary:active{background:var(--lazy-selected)}
+.lazy-button:disabled{background:var(--lazy-disabled);color:var(--lazy-on-disabled);border-color:transparent;cursor:not-allowed;transform:none}
+.lazy-button:focus-visible,.lazy-input:focus-visible,.lazy-link:focus-visible,.lazy-check:focus-visible{outline:3px solid var(--lazy-focus);outline-offset:3px}
+.lazy-label{display:block;font-size:.875rem;line-height:1.5;font-weight:600;margin-bottom:var(--lazy-space-2)}
+.lazy-input{width:100%;min-height:48px;padding:11px 14px;border:1px solid var(--lazy-control-border);border-radius:var(--lazy-radius-small);background:var(--lazy-surface);color:var(--lazy-text);font:400 1rem/1.5 var(--lazy-font-body)}
+.lazy-input::placeholder{color:var(--lazy-text-muted);opacity:1}
+.lazy-input[aria-invalid=true]{border:2px solid var(--lazy-danger);padding:10px 13px}
+.lazy-help{margin:var(--lazy-space-2) 0 0;font-size:.875rem;line-height:1.5;color:var(--lazy-text-muted)}
+.lazy-help--error{color:var(--lazy-danger)}
+.lazy-surface{background:var(--lazy-surface);border:1px solid var(--lazy-border);border-radius:var(--lazy-radius-large);padding:var(--lazy-space-6)}
+.lazy-alert{padding:var(--lazy-space-4);border-radius:var(--lazy-radius-medium);font-size:.875rem;line-height:1.5}
+.lazy-alert--success{background:var(--lazy-success-surface);color:var(--lazy-success)}
+.lazy-alert--warning{background:var(--lazy-warning-surface);color:var(--lazy-warning)}
+.lazy-alert--danger{background:var(--lazy-danger-surface);color:var(--lazy-danger)}
+.lazy-alert--info{background:var(--lazy-info-surface);color:var(--lazy-info)}
+.lazy-check{width:20px;height:20px;accent-color:var(--lazy-brand)}
+.lazy-rule{border:0;border-top:1px solid var(--lazy-border);margin:var(--lazy-space-12) 0}
+.lazy-visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(prefers-reduced-motion:reduce){.lazy-button:active{transform:none}}

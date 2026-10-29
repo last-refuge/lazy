@@ -1,0 +1,23 @@
+{
+  "checkedOn": "2026-10-29",
+  "themes": [
+    "light",
+    "dark",
+    "system"
+  ],
+  "widths": [
+    320,
+    390,
+    768,
+    1360
+  ],
+  "localImages": "pass",
+  "localFonts": "pass",
+  "linkedAssets": "pass (manifest and ZIP checked by packaging; historical exploration link is optional outside the repository)",
+  "themeControls": "pass",
+  "referenceControls": "pass",
+  "colorInteraction": "pass",
+  "horizontalOverflow": "none",
+  "pdfPages": 8,
+  "consoleErrors": []
+}

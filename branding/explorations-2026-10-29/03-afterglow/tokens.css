@@ -1,0 +1,33 @@
+/* Lazy / Afterglow. Copy alongside ../fonts.css or adjust font URLs. */
+@import url("../fonts.css");
+:root {
+  --lazy-brand: #C1B8F4;
+  --lazy-on-brand: #19182C;
+  --lazy-page: #19182C;
+  --lazy-surface: #252339;
+  --lazy-text: #F2F0FA;
+  --lazy-text-muted: #C4BFD6;
+  --lazy-accent: #F3B69F;
+  --lazy-on-accent: #19182C;
+  --lazy-support: #39344F;
+  --lazy-border: #57506D;
+  --lazy-focus: #F3B69F;
+  --lazy-font-display: "Sora", sans-serif;
+  --lazy-font-body: "IBM Plex Sans", sans-serif;
+  --lazy-space-unit: 4px;
+  --lazy-radius: 16px;
+  --lazy-button-radius: 12px;
+  --lazy-content-width: 1200px;
+  --lazy-transition: 160ms ease-out;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --lazy-page: #19182C;
+    --lazy-surface: #252339;
+    --lazy-text: #F2F0FA;
+    --lazy-text-muted: #C4BFD6;
+    --lazy-brand: #C1B8F4;
+    --lazy-on-brand: #19182C;
+  }
+}
+@media (prefers-reduced-motion: reduce) { :root { --lazy-transition: 0ms; } }
