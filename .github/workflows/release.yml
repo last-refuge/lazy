@@ -87,6 +87,15 @@ jobs:
         run: |
           cargo build --profile dist -p lazy-desktop --features runtime-shaders --target aarch64-apple-darwin
           cargo build --profile dist -p lazy-desktop --features runtime-shaders --target x86_64-apple-darwin
+      # Two release builds of GPUI fill the runner's disk ("No space left on device" when the disk
+      # image is made), so keep the two binaries and drop the rest of the build.
+      - name: Keep the binaries, free the disk
+        run: |
+          mkdir -p bin
+          cp target/aarch64-apple-darwin/dist/lazy-desktop bin/lazy-aarch64
+          cp target/x86_64-apple-darwin/dist/lazy-desktop bin/lazy-x86_64
+          rm -rf target "$HOME/.cargo/registry" "$HOME/.cargo/git"
+          df -h /
       - name: Import the signing certificate (only if the secrets are set)
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -110,10 +119,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          packaging/macos/build-macos.sh \
-            target/aarch64-apple-darwin/dist/lazy-desktop \
-            target/x86_64-apple-darwin/dist/lazy-desktop \
-            "$VERSION" out
+          packaging/macos/build-macos.sh bin/lazy-aarch64 bin/lazy-x86_64 "$VERSION" out
       - uses: actions/upload-artifact@v4
         with:
           name: macos
