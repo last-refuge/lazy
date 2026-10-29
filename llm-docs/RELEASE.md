@@ -4,7 +4,7 @@ The desktop client ships as installers for Linux, macOS, and Windows, built by a
 by hand (like CI, it never runs on a push): **Actions, release, Run workflow**, or
 
 ```sh
-gh workflow run release -f version=0.1.0-dogfood.1 -f publish=true
+gh workflow run release -f version=0.5.0 -f publish=true
 ```
 
 `version` is stamped into the apps (Help, Diagnostics shows it) and into the file names;
@@ -33,7 +33,9 @@ also settable with `LAZY_SERVER_URL`.
 ## Not signed: what people will see
 
 - **macOS:** the app is signed *ad hoc*, which is enough to run but not to pass Gatekeeper without
-  asking. After downloading, **right-click Lazy, choose Open, then Open** (once). Or, in a terminal:
+  asking. After downloading, open Lazy once; if macOS says it cannot verify it, open **System
+  Settings, Privacy & Security** and choose **Open Anyway** (macOS 15 removed the older route; on
+  macOS 14 or earlier, **right-click Lazy, choose Open, then Open**). Or, in a terminal:
   `xattr -dr com.apple.quarantine /Applications/Lazy.app`.
 - **Windows:** SmartScreen says "Windows protected your PC": **More info, Run anyway**.
 - **Linux:** nothing.

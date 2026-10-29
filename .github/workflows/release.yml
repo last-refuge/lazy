@@ -2,13 +2,13 @@ name: release
 
 # Manual only, like ci: builds the desktop client for Linux, macOS, and Windows with their installers
 # (the server image has its own workflow, server). Run it from the Actions tab (release, Run workflow) or with
-#   gh workflow run release -f version=0.1.0-dogfood.1 -f publish=true
+#   gh workflow run release -f version=0.5.0 -f publish=true
 # The files are not code-signed unless the macOS signing secrets below are set (see llm-docs/RELEASE.md).
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to stamp into the apps and the file names, e.g. 0.1.0-dogfood.1"
+        description: "Version to stamp into the apps and the file names, e.g. 0.5.0 or 0.5.1-rc.1"
         required: true
         type: string
       publish:
@@ -167,4 +167,4 @@ jobs:
           gh release create "v$VERSION" files/* \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --prerelease \
             --title "Lazy $VERSION" \
-            --notes "Lazy $VERSION. Linux: the .deb or the tarball (run ./install.sh). macOS: open the .dmg, drag Lazy to Applications, and on first start right-click it and choose Open (the app is not notarized unless signing secrets were set). Windows: run the Setup .exe (SmartScreen says unknown publisher: More info, Run anyway) or unpack the .zip. Choose your server on the sign-in screen. SHA256SUMS lists the checksums."
+            --notes "Lazy $VERSION. Linux: the .deb or the tarball (run ./install.sh). macOS: open the .dmg, drag Lazy to Applications, and if macOS says it cannot verify Lazy, choose Open Anyway in System Settings, Privacy and Security (on macOS 14 or earlier, right-click it and choose Open); the app is not notarized unless signing secrets were set. Windows: run the Setup .exe (SmartScreen says unknown publisher: More info, Run anyway) or unpack the .zip. Choose your server on the sign-in screen. SHA256SUMS lists the checksums."
