@@ -23,7 +23,13 @@ async fn resume(app: &App, who: &Account, cursor: EventSeq) -> (Ws, Vec<EventEnv
 
 fn about(event: &Event) -> Option<ConversationId> {
     match event {
-        Event::MessageCreated { message, .. } => Some(message.conversation_id),
+        Event::MessageCreated { message, .. } | Event::MessageEdited { message, .. } => {
+            Some(message.conversation_id)
+        }
+        Event::MessageDeleted { message, .. } => Some(message.conversation_id),
+        Event::ReactionsChanged {
+            conversation_id, ..
+        } => Some(*conversation_id),
         Event::ConversationCreated { conversation }
         | Event::ConversationUpdated { conversation }
         | Event::MemberAdded { conversation, .. } => Some(conversation.id),
@@ -31,7 +37,22 @@ fn about(event: &Event) -> Option<ConversationId> {
             conversation_id, ..
         } => Some(*conversation_id),
         Event::UserStateChanged { state } => Some(state.conversation_id),
-        Event::MemberJoined { .. } => None,
+        Event::ThreadChanged {
+            conversation_id, ..
+        } => Some(*conversation_id),
+        Event::ThreadStateChanged { state } => Some(state.conversation_id),
+        Event::MemberJoined { .. }
+        | Event::GroupChanged { .. }
+        | Event::GroupDeleted { .. }
+        | Event::EmojiChanged { .. }
+        | Event::NotificationSettingsChanged { .. }
+        | Event::ConversationNotificationPrefsChanged { .. }
+        | Event::UserStatusChanged { .. }
+        | Event::SavedChanged { .. }
+        | Event::WorkspaceUpdated { .. }
+        | Event::MemberRoleChanged { .. }
+        | Event::MemberDeactivated { .. }
+        | Event::UserProfileChanged { .. } => None,
     }
 }
 

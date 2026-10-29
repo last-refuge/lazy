@@ -266,7 +266,13 @@ impl FileStore {
         };
         match serde_json::from_slice(&plaintext) {
             Ok(value) => Loaded::Value(value),
-            Err(error) => self.quarantine(kind, &format!("its contents are invalid ({error})")),
+            Err(error) => self.quarantine(
+                kind,
+                &format!(
+                    "its contents are invalid ({})",
+                    crate::api::describe_json(&error)
+                ),
+            ),
         }
     }
 

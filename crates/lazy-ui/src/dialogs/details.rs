@@ -9,6 +9,7 @@ use gpui::{
 use lazy_client_core::{ActionKind, ActionState, Input};
 use lazy_domain::{ChannelVisibility, ConversationId, ConversationKind, UserId};
 
+use super::integrations::{IntegrationsEvent, IntegrationsSection};
 use super::{any_composing, multiline_field, single_line_field};
 use crate::app_model::{AppEvent, AppModel};
 use crate::form::{self, ButtonKind};
@@ -26,6 +27,8 @@ pub enum DetailsRequest {
         from: ConversationId,
         prefill: Vec<UserId>,
     },
+    /// Show a person's profile (a name in the member list).
+    OpenProfile(UserId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +45,8 @@ pub struct DetailsDialog {
     name: Entity<TextInput>,
     topic: Entity<TextInput>,
     description: Entity<TextInput>,
+    /// Incoming webhooks, for admins and owners of a channel.
+    integrations: Option<Entity<IntegrationsSection>>,
     confirming: Option<Confirm>,
     /// The action whose completion closes the dialog, and whether it has started.
     waiting: Option<(ActionKind, bool)>,
@@ -52,6 +57,8 @@ pub struct DetailsDialog {
     close_focus: FocusHandle,
     confirm_cancel_focus: FocusHandle,
     confirm_ok_focus: FocusHandle,
+    /// One stop per person in the member list.
+    member_focus: std::collections::HashMap<UserId, FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -84,6 +91,11 @@ impl DetailsDialog {
             });
         }
         let mut subscriptions = Vec::new();
+        subscriptions.push(
+            cx.observe(&crate::image_store::ImageStore::global(cx), |_, _, cx| {
+                cx.notify()
+            }),
+        );
         for input in [&name, &topic] {
             subscriptions.push(cx.subscribe_in(
                 input,
@@ -91,6 +103,9 @@ impl DetailsDialog {
                 |this, _input, event: &TextInputEvent, window, cx| match event {
                     TextInputEvent::Submit => this.save(cx),
                     TextInputEvent::Tab { backwards } => this.trap.tab(*backwards, window, cx),
+                    TextInputEvent::UpWhenEmpty
+                    | TextInputEvent::PasteAttachments
+                    | TextInputEvent::Suggestion(_) => {}
                     TextInputEvent::Changed => cx.notify(),
                 },
             ));
@@ -100,7 +115,10 @@ impl DetailsDialog {
             |this, _input, event: &TextInputEvent, cx| match event {
                 TextInputEvent::Submit => this.save(cx),
                 TextInputEvent::Changed => cx.notify(),
-                TextInputEvent::Tab { .. } => {}
+                TextInputEvent::Tab { .. }
+                | TextInputEvent::UpWhenEmpty
+                | TextInputEvent::PasteAttachments
+                | TextInputEvent::Suggestion(_) => {}
             },
         ));
         subscriptions.push(cx.subscribe_in(
@@ -132,6 +150,20 @@ impl DetailsDialog {
             window,
             cx,
         );
+        let integrations =
+            (is_channel && model.read(cx).core().can_manage_webhooks(id)).then(|| {
+                let section = cx.new(|cx| IntegrationsSection::new(model.clone(), id, window, cx));
+                subscriptions.push(cx.subscribe_in(
+                    &section,
+                    window,
+                    |this, _section, event: &IntegrationsEvent, window, cx| match event {
+                        IntegrationsEvent::Tab { backwards } => {
+                            this.trap.tab(*backwards, window, cx)
+                        }
+                    },
+                ));
+                section
+            });
         Self {
             model,
             id,
@@ -139,6 +171,7 @@ impl DetailsDialog {
             name,
             topic,
             description,
+            integrations,
             confirming: None,
             waiting: None,
             save_focus: cx.focus_handle().tab_stop(true),
@@ -148,6 +181,7 @@ impl DetailsDialog {
             close_focus,
             confirm_cancel_focus: cx.focus_handle().tab_stop(true),
             confirm_ok_focus: cx.focus_handle().tab_stop(true),
+            member_focus: std::collections::HashMap::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -244,6 +278,25 @@ impl DetailsDialog {
             cx.notify();
             return;
         }
+        // Escape steps back out of the integrations section's own views first.
+        if let Some(section) = self.integrations.clone()
+            && section.update(cx, |section, cx| section.back(window, cx))
+        {
+            return;
+        }
+        self.finish(window, cx);
+    }
+
+    /// The Close button: closes the dialog from wherever it is, unless an input method is
+    /// composing.
+    fn close_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let section_composing = self
+            .integrations
+            .as_ref()
+            .is_some_and(|section| section.read(cx).composing(cx));
+        if section_composing || any_composing(&[&self.name, &self.topic, &self.description], cx) {
+            return;
+        }
         self.finish(window, cx);
     }
 
@@ -259,8 +312,184 @@ impl DetailsDialog {
                 model.dispatch(Input::DismissAction(kind), cx);
             }
         });
+        // A new webhook's address must not outlive the view that shows it.
+        if let Some(section) = self.integrations.clone() {
+            section.update(cx, |section, cx| section.close(cx));
+        }
         self.trap.close(window, cx);
         cx.emit(DialogEvent::Dismiss);
+    }
+
+    /// The people of a conversation, each a button that opens their profile, with their status
+    /// beside the name. Long lists show the first few by name and say how many more there are.
+    fn member_list(
+        &mut self,
+        label: &'static str,
+        people: &[UserId],
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        const SHOWN: usize = 8;
+        let colors = theme.colors;
+        let this = cx.entity().downgrade();
+        let mut entries: Vec<(
+            UserId,
+            String,
+            String,
+            Option<crate::status_mark::StatusMark>,
+            bool,
+        )> = {
+            let core = self.model.read(cx).core();
+            people
+                .iter()
+                .map(|user| {
+                    let username = core
+                        .member(*user)
+                        .map(|member| format!("@{}", member.username))
+                        .unwrap_or_default();
+                    (
+                        *user,
+                        core.display_name(*user).to_owned(),
+                        username,
+                        crate::status_mark::StatusMark::lookup(core, *user),
+                        core.member(*user).is_some_and(|member| member.deactivated),
+                    )
+                })
+                .collect()
+        };
+        entries.sort_by_key(|(_, name, _, _, _)| name.to_lowercase());
+        let more = entries.len().saturating_sub(SHOWN);
+        entries.truncate(SHOWN);
+        // The pictures of the people listed, for the ones that have them.
+        crate::avatar_images::request_later(
+            &self.model,
+            entries.iter().map(|entry| entry.0).collect(),
+            cx,
+        );
+        let mut list = div()
+            .id(label)
+            .debug_selector(move || format!("details-{}", label.to_lowercase()))
+            .role(gpui::Role::List)
+            .aria_label(label)
+            .flex()
+            .flex_col()
+            .gap_0p5();
+        for (user, name, username, status, deactivated) in entries {
+            let focus = self
+                .member_focus
+                .entry(user)
+                .or_insert_with(|| cx.focus_handle().tab_stop(true))
+                .clone();
+            let open_to = this.clone();
+            let key_to = this.clone();
+            let selector = format!("details-member-{}", username.trim_start_matches('@'));
+            list = list.child(
+                div()
+                    .id(gpui::ElementId::Name(selector.clone().into()))
+                    .debug_selector(move || selector)
+                    .role(gpui::Role::Button)
+                    .aria_label(format!("View profile of {name}"))
+                    .track_focus(&focus)
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .rounded(theme.radii.small)
+                    .border_1()
+                    .border_color(gpui::transparent_black())
+                    .focus_visible(move |style| style.border_color(colors.focus_ring))
+                    .hover(move |style| style.bg(colors.surface_hover))
+                    .cursor_pointer()
+                    .on_key_down(move |event, window, cx| {
+                        if crate::keyboard::is_activation(event) {
+                            key_to
+                                .update(cx, |dialog, cx| {
+                                    dialog.request(DetailsRequest::OpenProfile(user), window, cx)
+                                })
+                                .ok();
+                            cx.stop_propagation();
+                        }
+                    })
+                    .on_click(move |_, window, cx| {
+                        open_to
+                            .update(cx, |dialog, cx| {
+                                dialog.request(DetailsRequest::OpenProfile(user), window, cx)
+                            })
+                            .ok();
+                    })
+                    .child(
+                        crate::avatar::Avatar::new(user.as_uuid().as_u128(), name.clone(), 24.)
+                            .text_size(theme.type_scale.small)
+                            .image(crate::avatar_images::image_of(
+                                self.model.read(cx).core(),
+                                crate::image_store::ImageStore::global(cx).read(cx),
+                                user,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(theme.type_scale.body)
+                            .text_color(if deactivated {
+                                colors.text_muted
+                            } else {
+                                colors.text
+                            })
+                            .child(name.clone()),
+                    )
+                    .children(deactivated.then(|| {
+                        div()
+                            .debug_selector({
+                                let username = username.trim_start_matches('@').to_owned();
+                                move || format!("details-deactivated-{username}")
+                            })
+                            .px_1p5()
+                            .rounded(theme.radii.small)
+                            .border_1()
+                            .border_color(colors.border_strong)
+                            .text_color(colors.text_muted)
+                            .text_size(theme.type_scale.small)
+                            .child(crate::states::DEACTIVATED)
+                    }))
+                    .children(status.as_ref().map(|mark| {
+                        crate::status_mark::view(
+                            gpui::ElementId::Name(format!("details-status-{username}").into()),
+                            format!("details-status-{}", username.trim_start_matches('@')),
+                            mark,
+                            theme.type_scale.body,
+                        )
+                    }))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(theme.type_scale.small)
+                            .text_color(colors.text_muted)
+                            .child(username),
+                    ),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_size(theme.type_scale.small)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(colors.text_muted)
+                    .child(label),
+            )
+            .child(list)
+            .children((more > 0).then(|| {
+                div()
+                    .text_size(theme.type_scale.small)
+                    .text_color(colors.text_faint)
+                    .child(format!("and {more} more. Find everyone in People."))
+            }))
+            .into_any_element()
     }
 
     /// Closes this dialog and asks the host to open another.
@@ -301,6 +530,14 @@ impl Render for DetailsDialog {
         };
         let title = core.conversation_title(id);
         let is_channel = conversation.kind == ConversationKind::Channel;
+        let can_manage_webhooks = core.can_manage_webhooks(id);
+        // While the integrations section is adding, showing an address, or confirming a delete, it
+        // has the dialog to itself: the rest would push what the person is doing below the fold in
+        // a short window, and the address must be in plain sight.
+        let compact = self
+            .integrations
+            .as_ref()
+            .is_some_and(|section| !section.read(cx).showing_list());
         let (can_rename, can_edit, can_add, can_leave, can_archive, can_unarchive) = (
             core.can_rename(id),
             core.can_edit_details(id),
@@ -476,7 +713,7 @@ impl Render for DetailsDialog {
                     .text_color(colors.text_muted)
                     .child(facts_line),
             );
-            if is_channel {
+            if is_channel && !compact {
                 body = body.child(if can_rename {
                     form::labeled_field(&theme, "Name", &self.name, None, None, window, cx)
                 } else {
@@ -505,10 +742,22 @@ impl Render for DetailsDialog {
                     )
                     .into_any_element()
                 });
-            } else {
-                body = body.child(readonly("People", participants.join(", ")));
+            } else if !is_channel {
+                let people = conversation.participants.clone();
+                body = body.child(self.member_list("People", &people, &theme, cx));
             }
-            body = body.children(error.clone().map(|e| {
+            if is_channel
+                && !compact
+                && let Some(members) = self
+                    .model
+                    .read(cx)
+                    .core()
+                    .conversation_members(id)
+                    .map(<[UserId]>::to_vec)
+            {
+                body = body.child(self.member_list("Members", &members, &theme, cx));
+            }
+            body = body.children(error.clone().filter(|_| !compact).map(|e| {
                 div()
                     .text_size(theme.type_scale.small)
                     .text_color(colors.danger)
@@ -613,7 +862,12 @@ impl Render for DetailsDialog {
             }
             let save_to = this.clone();
             let close_btn_to = this.clone();
-            body.child(actions)
+            body.when(!compact, |body| body.child(actions))
+                .children(
+                    self.integrations
+                        .clone()
+                        .filter(|_| is_channel && can_manage_webhooks),
+                )
                 .child(
                     div()
                         .flex()
@@ -628,11 +882,11 @@ impl Render for DetailsDialog {
                             &self.close_focus,
                             move |window, cx| {
                                 close_btn_to
-                                    .update(cx, |dialog, cx| dialog.dismiss(window, cx))
+                                    .update(cx, |dialog, cx| dialog.close_now(window, cx))
                                     .ok();
                             },
                         ))
-                        .when(is_channel && (can_rename || can_edit), |row| {
+                        .when(is_channel && (can_rename || can_edit) && !compact, |row| {
                             row.child(form::button(
                                 &theme,
                                 "details-save",

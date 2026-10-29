@@ -3,15 +3,44 @@
 //! They read the client core through [`crate::app_model::AppModel`] and dispatch its inputs; none
 //! performs I/O.
 
+mod add_workspace;
 mod browse;
 mod create_channel;
+mod custom_emoji;
+mod delete_message;
 mod details;
+mod diagnostics;
+mod groups;
+mod integrations;
+mod invitations;
 mod people;
+mod preferences;
+mod profile;
+mod quick_switcher;
+mod shortcuts;
+mod workspace_settings;
 
+pub use add_workspace::{AddWorkspaceDialog, Way};
 pub use browse::BrowseChannelsDialog;
 pub use create_channel::CreateChannelDialog;
+pub use custom_emoji::CustomEmojiDialog;
+pub use delete_message::DeleteMessageDialog;
 pub use details::{DetailsDialog, DetailsRequest};
+pub use diagnostics::{
+    DesktopInfo, DiagnosticsDialog, report_text, sanitize_server_url, set_desktop_info,
+};
+pub use groups::GroupsDialog;
+pub use integrations::{IntegrationsEvent, IntegrationsSection};
+pub use invitations::InvitationsDialog;
 pub use people::{PeopleDialog, PeopleMode};
+pub use preferences::PreferencesDialog;
+pub use profile::{ProfileDialog, ProfileRequest};
+pub use quick_switcher::{
+    QuickSwitcherChoice, QuickSwitcherDialog, QuickSwitcherRun,
+    bind_keys as bind_quick_switcher_keys,
+};
+pub use shortcuts::ShortcutsDialog;
+pub use workspace_settings::WorkspaceSettingsDialog;
 
 use gpui::{App, AppContext as _, Context, Entity};
 

@@ -133,6 +133,9 @@ async fn simultaneous_duplicates_commit_exactly_one_message(pool: PgPool) {
                 let body = SendMessageRequest {
                     operation_id: operation,
                     document: MessageDocument::from_plain_text("racing").unwrap(),
+                    thread_root: None,
+                    also_in_channel: false,
+                    attachment_ids: Vec::new(),
                 };
                 http.post(url)
                     .bearer_auth(token)
@@ -170,6 +173,9 @@ async fn a_lost_acknowledgment_is_recoverable_from_the_operation_status(pool: Pg
     let request = SendMessageRequest {
         operation_id: operation,
         document: MessageDocument::from_plain_text("did this arrive?").unwrap(),
+        thread_root: None,
+        also_in_channel: false,
+        attachment_ids: Vec::new(),
     };
     let committed = lazy_server::messages::send_message(&pool, ada.user.id, app.general, request)
         .await
@@ -388,6 +394,9 @@ async fn concurrent_senders_get_distinct_gapless_positions(pool: PgPool) {
                 let body = SendMessageRequest {
                     operation_id: OperationId::generate(),
                     document: MessageDocument::from_plain_text(&format!("{index}-{n}")).unwrap(),
+                    thread_root: None,
+                    also_in_channel: false,
+                    attachment_ids: Vec::new(),
                 };
                 let response = http
                     .post(url)

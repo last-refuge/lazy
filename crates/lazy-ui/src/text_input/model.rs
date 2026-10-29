@@ -230,6 +230,72 @@ impl EditorModel {
         self.replace_selection(text, EditKind::Paste)
     }
 
+    /// Replaces `range` with `text` as one undo step and puts the caret after it. Does nothing
+    /// while composing. Returns whether the text changed.
+    pub fn replace_range(&mut self, range: Range<usize>, text: &str) -> bool {
+        if self.is_composing() {
+            return false;
+        }
+        match self.replace(range, text, EditKind::Paste, None) {
+            Some(replaced) => {
+                self.selection = Selection::caret(snap_up(&self.text, replaced.inserted.end));
+                replaced.text_changed
+            }
+            None => false,
+        }
+    }
+
+    /// Wraps the selection in `open` and `close` as one undo step, or, if it is already wrapped
+    /// in exactly those, takes them off again. Whitespace at the edges of the selection stays
+    /// outside the markers, since formatting cannot begin or end at a space. With nothing
+    /// selected it inserts the pair and puts the caret between them. The text that was wrapped
+    /// stays selected. Does nothing while composing. Returns whether the text changed.
+    pub fn wrap_selection(&mut self, open: &str, close: &str) -> bool {
+        if self.is_composing() {
+            return false;
+        }
+        let range = self.selection.range();
+        let selected = self.text[range.clone()].to_owned();
+        let inner = selected.trim();
+        if inner.is_empty() {
+            // A caret, or only whitespace selected: an empty pair at the end of the selection.
+            let at = range.end;
+            let pair = format!("{open}{close}");
+            return match self.replace(at..at, &pair, EditKind::Paste, None) {
+                Some(replaced) => {
+                    let caret = (replaced.inserted.start + open.len()).min(replaced.inserted.end);
+                    self.selection = Selection::caret(snap_up(&self.text, caret));
+                    replaced.text_changed
+                }
+                None => false,
+            };
+        }
+        let start = range.start + (selected.len() - selected.trim_start().len());
+        let end = start + inner.len();
+        let wrapped = self.text[..start].ends_with(open) && self.text[end..].starts_with(close);
+        let (replace, with) = if wrapped {
+            (start - open.len()..end + close.len(), inner.to_owned())
+        } else {
+            (start..end, format!("{open}{inner}{close}"))
+        };
+        match self.replace(replace, &with, EditKind::Paste, None) {
+            Some(replaced) => {
+                let from = if wrapped {
+                    replaced.inserted.start
+                } else {
+                    replaced.inserted.start + open.len()
+                };
+                let to = (from + inner.len()).min(replaced.inserted.end);
+                self.selection = Selection {
+                    anchor: snap_up(&self.text, from),
+                    head: snap_up(&self.text, to),
+                };
+                replaced.text_changed
+            }
+            None => false,
+        }
+    }
+
     /// Deletes the selection as one undo step (used by cut).
     pub fn delete_selection(&mut self) -> bool {
         if self.is_composing() || self.selection.is_empty() {
@@ -729,6 +795,69 @@ mod tests {
         assert!(m.insert("bye"));
         assert_eq!(m.text(), "bye world");
         assert_eq!(m.selection(), Selection::caret(3));
+    }
+
+    #[test]
+    fn wrapping_a_selection_adds_markers_and_keeps_the_text_selected() {
+        let mut m = model("make it loud");
+        m.select(8, 12);
+        assert!(m.wrap_selection("*", "*"));
+        assert_eq!(m.text(), "make it *loud*");
+        assert_eq!(m.selected_text(), "loud");
+    }
+
+    #[test]
+    fn wrapping_again_takes_the_markers_off() {
+        let mut m = model("make it loud");
+        m.select(8, 12);
+        m.wrap_selection("_", "_");
+        assert!(m.wrap_selection("_", "_"));
+        assert_eq!(m.text(), "make it loud");
+        assert_eq!(m.selected_text(), "loud");
+    }
+
+    #[test]
+    fn spaces_at_the_edges_of_the_selection_stay_outside_the_markers() {
+        let mut m = model("a  big  b");
+        m.select(1, 8);
+        m.wrap_selection("~", "~");
+        assert_eq!(m.text(), "a  ~big~  b");
+        assert_eq!(m.selected_text(), "big");
+    }
+
+    #[test]
+    fn with_no_selection_an_empty_pair_is_inserted_around_the_caret() {
+        let mut m = model("ab");
+        m.move_to(1, false);
+        assert!(m.wrap_selection("*", "*"));
+        assert_eq!(m.text(), "a**b");
+        assert_eq!(m.selection(), Selection::caret(2));
+        m.insert("x");
+        assert_eq!(m.text(), "a*x*b");
+    }
+
+    #[test]
+    fn wrapping_is_one_undo_step_and_never_runs_during_composition() {
+        let mut m = model("word");
+        m.select(0, 4);
+        m.wrap_selection("*", "*");
+        assert!(m.undo());
+        assert_eq!(m.text(), "word");
+
+        let mut composing = model("");
+        composing.replace_and_mark_utf16(None, "か", None);
+        assert!(composing.is_composing());
+        assert!(!composing.wrap_selection("*", "*"));
+        assert_eq!(composing.text(), "か");
+    }
+
+    #[test]
+    fn wrapping_respects_the_length_limit() {
+        let mut m = EditorModel::new(6, false);
+        m.set_text("abcde");
+        m.select(0, 5);
+        m.wrap_selection("*", "*");
+        assert!(m.len() <= 6);
     }
 
     #[test]

@@ -26,8 +26,9 @@ use lazy_domain::{
     ParticipantSet, UserId, WorkspaceId, WorkspaceRole,
 };
 use lazy_protocol::{
-    AddMembersRequest, BrowseChannelsResponse, BrowsedChannel, Conversation, ConversationUserState,
-    CreateChannelRequest, ErrorCode, Event, OpenConversationRequest, UpdateConversationRequest,
+    AddMembersRequest, BrowseChannelsQuery, BrowseChannelsResponse, BrowsedChannel, ChannelSort,
+    Conversation, ConversationUserState, CreateChannelRequest, ErrorCode, Event,
+    OpenConversationRequest, UpdateConversationRequest,
 };
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -41,8 +42,6 @@ use crate::receipts::{self, ReceiptKind, ReceiptTarget};
 
 /// Most people one `add members` request may name.
 const MAX_ADD_USERS: usize = 100;
-/// Most channels the directory returns.
-const MAX_BROWSE: i64 = 1000;
 
 /// The columns of a conversation, selected under the alias `c`.
 macro_rules! conversation_columns {
@@ -134,8 +133,9 @@ pub async fn load(
         conversation_columns!(),
         ", wm.role, (cm.user_id IS NOT NULL) AS is_member \
          FROM conversations c \
-         LEFT JOIN workspace_members wm ON wm.workspace_id = c.workspace_id AND wm.user_id = $1 \
-         LEFT JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1 \
+         LEFT JOIN workspace_members wm ON wm.workspace_id = c.workspace_id AND wm.user_id = $1 AND ",
+        crate::access::active_member!("wm"),
+        " LEFT JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1 \
          WHERE c.id = $2"
     ))
     .bind(actor.as_uuid())
@@ -263,6 +263,55 @@ pub async fn conversation_dto(
     row.into_conversation(participants)
 }
 
+/// The conversations with these ids, as everyone sees them, with the participants of direct and
+/// group conversations, in two queries for the whole set. Ids that do not exist are absent.
+pub(crate) async fn conversations_by_ids(
+    conn: &mut PgConnection,
+    ids: &[Uuid],
+) -> Result<HashMap<Uuid, Conversation>, AppError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<ConversationRow> = sqlx::query_as(concat!(
+        "SELECT ",
+        conversation_columns!(),
+        " FROM conversations c WHERE c.id = ANY($1)"
+    ))
+    .bind(ids)
+    .fetch_all(&mut *conn)
+    .await?;
+    let people_ids: Vec<Uuid> = rows
+        .iter()
+        .filter(|row| row.kind != "channel")
+        .map(|row| row.id)
+        .collect();
+    let mut participants: HashMap<Uuid, Vec<UserId>> = HashMap::new();
+    if !people_ids.is_empty() {
+        let pairs: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT conversation_id, user_id FROM conversation_members WHERE conversation_id = ANY($1)",
+        )
+        .bind(&people_ids)
+        .fetch_all(&mut *conn)
+        .await?;
+        for (conversation, member) in pairs {
+            participants
+                .entry(conversation)
+                .or_default()
+                .push(UserId::from_uuid(member));
+        }
+        for members in participants.values_mut() {
+            members.sort();
+        }
+    }
+    let mut found = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let id = row.id;
+        let people = participants.remove(&id).unwrap_or_default();
+        found.insert(id, row.into_conversation(people)?);
+    }
+    Ok(found)
+}
+
 /// Conversations (by id) of one workspace that `user` is a member of, with their state. Used by
 /// bootstrap; the caller supplies the connection so it reads from its snapshot.
 pub async fn member_conversations(
@@ -330,7 +379,7 @@ pub async fn member_conversations(
             // the planner picks an index range scan. A single correlated subquery would have to
             // guess the position and chooses a scan of the whole table instead.
             unread_count: unread_count(conn, user, id, last_read).await?,
-            mention_count: 0,
+            mention_count: mention_count(conn, user, id, last_read).await?,
         });
         let people = participants
             .remove(&row.conversation.id)
@@ -344,7 +393,10 @@ fn seq_from(value: i64) -> Result<EventSeq, AppError> {
     EventSeq::new(value).ok_or_else(|| AppError::internal("stored position is negative"))
 }
 
-/// Messages from other people after `last_read`.
+/// Messages from other people after `last_read` that the conversation's history lists (top-level
+/// messages and replies sent also to the channel), leaving out deleted ones. A reply that stayed in
+/// its thread is counted by the thread, and a deleted root that remains as a tombstone never counts.
+/// Index-only on the partial `messages_history_idx`.
 async fn unread_count(
     conn: &mut PgConnection,
     user: UserId,
@@ -352,7 +404,40 @@ async fn unread_count(
     last_read: i64,
 ) -> Result<u32, AppError> {
     let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM messages WHERE conversation_id = $1 AND seq > $2 AND author_id <> $3",
+        "SELECT count(*) FROM messages \
+         WHERE conversation_id = $1 AND seq > $2 AND author_id <> $3 AND listed AND NOT deleted",
+    )
+    .bind(conversation.as_uuid())
+    .bind(last_read)
+    .bind(user.as_uuid())
+    .fetch_one(conn)
+    .await?;
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
+/// Unread messages that mention `user`: from someone else, after `last_read`, not deleted, and
+/// either naming them (directly or through a group) or using `@channel`.
+///
+/// Two index range scans, merged so that a message which both names the person and uses
+/// `@channel` counts once: `message_mentions_user_idx` for the people a message named, and the
+/// partial index `messages_channel_mentions_idx` for `@channel` messages. Neither reads the
+/// history, only the unread messages that mention anyone. Deleting a message removes its rows and
+/// clears its flag, so a deleted message is in neither.
+async fn mention_count(
+    conn: &mut PgConnection,
+    user: UserId,
+    conversation: ConversationId,
+    last_read: i64,
+) -> Result<u32, AppError> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ( \
+             SELECT message_id AS id FROM message_mentions \
+             WHERE user_id = $3 AND conversation_id = $1 AND seq > $2 AND listed \
+           UNION \
+             SELECT id FROM messages \
+             WHERE conversation_id = $1 AND seq > $2 AND mentions_channel AND NOT deleted AND listed \
+               AND author_id <> $3 \
+         ) mentioned",
     )
     .bind(conversation.as_uuid())
     .bind(last_read)
@@ -383,37 +468,72 @@ async fn user_state(
         favorite,
         last_read: seq_from(last_read)?,
         unread_count: unread_count(conn, user, conversation, last_read).await?,
-        mention_count: 0,
+        mention_count: mention_count(conn, user, conversation, last_read).await?,
     }))
 }
 
-/// The public channels of a workspace, ordered by name, with whether the caller has joined each.
+/// The channel directory: the public channels of a workspace, one page, with whether the caller has
+/// joined each.
+///
+/// `query` keeps channels whose name, topic or description contains the text, case-insensitively
+/// and literally (`strpos(lower(..), lower($query))`, so `%`, `_` and `\` are ordinary characters);
+/// `joined` keeps only joined or only not joined channels; archived channels are left out unless
+/// `include_archived`; `sort` is by name or by most members first, ties by name and then id, so a
+/// page never repeats or skips a channel. A private conversation is never listed. `limit` is
+/// clamped to `1..=100` (default 50); an `offset` over 100,000, or a query over 100 characters, is
+/// `invalid_request`.
 pub async fn browse_channels(
     pool: &PgPool,
     actor: UserId,
     workspace_id: WorkspaceId,
+    query: BrowseChannelsQuery,
 ) -> Result<BrowseChannelsResponse, AppError> {
     require_workspace_member(pool, workspace_id, actor).await?;
+    let (text, offset, limit) =
+        crate::discovery::directory_paging(query.query.as_deref(), query.offset, query.limit)?;
     #[derive(sqlx::FromRow)]
     struct Row {
         #[sqlx(flatten)]
         conversation: ConversationRow,
         joined: bool,
     }
-    let rows: Vec<Row> = sqlx::query_as(concat!(
-        "SELECT ",
-        conversation_columns!(),
-        ", (cm.user_id IS NOT NULL) AS joined \
-         FROM conversations c \
-         LEFT JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1 \
-         WHERE c.workspace_id = $2 AND c.kind = 'channel' AND c.visibility = 'public' \
-         ORDER BY c.name LIMIT $3"
-    ))
-    .bind(actor.as_uuid())
-    .bind(workspace_id.as_uuid())
-    .bind(MAX_BROWSE)
-    .fetch_all(pool)
-    .await?;
+    // Two literal statements that differ only in the order, never built from input.
+    macro_rules! directory_sql {
+        ($order:literal) => {
+            concat!(
+                "SELECT ",
+                conversation_columns!(),
+                ", (cm.user_id IS NOT NULL) AS joined \
+                 FROM conversations c \
+                 LEFT JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1 \
+                 WHERE c.workspace_id = $2 AND c.kind = 'channel' AND c.visibility = 'public' \
+                   AND ($3 OR NOT c.archived) \
+                   AND ($4::text IS NULL OR strpos(lower(c.name), lower($4)) > 0 \
+                        OR strpos(lower(COALESCE(c.topic, '')), lower($4)) > 0 \
+                        OR strpos(lower(COALESCE(c.description, '')), lower($4)) > 0) \
+                   AND ($5::boolean IS NULL OR (cm.user_id IS NOT NULL) = $5) ",
+                $order,
+                " OFFSET $6 LIMIT $7"
+            )
+        };
+    }
+    let statement = match query.sort.unwrap_or_default() {
+        ChannelSort::Name => directory_sql!("ORDER BY c.name, c.id"),
+        ChannelSort::Members => directory_sql!("ORDER BY c.member_count DESC, c.name, c.id"),
+    };
+    let mut rows: Vec<Row> = sqlx::query_as(statement)
+        .persistent(false)
+        .bind(actor.as_uuid())
+        .bind(workspace_id.as_uuid())
+        .bind(query.include_archived.unwrap_or(false))
+        .bind(text)
+        .bind(query.joined)
+        .bind(offset)
+        .bind(limit as i64 + 1)
+        .fetch_all(pool)
+        .await?;
+    let has_more = rows.len() > limit;
+    rows.truncate(limit);
     let channels = rows
         .into_iter()
         .map(|row| {
@@ -423,7 +543,7 @@ pub async fn browse_channels(
             })
         })
         .collect::<Result<Vec<_>, AppError>>()?;
-    Ok(BrowseChannelsResponse { channels })
+    Ok(BrowseChannelsResponse { channels, has_more })
 }
 
 // --- Membership primitives ------------------------------------------------------------------
@@ -500,6 +620,20 @@ async fn remove_member(
         .bind(user.as_uuid())
         .execute(&mut *conn)
         .await?;
+        // Their threads there go with it: rejoining starts fresh, like the conversation's state.
+        sqlx::query("DELETE FROM thread_user_state WHERE conversation_id = $1 AND user_id = $2")
+            .bind(conversation.as_uuid())
+            .bind(user.as_uuid())
+            .execute(&mut *conn)
+            .await?;
+        // So does their notification preference for it (rejoining starts from the defaults).
+        sqlx::query(
+            "DELETE FROM conversation_notification_prefs WHERE conversation_id = $1 AND user_id = $2",
+        )
+        .bind(conversation.as_uuid())
+        .bind(user.as_uuid())
+        .execute(&mut *conn)
+        .await?;
         sqlx::query("UPDATE conversations SET member_count = member_count - 1 WHERE id = $1")
             .bind(conversation.as_uuid())
             .execute(conn)
@@ -550,7 +684,17 @@ pub async fn create_channel(
     workspace_id: WorkspaceId,
     request: CreateChannelRequest,
 ) -> Result<Conversation, AppError> {
-    require_workspace_member(pool, workspace_id, actor).await?;
+    let role = require_workspace_member(pool, workspace_id, actor).await?;
+    // The workspace's policy on who may create channels (direct and group conversations are not
+    // channels and are unaffected).
+    let settings = crate::admin::load_workspace(&mut *pool.acquire().await?, workspace_id)
+        .await?
+        .settings;
+    if !settings.channel_creation.allows(role) {
+        return Err(AppError::forbidden(
+            "only admins and owners can create channels in this workspace",
+        ));
+    }
     let topic = optional_text(request.topic.as_deref(), topic_is_valid, "topic")?;
     let description = optional_text(
         request.description.as_deref(),
@@ -647,16 +791,19 @@ pub async fn open_conversation(
         .iter()
         .map(|user| user.as_uuid())
         .collect();
-    let in_workspace: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM workspace_members WHERE workspace_id = $1 AND user_id = ANY($2)",
-    )
+    // People only: an integration's bot is nobody to message.
+    let in_workspace: i64 = sqlx::query_scalar(concat!(
+        "SELECT count(*) FROM workspace_members wm JOIN users u ON u.id = wm.user_id \
+             WHERE wm.workspace_id = $1 AND wm.user_id = ANY($2) AND NOT u.is_bot AND ",
+        crate::access::active_member!("wm")
+    ))
     .bind(workspace_id.as_uuid())
     .bind(&everyone)
     .fetch_one(pool)
     .await?;
     if usize::try_from(in_workspace).ok() != Some(everyone.len()) {
         return Err(AppError::invalid(
-            "everyone in a conversation must belong to the workspace",
+            "everyone in a conversation must be a person in the workspace",
         ));
     }
 
@@ -890,6 +1037,16 @@ pub async fn remove_member_command(
     if !loaded.facts.can_remove_members() {
         return Err(forbidden("remove people from this conversation"));
     }
+    let is_bot: bool =
+        sqlx::query_scalar("SELECT COALESCE((SELECT is_bot FROM users WHERE id = $1), false)")
+            .bind(target.as_uuid())
+            .fetch_one(&mut *tx)
+            .await?;
+    if is_bot {
+        return Err(forbidden(
+            "remove an integration from a conversation; delete its webhook instead",
+        ));
+    }
     if remove_and_announce(&mut tx, &loaded, target).await? {
         tx.commit().await?;
     }
@@ -898,7 +1055,7 @@ pub async fn remove_member_command(
 
 /// Removes `user`, and appends `MemberRemoved` (to the remaining members and to `user`) and a
 /// `ConversationUpdated` carrying the new member count. Returns whether `user` was a member.
-async fn remove_and_announce(
+pub(crate) async fn remove_and_announce(
     tx: &mut Transaction<'static, Postgres>,
     loaded: &Loaded,
     user: UserId,
@@ -958,16 +1115,19 @@ pub async fn add_members_command(
         }
     }
     let ids: Vec<Uuid> = wanted.iter().map(|user| user.as_uuid()).collect();
-    let in_workspace: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM workspace_members WHERE workspace_id = $1 AND user_id = ANY($2)",
-    )
+    // People only: a bot is in the one channel its webhook posts to, and nowhere else.
+    let in_workspace: i64 = sqlx::query_scalar(concat!(
+        "SELECT count(*) FROM workspace_members wm JOIN users u ON u.id = wm.user_id \
+             WHERE wm.workspace_id = $1 AND wm.user_id = ANY($2) AND NOT u.is_bot AND ",
+        crate::access::active_member!("wm")
+    ))
     .bind(loaded.workspace_id.as_uuid())
     .bind(&ids)
     .fetch_one(&mut *tx)
     .await?;
     if usize::try_from(in_workspace).ok() != Some(wanted.len()) {
         return Err(AppError::invalid(
-            "everyone added must belong to the workspace",
+            "everyone added must be a person in the workspace",
         ));
     }
 
@@ -1196,4 +1356,30 @@ pub async fn operation_conversation(
         )),
         None => Ok(None),
     }
+}
+
+/// Who is in a conversation, for choosing whom to mention or add. Anyone who can read the
+/// conversation may ask: its members for a private channel or a direct or group conversation, and
+/// any workspace member for a public channel. The answer is the conversation's members in the
+/// order they joined (ties by id); a client lists workspace members who are not among them itself.
+pub async fn conversation_members(
+    pool: &PgPool,
+    actor: UserId,
+    id: ConversationId,
+) -> Result<lazy_protocol::ConversationMembersResponse, AppError> {
+    let mut conn = pool.acquire().await?;
+    load(&mut conn, actor, id)
+        .await?
+        .filter(Loaded::can_read)
+        .ok_or_else(not_found)?;
+    let members: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM conversation_members WHERE conversation_id = $1 ORDER BY joined_at, user_id",
+    )
+    .bind(id.as_uuid())
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(lazy_protocol::ConversationMembersResponse {
+        conversation_id: id,
+        user_ids: members.into_iter().map(UserId::from_uuid).collect(),
+    })
 }

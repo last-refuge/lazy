@@ -17,7 +17,20 @@ path = "src/main.rs"
 gpui.workspace = true
 gpui_platform.workspace = true
 lazy-client-core.workspace = true
+lazy-domain.workspace = true
 lazy-client-runtime.workspace = true
 lazy-ui.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
+# The freedesktop notification service over D-Bus. zbus is already built for GPUI's Linux
+# platform (its notifications and portals use it), and talking to the service directly lets one
+# connection replace a notification by id, close one by id, and hear every action, which the
+# higher-level `notify-rust` (also already built) cannot do without a handle per notification.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"

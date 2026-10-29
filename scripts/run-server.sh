@@ -5,5 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export DATABASE_URL="$("$ROOT/scripts/dev-db.sh" start)"
 export RUST_LOG="${RUST_LOG:-lazy_server=info,tower_http=warn}"
+# Attachment files live next to the dev database data, outside the source tree's tracked files.
+export LAZY_ATTACHMENTS_DIR="${LAZY_ATTACHMENTS_DIR:-$ROOT/.dev/attachments}"
 cd "$ROOT"
 exec cargo run -p lazy-server --release -- serve "$@"

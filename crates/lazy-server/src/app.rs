@@ -1,6 +1,7 @@
 //! Shared state and the server entry points.
 
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::PgPool;
@@ -8,11 +9,16 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::config::{Config, RetentionPolicy, ServerOptions};
+use crate::attachments::Attachments;
+use crate::config::{
+    AttachmentBackend, AttachmentOptions, Config, IntegrationOptions, RetentionPolicy,
+    SearchOptions, ServerOptions,
+};
 use crate::crypto::PasswordService;
 use crate::dispatcher::Dispatcher;
 use crate::error::AppError;
-use crate::{db, http, pruner};
+use crate::webhooks::WebhookLimiter;
+use crate::{db, http, logging, pruner};
 
 /// Longest shutdown waits for open connections to finish after telling them to close.
 const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
@@ -28,6 +34,16 @@ pub struct AppState {
     pub shutdown: CancellationToken,
     /// Tracks WebSocket connection tasks so shutdown can wait for them.
     pub tasks: TaskTracker,
+    pub integrations: Arc<Integrations>,
+    pub attachments: Arc<Attachments>,
+    pub search: SearchOptions,
+}
+
+/// What integrations need at run time.
+pub struct Integrations {
+    /// Where webhook addresses start, without a trailing slash.
+    pub public_url: String,
+    pub limiter: WebhookLimiter,
 }
 
 /// Connects to Postgres, optionally migrates and seeds, and serves until `shutdown` completes.
@@ -38,10 +54,35 @@ pub async fn run(
     config: Config,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), AppError> {
+    // The effective configuration, without anything secret in it: the database as host, port and
+    // name only, the public address without credentials or path.
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        protocol_version = lazy_protocol::PROTOCOL_VERSION,
+        listen = %config.listen,
+        database = %logging::describe_database_url(&config.database_url),
+        migrate = config.migrate,
+        seed = config.seed,
+        open_registration = config.open_registration,
+        open_workspace_creation = config.open_workspace_creation,
+        event_retention_days = config.event_retention_days,
+        max_db_connections = config.max_db_connections,
+        max_attachment_bytes = config.max_attachment_bytes,
+        public_url = config.public_url.as_deref().map(logging::describe_url),
+        "starting"
+    );
     let pool = db::connect(&config.database_url, config.max_db_connections).await?;
     if config.migrate {
         db::migrate(&pool).await?;
     }
+    // Whatever applied them, the newest migration the database has.
+    let migration_version: Option<i64> =
+        sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+            .fetch_one(&pool)
+            .await
+            .ok()
+            .flatten();
+    tracing::info!(migration_version, "database ready");
     if config.seed
         && let Some(seeded) = db::seed_default_workspace(&pool).await?
     {
@@ -58,10 +99,29 @@ pub async fn run(
 
     let options = ServerOptions {
         open_registration: config.open_registration,
+        open_workspace_creation: config.open_workspace_creation,
         password_cost: config.password_cost,
         retention: RetentionPolicy::from_days(config.event_retention_days),
     };
-    let result = serve(listener, pool.clone(), options, shutdown).await;
+    let integrations = IntegrationOptions {
+        public_url: config.public_url,
+        ..IntegrationOptions::default()
+    };
+    let attachments = AttachmentOptions {
+        backend: AttachmentBackend::Directory(config.attachments_dir.clone()),
+        max_bytes: config.max_attachment_bytes,
+        ..AttachmentOptions::default()
+    };
+    tracing::info!(dir = %config.attachments_dir.display(), "attachments are stored here");
+    let result = serve_full(
+        listener,
+        pool.clone(),
+        options,
+        integrations,
+        attachments,
+        shutdown,
+    )
+    .await;
     pool.close().await;
     result
 }
@@ -73,6 +133,78 @@ pub async fn serve(
     options: ServerOptions,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), AppError> {
+    serve_with(
+        listener,
+        pool,
+        options,
+        IntegrationOptions::default(),
+        shutdown,
+    )
+    .await
+}
+
+/// [`serve`] with settings for integrations (the address webhooks are shown under, and how fast
+/// they may post).
+pub async fn serve_with(
+    listener: TcpListener,
+    pool: PgPool,
+    options: ServerOptions,
+    integrations: IntegrationOptions,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), AppError> {
+    serve_full(
+        listener,
+        pool,
+        options,
+        integrations,
+        AttachmentOptions::default(),
+        shutdown,
+    )
+    .await
+}
+
+/// [`serve_with`] with settings for attachments too (where their bytes are kept, the size limit,
+/// and the timings of the cleanup jobs). The default keeps them in memory.
+pub async fn serve_full(
+    listener: TcpListener,
+    pool: PgPool,
+    options: ServerOptions,
+    integrations: IntegrationOptions,
+    attachment_options: AttachmentOptions,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), AppError> {
+    serve_all(
+        listener,
+        pool,
+        options,
+        integrations,
+        attachment_options,
+        SearchOptions::default(),
+        shutdown,
+    )
+    .await
+}
+
+/// [`serve_full`] with settings for search too (its time limit and how many matches it ranks).
+pub async fn serve_all(
+    listener: TcpListener,
+    pool: PgPool,
+    options: ServerOptions,
+    integrations: IntegrationOptions,
+    attachment_options: AttachmentOptions,
+    search: SearchOptions,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), AppError> {
+    let attachments = Arc::new(Attachments::open(attachment_options)?);
+    let public_url = match integrations.public_url {
+        Some(url) => url.trim_end_matches('/').to_owned(),
+        None => format!(
+            "http://{}",
+            listener
+                .local_addr()
+                .map_err(|e| AppError::internal(format!("no local address: {e}")))?
+        ),
+    };
     let token = CancellationToken::new();
     let (dispatcher, dispatcher_tasks) = Dispatcher::spawn(pool.clone(), token.child_token());
     let pruner = pruner::spawn(pool.clone(), options.retention, token.child_token());
@@ -83,7 +215,15 @@ pub async fn serve(
         options,
         shutdown: token.clone(),
         tasks: TaskTracker::new(),
+        integrations: Arc::new(Integrations {
+            public_url,
+            limiter: WebhookLimiter::new(integrations.webhook_rate),
+        }),
+        attachments: Arc::clone(&attachments),
+        search,
     };
+    let attachment_jobs =
+        crate::attachments::spawn_jobs(state.pool.clone(), attachments, token.child_token());
     let tasks = state.tasks.clone();
     let app = http::router(state);
 
@@ -109,5 +249,6 @@ pub async fn serve(
     }
     dispatcher_tasks.join().await;
     pruner.join().await;
+    attachment_jobs.join().await;
     served.map_err(|e| AppError::internal(format!("server error: {e}")))
 }

@@ -58,8 +58,8 @@ Goal: a compiling, CI-checked workspace that launches a native desktop window an
 - [ ] 0.6 Product semantics and authorization specs
   - [ ] Define workspace roles and channel-level permissions
   - [X] Write the authorization matrix for mutations, history reads, search, attachments, realtime subscriptions, and huddle joins
-  - [ ] Specify thread notifications, deleted root messages, archived channels, private-channel invitations, and membership removal
-  - [ ] Specify concurrent message edits and unread behavior
+  - [X] Specify thread notifications, deleted root messages, archived channels, private-channel invitations, and membership removal
+  - [X] Specify concurrent message edits and unread behavior
   - [ ] Specify group-conversation history rules when participants are added
   - [ ] Turn each specification into a named test case to implement in Phases 1 and 2
 - [ ] 0.7 Design foundations
@@ -162,7 +162,7 @@ Goal: sign in, open one workspace and one channel, send durably, receive in real
 
 ---
 
-## [ ] Phase 2: Familiar chat
+## [X] Phase 2: Familiar chat
 
 Source: PLAN.md "Product semantics", "Experience and visual design".
 
@@ -172,11 +172,11 @@ Delivery slices. Each slice is built across server, client, and UI, verified, an
 
 - **2A Conversations and read state**: tasks 2.1, 2.6, 2.7, and the sidebar, dialogs, unread, and empty-state parts of 2.8. Decisions in `DECISIONS.md` D11.
 - **2B Message lifecycle and rich text**: task 2.2 (edit, delete, formatting, permalinks) and the edit-in-place and hover-action parts of 2.8.
-- **2C Emoji, reactions, mentions, groups**: tasks 2.4 and 2.5.
+- **2C Emoji, reactions, mentions, groups**: tasks 2.4 and 2.5, in two rounds. 2C-1 is emoji and reactions (decisions in `DECISIONS.md` D13); 2C-2 is mentions and user groups.
 - **2D Threads**: task 2.3 and the thread pane.
 - **2E Integration prototype and phase gate**: tasks 2.9, 2.10, 2.11.
 
-- [ ] 2.1 Conversation types
+- [X] 2.1 Conversation types
   - [X] Public and private channels with topics and descriptions
   - [X] Create, join, leave, and membership management
   - [X] Private-channel invitations
@@ -185,60 +185,64 @@ Delivery slices. Each slice is built across server, client, and UI, verified, an
   - [X] Direct messages
   - [X] Group messages; adding participants creates a new conversation following the specified history rules
   - [X] Membership removal applied to history, subscriptions, and replay
-  - [ ] Membership removal applied to threads (slice 2D)
-- [ ] 2.2 Message lifecycle
-  - [ ] Editing with a revision table; a newer revision stays pending while an older one persists
-  - [ ] Concurrent-edit handling as specified in Phase 0
-  - [ ] Deletion, including deleted root messages that have replies
-  - [ ] Permalinks
-  - [ ] Formatting, links, and code blocks in the message document, projection, and composer
-- [ ] 2.3 Threads
-  - [ ] Root and reply relationships; replies inherit conversation access
-  - [ ] Optional reference into the channel that points at the existing reply without duplicating content or identity
-  - [ ] Thread subscriptions and per-thread unread state
-  - [ ] Thread notification rules as specified
-- [ ] 2.4 Reactions and Unicode emoji
-  - [ ] Reactions table with uniqueness per user, message, and emoji, and events for add and remove
-  - [ ] Pinned Unicode emoji dataset with skin tones and search keywords
-  - [ ] Searchable picker
-  - [ ] Autocomplete in the composer
-  - [ ] Custom workspace emoji is delivered in Phase 3 because it depends on attachment storage
-- [ ] 2.5 Mentions and user groups
-  - [ ] User mentions with permission-aware autocomplete
-  - [ ] User groups with membership and group mentions
-  - [ ] Define channel-wide mention semantics
-- [ ] 2.6 Read state
+  - [X] Membership removal applied to threads (slice 2D)
+- [X] 2.2 Message lifecycle
+  - [X] Editing with a revision table; a newer revision stays pending while an older one persists
+  - [X] Concurrent-edit handling as specified in Phase 0
+  - [X] Deletion by the author or a moderator, as a tombstone with purged revisions
+  - [X] Deleted root messages that have replies (slice 2D)
+  - [X] Permalinks
+  - [X] Formatting, links, and code blocks in the message document, projection, and composer
+- [X] 2.3 Threads
+  - [X] Root and reply relationships; replies inherit conversation access
+  - [X] Optional reference into the channel that points at the existing reply without duplicating content or identity
+  - [X] Thread subscriptions and per-thread unread state
+  - [X] Thread following rules as specified (who follows, auto-follow, unfollow)
+  - Thread notification delivery is part of task 3.4 (thread inbox, desktop notifications)
+- [X] 2.4 Reactions and Unicode emoji
+  - [X] Reactions table with uniqueness per user, message, and emoji, and events for add and remove
+  - [X] Pinned Unicode emoji dataset with skin tones and search keywords
+  - [X] Searchable picker
+  - [X] Autocomplete in the composer
+  - Custom workspace emoji is delivered in Phase 3 (task 3.2) because it depends on attachment storage
+- [X] 2.5 Mentions and user groups
+  - [X] User mentions with permission-aware autocomplete
+  - [X] User groups with membership and group mentions
+  - [X] Define channel-wide mention semantics
+- [X] 2.6 Read state
   - [X] Read cursors per conversation
-  - [ ] Read cursors per thread (slice 2D)
+  - [X] Read cursors per thread (slice 2D)
   - [X] Unread markers
-  - [ ] Mention counts (slice 2C)
+  - [X] Mention counts (slice 2C)
   - [X] Cross-device read-state sync through events
-- [ ] 2.7 Authorization hardening
+- [X] 2.7 Authorization hardening
   - [X] Revoke membership while a client is disconnected; reconnect must not leak history or live events
   - [X] Verify private-channel access on replay and history
-  - [ ] Verify private-channel access on thread reads (slice 2D)
-  - [ ] Verify edits, deletions, and reaction changes during disconnection
-- [ ] 2.8 UI
+  - [X] Verify private-channel access on thread reads (slice 2D)
+  - [X] Verify edits and deletions during disconnection
+  - [X] Verify reaction changes during disconnection (slice 2C)
+- [X] 2.8 UI
   - [X] Sidebar sections for channels, direct messages, and favorites, with clear unread indicators
-  - [ ] Resizable thread pane; opening a thread preserves the channel's reading position
-  - [ ] Hover actions that are keyboard-accessible
-  - [ ] Edit in place, reaction chips, and the emoji picker
+  - [X] Resizable thread pane; opening a thread preserves the channel's reading position
+  - [X] Hover actions that are keyboard-accessible
+  - [X] Edit in place
+  - [X] Reaction chips and the emoji picker (slice 2C)
   - [X] Per-conversation draft and scroll restoration
-  - [ ] Per-conversation selection restoration
-  - [ ] Selection in a document model so copy includes offscreen messages
-  - [ ] Empty states and error messages that explain the next action
-- [ ] 2.9 Early integration prototype
-  - [ ] Incoming webhook posts into a channel through a bot identity on the normal message path
-  - [ ] Record what the prototype shows about bot identity, authorization, and rendering
-- [ ] 2.10 Tests
+  - [X] Per-conversation selection restoration
+  - [X] Selection in a document model so copy includes offscreen messages
+  - [X] Empty states and error messages that explain the next action
+- [X] 2.9 Early integration prototype
+  - [X] Incoming webhook posts into a channel through a bot identity on the normal message path
+  - [X] Record what the prototype shows about bot identity, authorization, and rendering
+- [X] 2.10 Tests
   - [X] Property tests for the unread state model
-  - [ ] Property tests for the thread state model (slice 2D)
-  - [ ] Unicode, emoji, editing, selection, and IME composition tests
-  - [ ] End-to-end tests for threads, reactions, and membership changes
-- [ ] 2.11 Phase gate
-  - [ ] Core semantics pass end-to-end tests
-  - [ ] Private access remains enforced during reconnect
-  - [ ] Verification outcomes recorded
+  - [X] Property tests for the thread state model (slice 2D)
+  - [X] Unicode, emoji, editing, selection, and IME composition tests
+  - [X] End-to-end tests for threads, reactions, and membership changes
+- [X] 2.11 Phase gate
+  - [X] Core semantics pass end-to-end tests
+  - [X] Private access remains enforced during reconnect
+  - [X] Verification outcomes recorded
 
 ---
 
@@ -249,49 +253,54 @@ Source: PLAN.md "Client persistence and search", "Product semantics" (Attention,
 Goal: dogfood users can do normal work without developer assistance.
 
 - [ ] 3.1 Attachments
-  - [ ] Decide the storage backend (see Open decisions)
-  - [ ] Metadata and access-relationship schema
-  - [ ] Authorized upload and download through Lazy
-  - [ ] Bounded upload sizes; validate declared types against content
-  - [ ] Cleanup job for abandoned uploads
-  - [ ] Image previews generated off executor threads
-  - [ ] Client UI: drag and drop, paste, progress, cancel, and retry
-- [ ] 3.2 Custom emoji
-  - [ ] Upload, naming rules, and validation
-  - [ ] Delivery in the picker, autocomplete, and reactions
-  - [ ] Admin management
-- [ ] 3.3 Search
-  - [ ] Full-text index over the plain-text projection
-  - [ ] Authorization filters applied at query time
-  - [ ] Snippets and attachment results that respect conversation access
-  - [ ] Reindex on edit and delete
-  - [ ] Review query plans on representative data
-  - [ ] Search UI with result navigation
+  - [X] Decide the storage backend (see Open decisions)
+  - [X] Metadata and access-relationship schema
+  - [X] Authorized upload and download through Lazy
+  - [X] Bounded upload sizes; validate declared types against content
+  - [X] Cleanup job for abandoned uploads
+  - [X] Image previews generated off executor threads
+  - [X] Client UI: drag and drop, paste, progress, cancel, and retry (built and tested with simulated events)
+  - [ ] Verify drag and drop, paste (images and file lists), and file dialogs on a real display (manual)
+- [X] 3.2 Custom emoji
+  - [X] Upload, naming rules, and validation
+  - [X] Delivery in the picker, autocomplete, and reactions
+  - [X] Admin management
+- [X] 3.3 Search
+  - [X] Full-text index over the plain-text projection
+  - [X] Authorization filters applied at query time
+  - [X] Snippets and attachment results that respect conversation access
+  - [X] Reindex on edit and delete
+  - [X] Review query plans on representative data
+  - [X] Search UI with result navigation
 - [ ] 3.4 Notifications and attention
-  - [ ] Decide where notification decisions are computed
-  - [ ] Notification preferences: per workspace, per conversation, mute
-  - [ ] Status and do not disturb
-  - [ ] Thread inbox
-  - [ ] Desktop notifications through a platform interface
-  - [ ] Badge counts
-- [ ] 3.5 Discovery
-  - [ ] Channel directory
-  - [ ] People directory and profiles
-  - [ ] Quick switcher
-  - [ ] Saved items
+  - [X] Decide where notification decisions are computed
+  - [X] Notification preferences: per workspace, per conversation, mute
+  - [X] Status and do not disturb
+  - [X] Thread inbox
+  - [X] Desktop notifications through a platform interface (built and tested with a fake notifier)
+  - [ ] Verify desktop notifications on a real display: a notification daemon, replace and withdraw, click to open, and the launcher count (manual)
+  - [X] Badge counts
+- [X] 3.5 Discovery
+  - [X] Channel directory
+  - [X] People directory and profiles
+  - [X] Quick switcher
+  - [X] Saved items
 - [ ] 3.6 Workspaces, administration, and settings
-  - [ ] Multi-workspace switching in the rail
-  - [ ] Invitations, deactivation, and role management
-  - [ ] Profile editing and avatars
-  - [ ] User settings: theme, notifications, reduced motion
-  - [ ] Workspace settings
+  - [X] Multi-workspace switching in the rail
+  - [X] Invitations, deactivation, and role management
+  - [X] Profile editing and avatars
+  - [X] User settings: theme, notifications, reduced motion
+  - [X] Workspace settings
+  - [ ] Verify on a real display: the avatar file dialog, input methods in the new text fields, and the rail with several real workspaces (manual)
 - [ ] 3.7 Commands and desktop integration
-  - [ ] One command system so buttons, shortcuts, and menus share availability rules
-  - [ ] Keyboard shortcuts and menus
-  - [ ] Window state restoration
-  - [ ] Dialogs with focus trapping, dismissal, and focus restoration that does not interfere with text editing or IME
+  - [X] One command system so buttons, shortcuts, and menus share availability rules
+  - [X] Keyboard shortcuts and menus
+  - [X] Window state restoration
+  - [X] Dialogs with focus trapping, dismissal, and focus restoration that does not interfere with text editing or IME
+  - [ ] Verify on a real display: the macOS menu bar, shortcuts on non-US keyboard layouts, window size and position restoration, and an input method inside dialogs (manual)
 - [ ] 3.8 Dogfooding
-  - [ ] Structured logging with no credentials or message content
+  - [X] Structured logging with no credentials or message content
+  - [X] Dogfood guide (`llm-docs/DOGFOOD.md`) and issue template (`.github/ISSUE_TEMPLATE/dogfood.md`)
   - [ ] Onboard dogfood users
   - [ ] Track and triage issues from real use
 - [ ] 3.9 Phase gate
@@ -532,8 +541,8 @@ Resolve each by the task that needs it and record the answer in `llm-docs/`.
 | Reference hardware, network conditions, and region | 0.10 |
 | Sign-in method | 1.1 |
 | Commit-safe ordering mechanism | 1.5 |
-| Channel-wide mention semantics | 2.5 |
-| Attachment storage backend | 3.1 |
+| Channel-wide mention semantics (decided, D14) | 2.5 |
+| Attachment storage backend (decided, D17) | 3.1 |
 | Where notification decisions are computed | 3.4 |
 | First provider integration (GitHub proposed) | 4.5 |
 | Video codecs | 5.7 |

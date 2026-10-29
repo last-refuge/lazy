@@ -96,6 +96,20 @@ pub struct TextInputOptions {
     /// highlight or remove a chip. Off by default, where Up and Down move the caret to the start
     /// or end.
     pub pass_through_navigation: bool,
+    /// Ctrl/Cmd+B, Ctrl/Cmd+I, and Ctrl/Cmd+Shift+X wrap the selection in the message syntax's
+    /// bold, italic, and strikethrough markers. Multiline inputs only. Off by default, so that
+    /// plain fields (names, topics, passwords) do not claim the keys.
+    pub formatting_shortcuts: bool,
+    /// Pressing Up in an empty multiline input emits [`TextInputEvent::UpWhenEmpty`] instead of
+    /// doing nothing, so a composer can offer to edit the previous message.
+    ///
+    /// [`TextInputEvent::UpWhenEmpty`]: super::TextInputEvent::UpWhenEmpty
+    pub report_up_when_empty: bool,
+    /// Pasting files or an image (and no text) emits [`TextInputEvent::PasteAttachments`] instead
+    /// of inserting anything, so a composer can attach them. Pasting text is unchanged.
+    ///
+    /// [`TextInputEvent::PasteAttachments`]: super::TextInputEvent::PasteAttachments
+    pub paste_attachments: bool,
 }
 
 impl TextInputOptions {
@@ -112,6 +126,9 @@ impl TextInputOptions {
             themed: true,
             enabled: true,
             pass_through_navigation: false,
+            formatting_shortcuts: false,
+            report_up_when_empty: false,
+            paste_attachments: false,
         }
     }
 
@@ -164,6 +181,21 @@ impl TextInputOptions {
 
     pub fn pass_through_navigation(mut self, pass_through: bool) -> Self {
         self.pass_through_navigation = pass_through;
+        self
+    }
+
+    pub fn formatting_shortcuts(mut self, enabled: bool) -> Self {
+        self.formatting_shortcuts = enabled;
+        self
+    }
+
+    pub fn report_up_when_empty(mut self, enabled: bool) -> Self {
+        self.report_up_when_empty = enabled;
+        self
+    }
+
+    pub fn paste_attachments(mut self, enabled: bool) -> Self {
+        self.paste_attachments = enabled;
         self
     }
 }

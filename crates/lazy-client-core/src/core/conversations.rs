@@ -10,8 +10,8 @@ use lazy_domain::{
     OperationId, ParticipantError, ParticipantSet, UserId, WorkspaceId, WorkspaceRole,
 };
 use lazy_protocol::{
-    AddMembersRequest, BrowsedChannel, Conversation, CreateChannelRequest, ErrorCode,
-    OpenConversationRequest, UpdateConversationRequest, User,
+    AddMembersRequest, BrowsedChannel, Conversation, CreateChannelRequest, CreateGroupRequest,
+    ErrorCode, OpenConversationRequest, UpdateConversationRequest, User,
 };
 
 use super::*;
@@ -28,10 +28,17 @@ pub(super) struct PendingCommand {
     stage: CommandStage,
 }
 
+impl PendingCommand {
+    pub(super) fn workspace(&self) -> WorkspaceId {
+        self.workspace
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum CommandRequest {
+pub(super) enum CommandRequest {
     Create(CreateChannelRequest),
     Open(OpenConversationRequest),
+    Group(CreateGroupRequest),
 }
 
 impl CommandRequest {
@@ -39,6 +46,7 @@ impl CommandRequest {
         match self {
             Self::Create(request) => request.operation_id,
             Self::Open(request) => request.operation_id,
+            Self::Group(request) => request.operation_id,
         }
     }
 
@@ -56,6 +64,11 @@ impl CommandRequest {
                 y.sort();
                 x == y
             }
+            (Self::Group(a), Self::Group(b)) => {
+                let mut b = b.clone();
+                b.operation_id = a.operation_id;
+                *a == b
+            }
             _ => false,
         }
     }
@@ -67,6 +80,10 @@ impl CommandRequest {
                 request: request.clone(),
             },
             Self::Open(request) => Effect::OpenConversation {
+                workspace,
+                request: request.clone(),
+            },
+            Self::Group(request) => Effect::CreateGroup {
                 workspace,
                 request: request.clone(),
             },
@@ -92,9 +109,15 @@ impl ClientCore {
     /// What to call a conversation: a channel's name (without `#`), or the other participants'
     /// display names, alphabetical, joined with commas. Empty for an unknown conversation.
     pub fn conversation_title(&self, id: ConversationId) -> String {
-        let Some(conversation) = self.conversation(id) else {
-            return String::new();
-        };
+        match self.conversation(id) {
+            Some(conversation) => self.title_of(conversation),
+            None => String::new(),
+        }
+    }
+
+    /// The title of a conversation the core may not hold (a search hit in a channel the person has
+    /// not joined): the channel's name, or the other people's names.
+    pub(super) fn title_of(&self, conversation: &Conversation) -> String {
         match conversation.kind {
             ConversationKind::Channel => conversation
                 .name
@@ -122,11 +145,20 @@ impl ClientCore {
         }
     }
 
-    /// Everyone in the workspace the client knows of, from the bootstrap and from people who
-    /// joined since, including the signed-in person. Ordered by display name (ties by id), so
-    /// the order is stable. For pickers; filter yourself out if you do not want to be listed.
+    /// The people of the workspace the client knows of, from the bootstrap and from people who
+    /// joined since, including the signed-in person. Apps (bots) and deactivated people are left
+    /// out: they are never offered as people to message or to put in a group, and `member(id)`
+    /// and `display_name(id)` still know their names for showing their messages. Ordered by display
+    /// name (ties by id), so the order is stable. For pickers; filter yourself out if you do
+    /// not want to be listed.
     pub fn members(&self) -> Vec<&User> {
-        let mut members: Vec<&User> = self.users.values().collect();
+        // Apps are not people, and a deactivated person cannot be reached: neither is offered to
+        // message or to put in a group.
+        let mut members: Vec<&User> = self
+            .users
+            .values()
+            .filter(|user| !user.is_bot && !user.deactivated)
+            .collect();
         members.sort_by(|a, b| {
             a.display_name
                 .as_str()
@@ -145,9 +177,13 @@ impl ClientCore {
 
     /// Unread messages across every conversation, for a badge in the window or dock.
     pub fn total_unread(&self) -> u32 {
-        self.user_states
-            .values()
-            .fold(0u32, |sum, state| sum.saturating_add(state.unread_count))
+        self.conversations.iter().fold(0u32, |sum, conversation| {
+            let unread = self
+                .user_states
+                .get(&conversation.id)
+                .map_or(0, |state| state.unread_count);
+            sum.saturating_add(unread)
+        })
     }
 
     /// Whether the window is considered focused. Assumed true until the UI says otherwise.
@@ -216,11 +252,6 @@ impl ClientCore {
         newest.max(read).unwrap_or(EventSeq::ZERO)
     }
 
-    /// The public channels found by the last `BrowseChannels`, ordered by name, joined or not.
-    pub fn browse_results(&self) -> &[BrowsedChannel] {
-        &self.browse
-    }
-
     /// Progress of a management action.
     pub fn action(&self, kind: ActionKind) -> &ActionState {
         self.actions.get(&kind).unwrap_or(&IDLE)
@@ -228,7 +259,7 @@ impl ClientCore {
 
     // ----- What to offer -----
 
-    fn role_in(&self, workspace: WorkspaceId) -> Option<WorkspaceRole> {
+    pub(super) fn role_in(&self, workspace: WorkspaceId) -> Option<WorkspaceRole> {
         self.workspaces
             .iter()
             .find(|info| info.workspace.id == workspace)
@@ -300,13 +331,18 @@ impl ClientCore {
 // ----- Action bookkeeping -----
 
 impl ClientCore {
-    fn set_action(&mut self, kind: ActionKind, state: ActionState, out: &mut Output) {
+    pub(super) fn set_action(&mut self, kind: ActionKind, state: ActionState, out: &mut Output) {
         if self.action(kind) == &state {
             return;
         }
         if state == ActionState::Idle {
             self.actions.remove(&kind);
         } else {
+            if state == ActionState::InFlight
+                && let Some(scope) = self.scope
+            {
+                self.action_scope.insert(kind, scope);
+            }
             self.actions.insert(kind, state);
         }
         out.changes.push(Change::ActionChanged(kind));
@@ -314,7 +350,7 @@ impl ClientCore {
 
     /// Marks an action started. `false` means it is already in flight and the input is ignored,
     /// so a double click cannot send twice.
-    fn begin_action(&mut self, kind: ActionKind, out: &mut Output) -> bool {
+    pub(super) fn begin_action(&mut self, kind: ActionKind, out: &mut Output) -> bool {
         if self.action(kind) == &ActionState::InFlight {
             return false;
         }
@@ -322,17 +358,48 @@ impl ClientCore {
         true
     }
 
-    fn fail_action(&mut self, kind: ActionKind, message: impl Into<String>, out: &mut Output) {
+    pub(super) fn fail_action(
+        &mut self,
+        kind: ActionKind,
+        message: impl Into<String>,
+        out: &mut Output,
+    ) {
         self.set_action(kind, ActionState::Failed(message.into()), out);
     }
 
     /// Reports a failed request. A rejected session ends the session instead.
-    fn fail_request(&mut self, kind: ActionKind, error: &RequestError, out: &mut Output) {
+    pub(super) fn fail_request(
+        &mut self,
+        kind: ActionKind,
+        error: &RequestError,
+        out: &mut Output,
+    ) {
+        self.note_request_error("action", error);
         if error.is_unauthenticated() {
             self.set_action(kind, ActionState::Idle, out);
             self.session_expired(out);
         } else {
-            self.fail_action(kind, readable_error(error), out);
+            let text = match kind {
+                ActionKind::CreateGroup
+                | ActionKind::UpdateGroup(_)
+                | ActionKind::DeleteGroup(_) => super::groups::group_error(error),
+                ActionKind::CreateWebhook(_)
+                | ActionKind::DeleteWebhook(_)
+                | ActionKind::LoadWebhooks(_) => super::webhooks::webhook_error(kind, error),
+                ActionKind::AddCustomEmoji
+                | ActionKind::RenameCustomEmoji(_)
+                | ActionKind::DeleteCustomEmoji(_) => super::emoji::emoji_error(error),
+                ActionKind::UpdateWorkspace
+                | ActionKind::SetMemberRole(_)
+                | ActionKind::SetMemberDeactivated(_)
+                | ActionKind::CreateInvitation
+                | ActionKind::RevokeInvitation(_) => super::admin::admin_error(kind, error),
+                ActionKind::CreateWorkspace
+                | ActionKind::AcceptInvitation
+                | ActionKind::SetAvatar => super::workspaces::workspace_error(kind, error),
+                _ => readable_error(error),
+            };
+            self.fail_action(kind, text, out);
         }
     }
 
@@ -342,13 +409,17 @@ impl ClientCore {
         }
     }
 
-    fn primary_workspace_id(&self) -> Option<WorkspaceId> {
-        self.workspaces.first().map(|info| info.workspace.id)
+    pub(super) fn primary_workspace_id(&self) -> Option<WorkspaceId> {
+        self.scope
     }
 
     /// The conversation selected when nothing valid is: the default channel, then `#general`,
     /// then the first channel by name, then anything.
     pub(super) fn default_selection(&self) -> Option<ConversationId> {
+        // The conversation the person last had open, if they are still in it, comes first.
+        if let Some(restored) = self.restored_selection() {
+            return Some(restored);
+        }
         let sidebar = self.sidebar();
         self.conversations
             .iter()
@@ -414,31 +485,6 @@ impl ClientCore {
         self.cache_changed(true);
         true
     }
-
-    /// Keeps the cached directory of public channels in step with what the client learns.
-    pub(super) fn sync_browse(&mut self, conversation: &Conversation, joined: Option<bool>) {
-        for entry in &mut self.browse {
-            if entry.conversation.id == conversation.id {
-                entry.conversation = conversation.clone();
-                if let Some(joined) = joined {
-                    entry.joined = joined;
-                }
-            }
-        }
-    }
-
-    pub(super) fn set_browse_joined(&mut self, id: ConversationId, joined: bool, out: &mut Output) {
-        let mut changed = false;
-        for entry in &mut self.browse {
-            if entry.conversation.id == id && entry.joined != joined {
-                entry.joined = joined;
-                changed = true;
-            }
-        }
-        if changed {
-            out.changes.push(Change::BrowseChanged);
-        }
-    }
 }
 
 // ----- Create and open: actions with an operation id -----
@@ -455,6 +501,11 @@ impl ClientCore {
         let kind = ActionKind::CreateChannel;
         if self.action(kind) == &ActionState::InFlight {
             return;
+        }
+        // The workspace's policy decides who may create channels; the server enforces it too.
+        if self.my_role().is_some() && !self.can_create_channel() {
+            let message = "Only admins and owners can create channels in this workspace.";
+            return self.fail_action(kind, message, out);
         }
         let name = match ChannelName::parse(&normalize_channel_name(name)) {
             Ok(name) => name,
@@ -494,6 +545,13 @@ impl ClientCore {
         let Some(me) = self.me.as_ref().map(|user| user.id) else {
             return;
         };
+        if participants.iter().any(|user| self.is_bot(*user)) {
+            return self.fail_action(kind, "Apps can't be messaged.", out);
+        }
+        if participants.iter().any(|user| self.is_deactivated(*user)) {
+            let text = "Deactivated people can't be messaged.";
+            return self.fail_action(kind, text, out);
+        }
         let set = match ParticipantSet::new(me, participants) {
             Ok(set) => set,
             Err(ParticipantError::TooFew) => {
@@ -520,7 +578,7 @@ impl ClientCore {
     /// Starts a create or open. If an earlier attempt for the same thing was given up on with an
     /// unknown outcome, it is continued under the same operation id (the server is asked first),
     /// never repeated blindly with a new one.
-    fn begin_command(
+    pub(super) fn begin_command(
         &mut self,
         kind: ActionKind,
         workspace: WorkspaceId,
@@ -604,6 +662,9 @@ impl ClientCore {
         if let Ok(OperationStatus::ConversationCommitted { conversation }) = result {
             return self.command_succeeded(operation, conversation, out);
         }
+        if let Ok(OperationStatus::GroupCommitted { group }) = result {
+            return self.group_created(operation, group, out);
+        }
         let Some(command) = self.commands.get_mut(&operation) else {
             return;
         };
@@ -612,7 +673,10 @@ impl ClientCore {
         }
         let kind = command.kind;
         match result {
-            Ok(OperationStatus::ConversationCommitted { .. }) => {}
+            Ok(
+                OperationStatus::ConversationCommitted { .. }
+                | OperationStatus::GroupCommitted { .. },
+            ) => {}
             Ok(OperationStatus::NotFound) => {
                 if command.resends >= MAX_RESENDS {
                     command.stage = CommandStage::Failed;
@@ -624,7 +688,7 @@ impl ClientCore {
                 command.stage = CommandStage::Sending;
                 out.effects.push(command.request.effect(command.workspace));
             }
-            Ok(OperationStatus::Committed { .. }) => {
+            Ok(OperationStatus::Committed { .. } | OperationStatus::EditCommitted { .. }) => {
                 command.stage = CommandStage::Failed;
                 self.fail_action(kind, "The server gave an unexpected answer.", out);
             }
@@ -637,6 +701,46 @@ impl ClientCore {
                 self.fail_request(kind, &error, out);
             }
         }
+    }
+
+    pub(super) fn group_command_result(
+        &mut self,
+        operation: OperationId,
+        result: Result<lazy_protocol::GroupResponse, RequestError>,
+        out: &mut Output,
+    ) {
+        let Some(command) = self.commands.get_mut(&operation) else {
+            return;
+        };
+        if command.stage != CommandStage::Sending {
+            return;
+        }
+        let kind = command.kind;
+        match result {
+            Ok(response) => self.group_created(operation, response.group, out),
+            Err(error @ RequestError::Rejected(_)) => {
+                self.commands.remove(&operation);
+                self.fail_request(kind, &error, out);
+            }
+            Err(RequestError::Unknown(_)) => {
+                command.stage = CommandStage::Querying;
+                out.effects.push(Effect::QueryOperationStatus { operation });
+            }
+        }
+    }
+
+    /// The group exists: keep it and finish the action.
+    fn group_created(
+        &mut self,
+        operation: OperationId,
+        group: lazy_protocol::UserGroup,
+        out: &mut Output,
+    ) {
+        let Some(command) = self.commands.remove(&operation) else {
+            return;
+        };
+        self.store_group(group, out);
+        self.set_action(command.kind, ActionState::Idle, out);
     }
 
     /// The conversation exists: add it, finish the action, and open it.
@@ -662,17 +766,6 @@ impl ClientCore {
 // ----- The other management actions -----
 
 impl ClientCore {
-    pub(super) fn browse_channels(&mut self, out: &mut Output) {
-        let kind = ActionKind::Browse;
-        if !self.begin_action(kind, out) {
-            return;
-        }
-        match self.primary_workspace_id() {
-            Some(workspace) => out.effects.push(Effect::BrowseChannels { workspace }),
-            None => self.fail_action(kind, "Your workspace hasn't loaded yet.", out),
-        }
-    }
-
     pub(super) fn join_channel(&mut self, id: ConversationId, out: &mut Output) {
         if self.begin_action(ActionKind::Join(id), out) {
             out.effects.push(Effect::JoinChannel { conversation: id });
@@ -693,6 +786,14 @@ impl ClientCore {
         }
         if users.is_empty() {
             return self.fail_action(kind, "Choose at least one person to add.", out);
+        }
+        if users.iter().any(|user| self.is_bot(*user)) {
+            let text = "Apps join a conversation through their webhook.";
+            return self.fail_action(kind, text, out);
+        }
+        if users.iter().any(|user| self.is_deactivated(*user)) {
+            let text = "Deactivated people can't be added to a conversation.";
+            return self.fail_action(kind, text, out);
         }
         self.set_action(kind, ActionState::InFlight, out);
         out.effects.push(Effect::AddMembers {
@@ -801,14 +902,61 @@ impl ClientCore {
                 if let ActionKind::Leave(id) = kind {
                     self.leaving.remove(&id);
                 }
-                return self.fail_request(kind, &error, out);
+                // Creating a workspace repeats the same request after an unknown outcome.
+                if kind == ActionKind::CreateWorkspace
+                    && matches!(error, RequestError::Unknown(_))
+                    && self.retry_create_workspace(out)
+                {
+                    return;
+                }
+                if matches!(&error, RequestError::Rejected(api) if api.code == ErrorCode::NotFound)
+                    && self.group_already_gone(kind, out)
+                {
+                    return;
+                }
+                // A webhook that is already gone is what a delete wanted.
+                if let ActionKind::DeleteWebhook(webhook) = kind
+                    && matches!(&error, RequestError::Rejected(api) if api.code == ErrorCode::NotFound)
+                {
+                    self.webhook_deleted(webhook, out);
+                    return self.set_action(kind, ActionState::Idle, out);
+                }
+                // An emoji that is already gone is what a delete wanted.
+                if let ActionKind::DeleteCustomEmoji(emoji) = kind
+                    && matches!(&error, RequestError::Rejected(api) if api.code == ErrorCode::NotFound)
+                {
+                    self.mark_emoji_deleted(emoji, out);
+                    return self.set_action(kind, ActionState::Idle, out);
+                }
+                // Whether a webhook was created is unknown when the answer is lost, and the
+                // address cannot be shown again: show the list, where it can be deleted.
+                let lost_create = matches!(
+                    (kind, &error),
+                    (ActionKind::CreateWebhook(_), RequestError::Unknown(_))
+                );
+                self.fail_request(kind, &error, out);
+                if let (true, ActionKind::CreateWebhook(conversation)) = (lost_create, kind) {
+                    self.load_webhooks(conversation, out);
+                }
+                // The same for an invitation: its code cannot be shown again, so the list shows
+                // whether it was made.
+                if matches!(
+                    (kind, &error),
+                    (ActionKind::CreateInvitation, RequestError::Unknown(_))
+                ) {
+                    self.invitation_create_lost(out);
+                }
+                // A revocation whose answer was lost may have happened: the list shows which.
+                if matches!(
+                    (kind, &error),
+                    (ActionKind::RevokeInvitation(_), RequestError::Unknown(_))
+                ) {
+                    self.reload_invitations(out);
+                }
+                return;
             }
         };
         match (kind, outcome) {
-            (ActionKind::Browse, ActionOutcome::Browse(channels)) => {
-                self.browse = channels;
-                out.changes.push(Change::BrowseChanged);
-            }
             (ActionKind::Join(id), ActionOutcome::Conversation(conversation)) => {
                 let is_new = self.adopt_conversation(conversation, out);
                 self.set_browse_joined(id, true, out);
@@ -839,6 +987,36 @@ impl ClientCore {
             }
             // Removing someone changes the member count through the event that follows.
             (ActionKind::RemoveMember(..), _) => {}
+            (
+                ActionKind::CreateGroup | ActionKind::UpdateGroup(_) | ActionKind::DeleteGroup(_),
+                outcome,
+            ) => self.group_action_result(kind, outcome, out),
+            (
+                ActionKind::CreateWebhook(_)
+                | ActionKind::DeleteWebhook(_)
+                | ActionKind::LoadWebhooks(_),
+                outcome,
+            ) => self.webhook_action_result(kind, outcome, out),
+            (ActionKind::RenameCustomEmoji(_) | ActionKind::DeleteCustomEmoji(_), outcome) => {
+                self.emoji_action_result(kind, outcome, out)
+            }
+            (
+                ActionKind::UpdateWorkspace
+                | ActionKind::SetMemberRole(_)
+                | ActionKind::SetMemberDeactivated(_)
+                | ActionKind::CreateInvitation
+                | ActionKind::RevokeInvitation(_),
+                outcome,
+            ) => self.admin_action_result(kind, outcome, out),
+            (
+                ActionKind::CreateWorkspace
+                | ActionKind::AcceptInvitation
+                | ActionKind::UpdateProfile
+                | ActionKind::SetAvatar,
+                outcome,
+            ) => {
+                self.workspace_action_result(kind, outcome, out);
+            }
             // A response that does not match the request is ignored.
             _ => {}
         }
@@ -889,7 +1067,7 @@ fn describe_name_error(error: &NameError) -> String {
 }
 
 /// Words for a person about why a request failed.
-fn readable_error(error: &RequestError) -> String {
+pub(super) fn readable_error(error: &RequestError) -> String {
     match error {
         RequestError::Unknown(_) => {
             "Couldn't reach the server. Check your connection and try again.".to_owned()
@@ -901,9 +1079,19 @@ fn readable_error(error: &RequestError) -> String {
                 "That conversation no longer exists, or you can't see it.".to_owned()
             }
             ErrorCode::Conflict => "That clashes with a change that was already made.".to_owned(),
+            ErrorCode::StaleRevision => {
+                "That message changed while you were editing it.".to_owned()
+            }
             ErrorCode::RateLimited => "Too many requests. Wait a moment and try again.".to_owned(),
             ErrorCode::PayloadTooLarge => "That's too large to send.".to_owned(),
+            ErrorCode::UnsupportedMedia => "That kind of file can't be shared.".to_owned(),
+            ErrorCode::LimitReached => "That's more than can be held.".to_owned(),
             ErrorCode::Unauthenticated => "Your session has expired. Sign in again.".to_owned(),
+            ErrorCode::InvitationInvalid => {
+                "That invitation isn't valid. It may have expired, been used up, or been \
+                 revoked."
+                    .to_owned()
+            }
             ErrorCode::InvalidRequest
             | ErrorCode::InvalidCredentials
             | ErrorCode::UsernameTaken

@@ -2,12 +2,23 @@ use std::net::SocketAddr;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
+use lazy_server::logging::LogFormat;
 use lazy_server::{Config, db};
-use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "lazy-server", version, about = "The Lazy chat server")]
 struct Cli {
+    /// How log events are written: `text` (default) or `json` (one object per line). The filter is
+    /// `LAZY_LOG` (or `RUST_LOG`), default `info,sqlx=warn`. Nothing logged holds a credential or
+    /// content.
+    #[arg(
+        long,
+        global = true,
+        env = "LAZY_LOG_FORMAT",
+        default_value = "text",
+        value_parser = clap::value_parser!(LogFormat),
+    )]
+    log_format: LogFormat,
     #[command(subcommand)]
     command: Command,
 }
@@ -47,17 +58,28 @@ struct ServeArgs {
     /// Whether anyone who can reach the server may register.
     #[arg(long, env = "LAZY_OPEN_REGISTRATION", default_value_t = true, action = clap::ArgAction::Set)]
     open_registration: bool,
+    /// Whether any signed-in person may create workspaces of their own.
+    #[arg(long, env = "LAZY_OPEN_WORKSPACE_CREATION", default_value_t = true, action = clap::ArgAction::Set)]
+    open_workspace_creation: bool,
+    /// The address clients reach this server at, which incoming webhooks are shown under
+    /// (`<public-url>/hooks/<id>/<secret>`). Defaults to http:// and the listening address.
+    #[arg(long, env = "LAZY_PUBLIC_URL")]
+    public_url: Option<String>,
+    /// The directory attachment files are kept in. It is created if it does not exist; keep it on
+    /// a disk that survives restarts, and back it up with the database.
+    #[arg(long, env = "LAZY_ATTACHMENTS_DIR", default_value = "attachments")]
+    attachments_dir: std::path::PathBuf,
+    /// The largest attachment, in bytes.
+    #[arg(long, env = "LAZY_MAX_ATTACHMENT_BYTES", default_value_t = lazy_domain::attachment::MAX_ATTACHMENT_BYTES)]
+    max_attachment_bytes: u64,
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn")),
-        )
-        .init();
+    let cli = Cli::parse();
+    lazy_server::logging::init(cli.log_format);
 
-    let result = match Cli::parse().command {
+    let result = match cli.command {
         Command::Serve(args) => serve(args).await,
         Command::Migrate(args) => migrate(args).await,
     };
@@ -75,7 +97,11 @@ async fn serve(args: ServeArgs) -> Result<(), lazy_server::AppError> {
     config.migrate = !args.no_migrate;
     config.seed = !args.no_seed;
     config.open_registration = args.open_registration;
+    config.open_workspace_creation = args.open_workspace_creation;
     config.event_retention_days = args.event_retention_days;
+    config.public_url = args.public_url;
+    config.attachments_dir = args.attachments_dir;
+    config.max_attachment_bytes = args.max_attachment_bytes;
     lazy_server::run(config, shutdown_signal()).await
 }
 

@@ -77,6 +77,10 @@ fn read_state(conversation: ConversationId) -> ConversationUserState {
 
 fn user(name: &str) -> User {
     User {
+        is_bot: false,
+        deactivated: false,
+        avatar_version: 0,
+        status: None,
         id: UserId::generate(),
         username: Username::parse(name).unwrap(),
         display_name: DisplayName::parse(&format!("User {name}")).unwrap(),
@@ -121,9 +125,16 @@ impl Fixture {
             protocol_version: PROTOCOL_VERSION,
             user: self.me.clone(),
             workspaces: vec![WorkspaceBootstrap {
+                saved: Vec::new(),
+                notification_settings: Default::default(),
+                conversation_notification_prefs: Vec::new(),
+                custom_emoji: Vec::new(),
+                threads: Vec::new(),
+                groups: Vec::new(),
                 workspace: Workspace {
                     id: self.workspace,
                     name: "Lazy".into(),
+                    settings: Default::default(),
                 },
                 role: WorkspaceRole::Member,
                 conversations: vec![channel(
@@ -172,6 +183,11 @@ impl Fixture {
 
     fn message(&self, text: &str, seq: i64) -> Message {
         Message {
+            attachments: vec![],
+            thread_root: None,
+            in_channel: false,
+            thread: None,
+            mentions: Default::default(),
             id: MessageId::generate(),
             conversation_id: self.general,
             author_id: self.me.id,
@@ -179,6 +195,10 @@ impl Fixture {
             created_at: Timestamp::now(),
             revision: 1,
             seq: EventSeq::new(seq).unwrap(),
+            edited_at: None,
+            reactions: vec![],
+            reactions_as_of: EventSeq::ZERO,
+            deleted: false,
         }
     }
 }
@@ -501,6 +521,7 @@ impl Fixture {
         let authors = [self.me.clone(), user("bob"), user("zoe")];
         range
             .map(|seq| Message {
+                attachments: vec![],
                 author_id: authors[(seq as usize / 3) % authors.len()].id,
                 ..self.message(&format!("message number {seq} with some body text"), seq)
             })
@@ -709,10 +730,11 @@ fn the_shell_can_be_driven_entirely_from_the_keyboard(cx: &mut TestAppContext) {
         },
     );
 
-    // The composer has focus on arrival. Tab reaches Send; Enter activates it.
+    // The composer has focus on arrival. Tab reaches the Attach button, then the emoji button, and
+    // a third Tab reaches Send; Enter activates it.
     cx.simulate_input("typed with the keyboard");
     app.take_effects();
-    cx.simulate_keystrokes("tab enter");
+    cx.simulate_keystrokes("tab tab tab enter");
     let sent = app
         .take_effects()
         .into_iter()
@@ -724,9 +746,13 @@ fn the_shell_can_be_driven_entirely_from_the_keyboard(cx: &mut TestAppContext) {
     assert_eq!(sent, "typed with the keyboard");
 
     // Shift+Tab walks back through everything between Send and the sidebar's channel list:
-    // the composer, Details, Favorite, Sign out, "Start a conversation", the Direct messages
-    // "+", and then the last channel row (random).
-    cx.simulate_keystrokes("shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab");
+    // the emoji button, the Attach button, the composer, the timeline (one stop for all its messages), Details,
+    // Favorite, the notification bell, Sign out, Preferences, "Start a conversation", the Direct
+    // messages "+", and then the last channel row (random).
+    cx.simulate_keystrokes(
+        "shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab \
+         shift-tab shift-tab",
+    );
     cx.simulate_keystrokes("enter");
     let selected = app
         .model

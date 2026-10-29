@@ -83,6 +83,92 @@ impl Username {
 }
 
 string_newtype!(
+    /// The name a user group is mentioned by: a mention handle (2 to 32 lowercase ASCII letters,
+    /// digits, `.`, `_`, or `-`, starting and ending with a letter or digit) that is not one of
+    /// the reserved handles (`channel`, `here`, `everyone`).
+    GroupHandle
+);
+
+impl GroupHandle {
+    pub fn parse(input: &str) -> Result<Self, NameError> {
+        let lowered = input.to_ascii_lowercase();
+        let count = lowered.chars().count();
+        if count < crate::mention::MIN_HANDLE_LEN {
+            return Err(NameError::TooShort {
+                what: "group handle",
+                min: crate::mention::MIN_HANDLE_LEN,
+            });
+        }
+        if count > crate::mention::MAX_HANDLE_LEN {
+            return Err(NameError::TooLong {
+                what: "group handle",
+                max: crate::mention::MAX_HANDLE_LEN,
+            });
+        }
+        if let Some(found) = lowered.chars().find(|c| {
+            !(c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+        }) {
+            return Err(NameError::InvalidCharacter {
+                what: "group handle",
+                found,
+            });
+        }
+        if !crate::mention::handle_is_valid(&lowered) {
+            return Err(NameError::InvalidStart {
+                what: "group handle",
+            });
+        }
+        if crate::mention::handle_is_reserved(&lowered) {
+            return Err(NameError::InvalidCharacter {
+                what: "group handle (reserved)",
+                found: '@',
+            });
+        }
+        Ok(Self(lowered))
+    }
+}
+
+string_newtype!(
+    /// The name of a custom emoji, as written between colons: 2 to 32 lowercase ASCII letters,
+    /// digits, and underscores, starting and ending with a letter or digit, and not a standard
+    /// emoji shortcode.
+    EmojiName
+);
+
+impl EmojiName {
+    pub fn parse(input: &str) -> Result<Self, NameError> {
+        let lowered = input.to_ascii_lowercase();
+        let count = lowered.chars().count();
+        if count < 2 {
+            return Err(NameError::TooShort {
+                what: "emoji name",
+                min: 2,
+            });
+        }
+        if count > 32 {
+            return Err(NameError::TooLong {
+                what: "emoji name",
+                max: 32,
+            });
+        }
+        if let Some(found) = lowered
+            .chars()
+            .find(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_'))
+        {
+            return Err(NameError::InvalidCharacter {
+                what: "emoji name",
+                found,
+            });
+        }
+        if !crate::emoji::custom_name_is_valid(&lowered) {
+            // Starts or ends with an underscore, or is already a standard shortcode.
+            return Err(NameError::InvalidStart { what: "emoji name" });
+        }
+        Ok(Self(lowered))
+    }
+}
+
+string_newtype!(
     /// How a person appears in conversations: 1 to 64 characters after trimming, with no
     /// control characters.
     DisplayName
@@ -109,6 +195,39 @@ impl DisplayName {
         if let Some(found) = trimmed.chars().find(|c| c.is_control()) {
             return Err(NameError::InvalidCharacter {
                 what: "display name",
+                found,
+            });
+        }
+        Ok(Self(trimmed.to_owned()))
+    }
+}
+
+string_newtype!(
+    /// The name of a workspace: 1 to 64 characters after trimming, with no control characters.
+    WorkspaceName
+);
+
+impl WorkspaceName {
+    pub const MAX_LEN: usize = 64;
+
+    pub fn parse(input: &str) -> Result<Self, NameError> {
+        let trimmed = input.trim();
+        let count = trimmed.chars().count();
+        if count == 0 {
+            return Err(NameError::TooShort {
+                what: "workspace name",
+                min: 1,
+            });
+        }
+        if count > Self::MAX_LEN {
+            return Err(NameError::TooLong {
+                what: "workspace name",
+                max: Self::MAX_LEN,
+            });
+        }
+        if let Some(found) = trimmed.chars().find(|c| c.is_control()) {
+            return Err(NameError::InvalidCharacter {
+                what: "workspace name",
                 found,
             });
         }
@@ -169,6 +288,22 @@ fn validate_slug(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn group_handles_follow_the_mention_rules() {
+        use super::GroupHandle;
+        assert_eq!(
+            GroupHandle::parse("Design-Team").unwrap().as_str(),
+            "design-team"
+        );
+        for bad in [
+            "", "a", "-a", "a-", "a b", "é", "channel", "HERE", "everyone",
+        ] {
+            assert!(GroupHandle::parse(bad).is_err(), "{bad:?}");
+        }
+        assert!(GroupHandle::parse(&"a".repeat(33)).is_err());
+        assert!(serde_json::from_str::<GroupHandle>("\"channel\"").is_err());
+    }
+
     use super::*;
 
     #[test]

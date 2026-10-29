@@ -960,3 +960,193 @@ mod theme_following {
         assert_eq!(text_color(&input, cx), TextInputStyle::default().text_color);
     }
 }
+
+mod formatting {
+    use super::*;
+
+    fn composer_options() -> TextInputOptions {
+        TextInputOptions::new("Message")
+            .formatting_shortcuts(true)
+            .report_up_when_empty(true)
+    }
+
+    #[gpui::test]
+    fn the_shortcuts_wrap_the_selection(cx: &mut TestAppContext) {
+        let (input, events, cx) = setup(cx, composer_options(), 400.);
+        cx.simulate_input("make it loud");
+        cx.simulate_keystrokes("shift-ctrl-left");
+        cx.simulate_keystrokes(&format!("{MODIFIER}-b"));
+        assert_eq!(text(&input, cx), "make it *loud*");
+        cx.simulate_keystrokes(&format!("{MODIFIER}-i"));
+        assert_eq!(text(&input, cx), "make it *_loud_*");
+        cx.simulate_keystrokes(&format!("shift-{MODIFIER}-x"));
+        assert_eq!(text(&input, cx), "make it *_~loud~_*");
+        assert!(take(&events).contains(&TextInputEvent::Changed));
+    }
+
+    #[gpui::test]
+    fn the_shortcuts_do_nothing_unless_asked_for(cx: &mut TestAppContext) {
+        let (input, events, cx) = setup(cx, TextInputOptions::new("Message"), 400.);
+        cx.simulate_input("plain");
+        take(&events);
+        cx.simulate_keystrokes(&format!("{MODIFIER}-b"));
+        assert_eq!(text(&input, cx), "plain");
+        assert!(take(&events).is_empty());
+    }
+
+    #[gpui::test]
+    fn up_in_an_empty_input_is_reported_only_when_asked_for(cx: &mut TestAppContext) {
+        let (_input, events, cx) = setup(cx, composer_options(), 400.);
+        cx.simulate_keystrokes("up");
+        assert_eq!(take(&events), vec![TextInputEvent::UpWhenEmpty]);
+
+        let (_plain, plain_events, cx) = setup(cx, TextInputOptions::new("Message"), 400.);
+        cx.simulate_keystrokes("up");
+        assert!(take(&plain_events).is_empty());
+    }
+
+    #[gpui::test]
+    fn up_with_text_moves_the_caret_instead(cx: &mut TestAppContext) {
+        let (input, events, cx) = setup(cx, composer_options(), 400.);
+        cx.simulate_input("one");
+        take(&events);
+        cx.simulate_keystrokes("up");
+        assert!(take(&events).is_empty());
+        assert_eq!(input.read_with(cx, |i, _| i.selection_utf16().0), 0..0);
+    }
+}
+
+mod suggestions {
+    use super::*;
+
+    fn composer_options() -> TextInputOptions {
+        TextInputOptions::new("Message")
+    }
+
+    #[gpui::test]
+    fn an_open_list_takes_up_down_enter_and_tab_and_nothing_else(cx: &mut TestAppContext) {
+        let (input, events, cx) = setup(cx, composer_options(), 400.);
+        cx.simulate_input("one");
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("two");
+        take(&events);
+        input.update(cx, |input, _| input.set_suggestions_open(true));
+
+        cx.simulate_keystrokes("up down enter tab");
+        assert_eq!(
+            take(&events),
+            vec![
+                TextInputEvent::Suggestion(SuggestionKey::Up),
+                TextInputEvent::Suggestion(SuggestionKey::Down),
+                TextInputEvent::Suggestion(SuggestionKey::Accept),
+                TextInputEvent::Suggestion(SuggestionKey::Accept),
+            ]
+        );
+        assert_eq!(
+            text(&input, cx),
+            "one\ntwo",
+            "none of them edited or moved anything"
+        );
+
+        // Typing, deleting, and the other arrows are not the list's.
+        cx.simulate_input("!");
+        cx.simulate_keystrokes("left backspace");
+        assert_eq!(
+            take(&events)
+                .iter()
+                .filter(|e| matches!(e, TextInputEvent::Suggestion(_)))
+                .count(),
+            0
+        );
+        assert_eq!(text(&input, cx), "one\ntw!");
+    }
+
+    #[gpui::test]
+    fn a_closed_list_leaves_every_key_alone(cx: &mut TestAppContext) {
+        let (input, events, cx) = setup(cx, composer_options(), 400.);
+        cx.simulate_input("one");
+        take(&events);
+        input.update(cx, |input, _| input.set_suggestions_open(true));
+        input.update(cx, |input, _| input.set_suggestions_open(false));
+        cx.simulate_keystrokes("enter");
+        assert_eq!(
+            take(&events),
+            vec![TextInputEvent::Submit],
+            "Enter submits again"
+        );
+        cx.simulate_keystrokes("up");
+        assert!(take(&events).is_empty());
+    }
+
+    #[gpui::test]
+    fn shift_tab_and_shift_up_still_work_with_the_list_open(cx: &mut TestAppContext) {
+        let (input, events, cx) = setup(cx, composer_options(), 400.);
+        cx.simulate_input("one two");
+        input.update(cx, |input, _| input.set_suggestions_open(true));
+        take(&events);
+        cx.simulate_keystrokes("shift-left");
+        assert_eq!(
+            input.read_with(cx, |i, _| i.selection_utf16().0),
+            6..7,
+            "extending the selection is not a list key"
+        );
+    }
+
+    #[gpui::test]
+    fn replace_range_and_insert_text_edit_at_the_right_place(cx: &mut TestAppContext) {
+        let (input, events, cx) = setup(cx, composer_options(), 400.);
+        cx.simulate_input("nice :tad");
+        take(&events);
+        input.update_in(cx, |input, window, cx| {
+            let end = input.text().len();
+            input.replace_range(5..end, "🎉", window, cx);
+        });
+        assert_eq!(text(&input, cx), "nice 🎉");
+        assert_eq!(
+            input.read_with(cx, |i, _| i.cursor()),
+            "nice 🎉".len(),
+            "the caret is after it"
+        );
+        assert!(take(&events).contains(&TextInputEvent::Changed));
+
+        input.update_in(cx, |input, window, cx| input.insert_text("🚀", window, cx));
+        assert_eq!(text(&input, cx), "nice 🎉🚀");
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(text(&input, cx), "nice 🎉", "each is one undo step");
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(text(&input, cx), "nice :tad");
+    }
+
+    #[gpui::test]
+    fn replace_range_is_ignored_while_composing(cx: &mut TestAppContext) {
+        let (input, _events, cx) = setup(cx, composer_options(), 400.);
+        mark(&input, cx, "かな");
+        input.update_in(cx, |input, window, cx| {
+            input.replace_range(0..3, "x", window, cx)
+        });
+        assert_eq!(text(&input, cx), "かな");
+    }
+
+    #[gpui::test]
+    fn the_caret_bounds_follow_the_caret_across_rows(cx: &mut TestAppContext) {
+        let (input, _events, cx) = setup(cx, composer_options(), 400.);
+        assert!(
+            input.read_with(cx, |i, _| i.caret_bounds()).is_none(),
+            "nothing is shaped for an empty input"
+        );
+        cx.simulate_input("ab");
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let first = input
+            .read_with(cx, |i, _| i.caret_bounds())
+            .expect("painted with its current text");
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("cd");
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let second = input.read_with(cx, |i, _| i.caret_bounds()).unwrap();
+        assert!(second.top() > first.top(), "a second row is lower");
+        assert_eq!(second.size.height, first.size.height);
+        assert!(second.left() > first.left() - gpui::px(1.));
+    }
+}

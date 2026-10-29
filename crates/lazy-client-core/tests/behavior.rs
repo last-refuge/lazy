@@ -3,7 +3,8 @@ mod common;
 use common::{Driver, World, message_ids, seq, user};
 use lazy_client_core::{
     Change, ConnectionState, Delivery, Effect, HistoryStatus, Input, ItemKey, JournalEntry,
-    RequestError, RetryKind, SessionPhase, SocketEvent, StartupState, UNKNOWN_MEMBER_NAME,
+    JournalKind, RequestError, RetryKind, SessionPhase, SocketEvent, StartupState,
+    UNKNOWN_MEMBER_NAME,
 };
 use lazy_domain::{ConversationId, MessageDocument, OperationId, Timestamp};
 use lazy_protocol::{
@@ -128,6 +129,7 @@ fn registration_checks_name_and_password() {
         username: "zoe".into(),
         display_name: "Zoë".into(),
         password: "short".into(),
+        invite_code: String::new(),
     });
     assert!(out.effects.is_empty());
     assert!(matches!(
@@ -139,6 +141,7 @@ fn registration_checks_name_and_password() {
         username: "zoe".into(),
         display_name: "Zoë".into(),
         password: "long enough".into(),
+        invite_code: String::new(),
     });
     assert!(matches!(&out.effects[..], [Effect::Register(_)]));
 }
@@ -592,6 +595,10 @@ fn journal_recovery_checks_with_the_server_before_resending() {
         conversation_id: world.channel.id,
         document: MessageDocument::from_plain_text("from last run").unwrap(),
         submitted_at: Timestamp::now(),
+        kind: JournalKind::Send,
+        thread_root: None,
+        also_in_channel: false,
+        attachments: Vec::new(),
     };
 
     let mut driver = Driver::new();
@@ -635,6 +642,10 @@ fn a_recovered_operation_the_server_never_saw_is_resent_with_its_id() {
             conversation_id: world.channel.id,
             document: MessageDocument::from_plain_text("lost").unwrap(),
             submitted_at: Timestamp::now(),
+            kind: JournalKind::Send,
+            thread_root: None,
+            also_in_channel: false,
+            attachments: Vec::new(),
         }],
         ..Default::default()
     }));
@@ -1366,6 +1377,10 @@ fn journal_recovered_operations_go_first_in_the_order_they_were_submitted() {
         conversation_id: world.channel.id,
         document: MessageDocument::from_plain_text(text).unwrap(),
         submitted_at: at,
+        kind: JournalKind::Send,
+        thread_root: None,
+        also_in_channel: false,
+        attachments: Vec::new(),
     };
     let first = entry("submitted first", earlier);
     let second = entry("submitted second", later);

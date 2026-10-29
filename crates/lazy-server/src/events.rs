@@ -18,6 +18,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::logging::Describe;
 
 /// Postgres `NOTIFY` channel that wakes the dispatcher. The payload is the workspace id; it is
 /// only a hint, and the durable `events` table is the source of truth.
@@ -121,6 +122,18 @@ pub struct NewEvent<'a> {
     pub event: &'a Event,
 }
 
+/// The message an event is about, if any. Stored with the event so that deleting the message can
+/// find and clear the content those events carry.
+fn message_of(event: &Event) -> Option<Uuid> {
+    match event {
+        Event::MessageCreated { message, .. }
+        | Event::MessageEdited { message, .. }
+        | Event::MessageDeleted { message, .. } => Some(message.id.as_uuid()),
+        Event::ReactionsChanged { message_id, .. } => Some(message_id.as_uuid()),
+        _ => None,
+    }
+}
+
 /// Inserts an event at a position obtained from [`next_position`] in the same transaction, and
 /// queues a `NOTIFY` that is delivered when that transaction commits.
 pub async fn insert_event(conn: &mut PgConnection, new: NewEvent<'_>) -> Result<(), AppError> {
@@ -129,8 +142,8 @@ pub async fn insert_event(conn: &mut PgConnection, new: NewEvent<'_>) -> Result<
     let (audience, target) = new.audience.to_db();
     sqlx::query(
         "INSERT INTO events \
-             (workspace_id, seq, occurred_at, kind, conversation_id, operation_id, audience, target_user_id, payload) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             (workspace_id, seq, occurred_at, kind, conversation_id, operation_id, audience, target_user_id, message_id, payload) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(new.workspace_id.as_uuid())
     .bind(new.seq.get())
@@ -140,6 +153,7 @@ pub async fn insert_event(conn: &mut PgConnection, new: NewEvent<'_>) -> Result<
     .bind(new.operation_id.map(|id| id.as_uuid()))
     .bind(audience)
     .bind(target)
+    .bind(message_of(new.event))
     .bind(sqlx::types::Json(payload))
     .execute(&mut *conn)
     .await?;
@@ -170,6 +184,9 @@ pub async fn append_all(
     workspace_id: WorkspaceId,
     events: Vec<PendingEvent>,
 ) -> Result<Vec<EventSeq>, AppError> {
+    if events.len() > 3 {
+        return append_batch(conn, workspace_id, events).await;
+    }
     let mut positions = Vec::with_capacity(events.len());
     for pending in events {
         let (seq, occurred_at) = next_position(conn, workspace_id).await?;
@@ -190,6 +207,72 @@ pub async fn append_all(
         positions.push(seq);
     }
     Ok(positions)
+}
+
+/// [`append_all`] for many events at once (a person marking hundreds of threads read): one
+/// statement reserves all the positions, one inserts all the rows, one notifies. The result is the
+/// same rows in the same order as appending them one by one.
+async fn append_batch(
+    conn: &mut PgConnection,
+    workspace_id: WorkspaceId,
+    events: Vec<PendingEvent>,
+) -> Result<Vec<EventSeq>, AppError> {
+    let count = i64::try_from(events.len()).unwrap_or(i64::MAX);
+    let (last, now): (i64, OffsetDateTime) = sqlx::query_as(
+        "UPDATE workspaces SET event_head = event_head + $2 WHERE id = $1 \
+         RETURNING event_head, clock_timestamp()",
+    )
+    .bind(workspace_id.as_uuid())
+    .bind(count)
+    .fetch_one(&mut *conn)
+    .await?;
+    let first = last - count + 1;
+    let mut seqs = Vec::with_capacity(events.len());
+    let mut kinds: Vec<&str> = Vec::with_capacity(events.len());
+    let mut conversations: Vec<Option<Uuid>> = Vec::with_capacity(events.len());
+    let mut operations: Vec<Option<Uuid>> = Vec::with_capacity(events.len());
+    let mut audiences: Vec<&str> = Vec::with_capacity(events.len());
+    let mut targets: Vec<Option<Uuid>> = Vec::with_capacity(events.len());
+    let mut messages: Vec<Option<Uuid>> = Vec::with_capacity(events.len());
+    let mut payloads: Vec<serde_json::Value> = Vec::with_capacity(events.len());
+    for (index, pending) in events.iter().enumerate() {
+        let (audience, target) = pending.audience.to_db();
+        seqs.push(first + index as i64);
+        kinds.push(pending.kind);
+        conversations.push(pending.conversation_id.map(|id| id.as_uuid()));
+        operations.push(pending.operation_id.map(|id| id.as_uuid()));
+        audiences.push(audience);
+        targets.push(target);
+        messages.push(message_of(&pending.event));
+        payloads.push(
+            serde_json::to_value(&pending.event)
+                .map_err(|e| AppError::internal(format!("cannot serialize event: {e}")))?,
+        );
+    }
+    sqlx::query(
+        "INSERT INTO events \
+             (workspace_id, seq, occurred_at, kind, conversation_id, operation_id, audience, target_user_id, message_id, payload) \
+         SELECT $1, e.seq, $2, e.kind, e.conversation_id, e.operation_id, e.audience, e.target_user_id, e.message_id, e.payload \
+         FROM unnest($3::bigint[], $4::text[], $5::uuid[], $6::uuid[], $7::text[], $8::uuid[], $9::uuid[], $10::jsonb[]) \
+              AS e(seq, kind, conversation_id, operation_id, audience, target_user_id, message_id, payload)",
+    )
+    .bind(workspace_id.as_uuid())
+    .bind(now)
+    .bind(&seqs)
+    .bind(&kinds)
+    .bind(&conversations)
+    .bind(&operations)
+    .bind(&audiences)
+    .bind(&targets)
+    .bind(&messages)
+    .bind(&payloads)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query("SELECT pg_notify('lazy_events', $1)")
+        .bind(workspace_id.to_string())
+        .execute(conn)
+        .await?;
+    Ok(seqs.into_iter().filter_map(EventSeq::new).collect())
 }
 
 /// The newest committed position in a workspace's log, or `None` if the workspace is unknown.
@@ -292,7 +375,7 @@ pub async fn fetch_after(
                 event,
             }),
             Err(error) => {
-                tracing::error!(%workspace_id, seq = seq.get(), %error, "skipping undecodable event");
+                tracing::error!(%workspace_id, seq = seq.get(), error = %error.describe(), "skipping undecodable event");
             }
         }
     }
@@ -343,13 +426,11 @@ pub async fn visibility(
     workspace_id: WorkspaceId,
     events: &[&StoredEvent],
 ) -> Result<Visibility, AppError> {
-    let in_workspace: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2)",
-    )
-    .bind(workspace_id.as_uuid())
-    .bind(viewer.as_uuid())
-    .fetch_one(pool)
-    .await?;
+    // A deactivated membership is no membership: the subscription ends at the next delivery.
+    let in_workspace =
+        crate::access::active_role(&mut *pool.acquire().await?, workspace_id, viewer)
+            .await?
+            .is_some();
     if !in_workspace {
         return Ok(Visibility::NotAMember);
     }

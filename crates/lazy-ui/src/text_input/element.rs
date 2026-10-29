@@ -182,7 +182,11 @@ fn measure(
     if !up_to_date {
         let showing_placeholder = this.model.is_empty();
         let text = this.display_text();
-        let runs = runs_for(this, text.len(), &font, showing_placeholder);
+        // Emoji are drawn by the bundled color emoji font, not left to the system's fallback.
+        let runs = crate::emoji_font::with_emoji_font(
+            &text,
+            runs_for(this, text.len(), &font, showing_placeholder),
+        );
         let lines = match window.text_system().shape_text(
             text,
             this.style.font_size,

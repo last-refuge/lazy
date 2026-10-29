@@ -100,7 +100,10 @@ impl Demo {
                             .push(format!("[demo sign-in with a {length}-character password]"));
                         password.update(cx, |input, cx| input.clear(cx));
                     }
-                    TextInputEvent::Changed => {}
+                    TextInputEvent::Changed
+                    | TextInputEvent::UpWhenEmpty
+                    | TextInputEvent::PasteAttachments
+                    | TextInputEvent::Suggestion(_) => {}
                 }
                 cx.notify();
             },

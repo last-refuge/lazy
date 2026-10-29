@@ -418,6 +418,7 @@ async fn a_server_prunes_at_startup_and_stops_its_pruner_on_shutdown(pool: PgPoo
         pool.clone(),
         ServerOptions {
             open_registration: true,
+            open_workspace_creation: true,
             password_cost: PasswordCost::FAST_FOR_TESTS,
             retention: retention(5),
         },

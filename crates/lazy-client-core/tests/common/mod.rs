@@ -21,6 +21,10 @@ pub fn user(name: &str) -> User {
         id: UserId::generate(),
         username: Username::parse(name).unwrap(),
         display_name: DisplayName::parse(&name.to_uppercase()).unwrap(),
+        is_bot: false,
+        status: None,
+        deactivated: false,
+        avatar_version: 0,
     }
 }
 
@@ -102,6 +106,18 @@ pub struct World {
     pub extra: Vec<Conversation>,
     /// More people in the workspace, after `me` and `other`.
     pub extra_users: Vec<User>,
+    /// The workspace's user groups.
+    pub groups: Vec<lazy_protocol::UserGroup>,
+    /// The workspace's custom emoji, deleted ones included.
+    pub custom_emoji: Vec<lazy_protocol::CustomEmoji>,
+    /// The person's state for the threads the bootstrap lists.
+    pub threads: Vec<lazy_protocol::ThreadUserState>,
+    /// The person's notification settings, as the bootstrap reports them.
+    pub notification_settings: lazy_domain::notification::NotificationSettings,
+    /// The person's conversation preferences, as the bootstrap reports them.
+    pub notification_prefs: Vec<lazy_domain::notification::ConversationNotificationPrefs>,
+    /// The messages the person has saved, as the bootstrap reports them.
+    pub saved: Vec<MessageId>,
 }
 
 impl World {
@@ -109,6 +125,7 @@ impl World {
         let workspace = Workspace {
             id: WorkspaceId::generate(),
             name: "Lazy".into(),
+            settings: Default::default(),
         };
         let mut channel = channel(workspace.id, "general");
         channel.is_default = true;
@@ -124,6 +141,12 @@ impl World {
             role: WorkspaceRole::Member,
             extra: Vec::new(),
             extra_users: Vec::new(),
+            groups: Vec::new(),
+            custom_emoji: Vec::new(),
+            threads: Vec::new(),
+            notification_settings: Default::default(),
+            notification_prefs: Vec::new(),
+            saved: Vec::new(),
         }
     }
 
@@ -137,6 +160,12 @@ impl World {
                 conversations: self.conversations(),
                 user_state: self.user_states.clone(),
                 members: self.people(),
+                groups: self.groups.clone(),
+                custom_emoji: self.custom_emoji.clone(),
+                threads: self.threads.clone(),
+                notification_settings: self.notification_settings,
+                conversation_notification_prefs: self.notification_prefs.clone(),
+                saved: self.saved.clone(),
                 head: self.head,
             }],
         }
@@ -181,7 +210,91 @@ impl World {
             created_at: Timestamp::now(),
             revision: 1,
             seq: seq(at),
+            edited_at: None,
+            thread_root: None,
+            in_channel: false,
+            thread: None,
+            reactions: Vec::new(),
+            reactions_as_of: EventSeq::ZERO,
+            mentions: lazy_protocol::Mentions::default(),
+            deleted: false,
+            attachments: Vec::new(),
         }
+    }
+
+    /// `message` as an edit leaves it: the next revision with new text.
+    pub fn edited(&self, message: &Message, text: &str) -> Message {
+        let mut edited = message.clone();
+        edited.document = MessageDocument::from_markdown(text).unwrap();
+        edited.revision += 1;
+        edited.edited_at = Some(Timestamp::now());
+        edited
+    }
+
+    /// `message` with its reactions replaced by `list` as of log position `at`.
+    pub fn with_reactions(&self, message: &Message, at: i64, list: &[(&str, &[&User])]) -> Message {
+        let mut reacted = message.clone();
+        reacted.reactions = list
+            .iter()
+            .map(|(emoji, users)| lazy_protocol::ReactionSummary {
+                emoji: lazy_domain::ReactionEmoji::parse(emoji).unwrap(),
+                users: users.iter().map(|user| user.id).collect(),
+            })
+            .collect();
+        reacted.reactions_as_of = seq(at);
+        reacted
+    }
+
+    /// A `ReactionsChanged` event at position `at` carrying `list`.
+    pub fn reactions_event(&self, at: i64, message: &Message, list: &[(&str, &[&User])]) -> Input {
+        let reactions = self.with_reactions(message, at, list).reactions;
+        self.event_at(
+            at,
+            Event::ReactionsChanged {
+                conversation_id: message.conversation_id,
+                message_id: message.id,
+                reactions,
+            },
+        )
+    }
+
+    /// `message` as its deletion leaves it.
+    pub fn tombstone(&self, message: &Message) -> Message {
+        let mut tombstone = message.clone();
+        tombstone.document = lazy_domain::message::deleted_placeholder();
+        tombstone.revision += 1;
+        tombstone.edited_at = None;
+        tombstone.reactions = Vec::new();
+        tombstone.mentions = lazy_protocol::Mentions::default();
+        tombstone.reactions_as_of = EventSeq::ZERO;
+        tombstone.deleted = true;
+        tombstone
+    }
+
+    pub fn edited_event(
+        &self,
+        at: i64,
+        message: &Message,
+        operation_id: Option<OperationId>,
+    ) -> Input {
+        self.event_at(
+            at,
+            Event::MessageEdited {
+                message: message.clone(),
+                operation_id,
+                previous_mentions: lazy_protocol::Mentions::default(),
+            },
+        )
+    }
+
+    pub fn deleted_event(&self, at: i64, message: &Message) -> Input {
+        self.event_at(
+            at,
+            Event::MessageDeleted {
+                message: message.clone(),
+                had_mentions: lazy_protocol::Mentions::default(),
+            },
+        )
     }
 
     pub fn event(&self, message: Message, operation_id: Option<OperationId>) -> Input {

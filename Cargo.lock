@@ -1666,6 +1666,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "emojis"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "589871e639330783bc20ad89d32ac1b049e02c273d96c907ca27478c8bc674a2"
+dependencies = [
+ "phf",
+]
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3334,6 +3343,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "time",
+ "unicode-segmentation",
  "uuid",
 ]
 
@@ -3371,15 +3381,20 @@ dependencies = [
  "gpui_platform",
  "lazy-client-core",
  "lazy-client-runtime",
+ "lazy-domain",
  "lazy-ui",
+ "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
+ "zbus",
 ]
 
 [[package]]
 name = "lazy-domain"
 version = "0.1.0"
 dependencies = [
+ "emojis",
  "proptest",
  "serde",
  "serde_json",
@@ -3395,6 +3410,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "gpui_wgpu",
+ "image",
  "lazy-client-core",
  "lazy-client-runtime",
  "lazy-desktop",
@@ -3402,9 +3418,15 @@ dependencies = [
  "lazy-protocol",
  "lazy-server",
  "lazy-ui",
+ "reqwest",
+ "serde_json",
+ "sha2 0.11.1",
  "sqlx",
  "tempfile",
+ "time",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3422,9 +3444,11 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "axum",
+ "bytes",
  "clap",
  "futures-util",
  "getrandom 0.4.3",
+ "image",
  "lazy-domain",
  "lazy-protocol",
  "lazy-server",
@@ -3433,6 +3457,8 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "sqlx",
+ "subtle",
+ "tempfile",
  "thiserror 2.0.21",
  "time",
  "tokio",
@@ -3451,6 +3477,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "gpui_wgpu",
+ "image",
  "jiff",
  "lazy-client-core",
  "lazy-domain",
@@ -5247,6 +5274,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -5267,12 +5295,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http 0.6.11",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
 ]
 
@@ -7186,6 +7216,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d1ec4f6517c9e11ae630e200b2b65d193279042e28edd4a2cda233e46670bbb"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

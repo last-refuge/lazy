@@ -183,6 +183,9 @@ async fn nothing_is_lost_or_duplicated_while_clients_connect_mid_stream(pool: Pg
                         sender.user.username
                     ))
                     .unwrap(),
+                    thread_root: None,
+                    also_in_channel: false,
+                    attachment_ids: Vec::new(),
                 };
                 let response = http
                     .post(&url)
@@ -235,6 +238,9 @@ async fn nothing_is_lost_or_duplicated_while_clients_connect_mid_stream(pool: Pg
                             "churn {phase} {round}"
                         ))
                         .unwrap(),
+                        thread_root: None,
+                        also_in_channel: false,
+                        attachment_ids: Vec::new(),
                     };
                     let sent = http
                         .post(format!("{base}{}", paths::messages(churn)))

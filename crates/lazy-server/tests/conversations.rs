@@ -23,12 +23,30 @@ pub fn names(conversations: &[Conversation]) -> Vec<&str> {
 pub fn label(envelope: &EventEnvelope) -> &'static str {
     match envelope.event {
         Event::MessageCreated { .. } => "message_created",
+        Event::MessageEdited { .. } => "message_edited",
+        Event::MessageDeleted { .. } => "message_deleted",
+        Event::ReactionsChanged { .. } => "reactions_changed",
+        Event::GroupChanged { .. } => "group_changed",
+        Event::GroupDeleted { .. } => "group_deleted",
         Event::MemberJoined { .. } => "member_joined",
         Event::ConversationCreated { .. } => "conversation_created",
         Event::ConversationUpdated { .. } => "conversation_updated",
         Event::MemberAdded { .. } => "member_added",
         Event::MemberRemoved { .. } => "member_removed",
         Event::UserStateChanged { .. } => "user_state_changed",
+        Event::ThreadChanged { .. } => "thread_changed",
+        Event::ThreadStateChanged { .. } => "thread_state_changed",
+        Event::EmojiChanged { .. } => "emoji_changed",
+        Event::NotificationSettingsChanged { .. } => "notification_settings_changed",
+        Event::ConversationNotificationPrefsChanged { .. } => {
+            "conversation_notification_prefs_changed"
+        }
+        Event::UserStatusChanged { .. } => "user_status_changed",
+        Event::SavedChanged { .. } => "saved_changed",
+        Event::WorkspaceUpdated { .. } => "workspace_updated",
+        Event::MemberRoleChanged { .. } => "member_role_changed",
+        Event::MemberDeactivated { .. } => "member_deactivated",
+        Event::UserProfileChanged { .. } => "user_profile_changed",
     }
 }
 

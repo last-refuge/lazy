@@ -27,6 +27,8 @@ pub struct Person {
     pub name: SharedString,
     /// Secondary text, such as `@username`. Searched too.
     pub detail: SharedString,
+    /// What they have said they are doing, shown beside the name.
+    pub status: Option<crate::status_mark::StatusMark>,
 }
 
 /// What the picker reports to its owner.
@@ -114,6 +116,9 @@ impl PeoplePicker {
                     TextInputEvent::Tab { backwards } => cx.emit(PickerEvent::Tab {
                         backwards: *backwards,
                     }),
+                    TextInputEvent::UpWhenEmpty
+                    | TextInputEvent::PasteAttachments
+                    | TextInputEvent::Suggestion(_) => {}
                 },
             );
         Self {
@@ -309,6 +314,14 @@ impl Render for PeoplePicker {
                             .text_color(colors.text)
                             .child(person.name.clone()),
                     )
+                    .children(person.status.as_ref().map(|mark| {
+                        crate::status_mark::view(
+                            ElementId::Name(format!("person-status-{}", person.detail).into()),
+                            format!("person-status-{}", person.detail.trim_start_matches('@')),
+                            mark,
+                            theme.type_scale.small,
+                        )
+                    }))
                     .child(
                         div()
                             .min_w_0()
@@ -379,6 +392,7 @@ mod tests {
             id: UserId::generate(),
             name: name.to_owned().into(),
             detail: detail.to_owned().into(),
+            status: None,
         }
     }
 

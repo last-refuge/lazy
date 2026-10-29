@@ -5,6 +5,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use lazy_protocol::{ApiError, ErrorCode};
 
+use crate::logging::{Describe, LoggedErrorCode};
+
 /// A failure while serving a request.
 ///
 /// `Api` errors are deliberate, caller-visible outcomes. `Database` and `Internal` errors are
@@ -68,11 +70,19 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         if !matches!(self, Self::Api(_)) {
-            tracing::error!(error = %self, "request failed");
+            // What kind of failure, never its text: a database error can quote the value it refused.
+            tracing::error!(error = %self.describe(), "request failed");
         }
         let body = self.to_api_error();
         let status = StatusCode::from_u16(body.code.http_status())
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        (status, Json(body)).into_response()
+        let code = serde_json::to_value(body.code)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        let mut response = (status, Json(body)).into_response();
+        // For the request line, which says which refusal it was (never why).
+        response.extensions_mut().insert(LoggedErrorCode(code));
+        response
     }
 }

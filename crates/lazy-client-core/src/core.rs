@@ -1,29 +1,53 @@
 //! The client state machine.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use lazy_domain::{
-    ConversationId, DisplayName, DocumentError, EventSeq, MessageDocument, OperationId, Timestamp,
-    UserId, Username, WorkspaceId,
+    AttachmentId, ConversationId, DisplayName, DocumentError, EventSeq, MessageDocument, MessageId,
+    OperationId, Permalink, ReactionEmoji, Timestamp, UserId, Username, WorkspaceId,
+    workspace::invite_code_is_wellformed,
 };
 use lazy_protocol::{
-    BootstrapResponse, BrowsedChannel, Conversation, ConversationUserState, Event, EventEnvelope,
-    LoginRequest, Message, OperationStatus, PROTOCOL_VERSION, Password, RegisterRequest,
-    ServerFrame, User,
+    BootstrapResponse, Conversation, ConversationUserState, Event, EventEnvelope, InviteCode,
+    LoginRequest, Mentions, Message, OperationStatus, PROTOCOL_VERSION, Password, RegisterRequest,
+    ServerFrame, ThreadUserState, User, UserGroup,
 };
 
-use crate::cache::{CachedUserState, CachedWorkspace, ContentCache};
+use crate::attachments::ComposerTarget;
+use crate::cache::{CachedThreadState, CachedUserState, CachedWorkspace, ContentCache};
 use crate::change::{Change, Output};
 use crate::effect::Effect;
 use crate::input::{Input, SocketEvent};
 use crate::model::{
-    ActionKind, ActionState, ConnectionState, Delivery, HistoryStatus, ItemKey, JournalEntry,
-    RequestError, RetryKind, SessionPhase, TimelineItem, UNKNOWN_MEMBER_NAME, WorkspaceInfo,
+    ActionKind, ActionState, ConnectionState, Delivery, EditState, EmojiPrefs, HistoryStatus,
+    ItemKey, JournalEntry, JournalKind, JumpTarget, RequestError, RetryKind, SessionPhase,
+    TimelineItem, UNKNOWN_MEMBER_NAME, WorkspaceInfo,
 };
-use crate::timeline::Timeline;
+use crate::timeline::{DeletedRoot, Timeline};
+use threads::Home;
 
+mod admin;
+mod attachments;
 mod conversations;
+mod diagnostics;
+mod discovery;
+mod emoji;
+mod groups;
+mod inbox;
+mod mentions;
+mod messages;
+mod notify;
+mod permalink;
+mod reactions;
 mod readstate;
+mod search;
+mod switcher;
+mod threads;
+mod view;
+mod webhooks;
+mod workspaces;
+
+use threads::local_row;
 
 /// Messages fetched per history request.
 const HISTORY_PAGE_LIMIT: u32 = 50;
@@ -41,8 +65,13 @@ const MAX_PASSWORD_BYTES: usize = 256;
 /// not `Failed` may have a send in flight (see [`ClientCore::pump`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpStage {
+    /// A file of the message is still being copied into the outbox; the journal entry waits for
+    /// the copy so it never names a file that is not there.
+    Staging,
     /// Waiting for the journal write to become durable.
     Persisting,
+    /// Journaled, and waiting for the message's files to reach the server.
+    Uploading,
     /// Ready to be sent (journaled, or known to be absent on the server) and waiting for its
     /// turn behind earlier operations.
     Queued,
@@ -66,6 +95,10 @@ struct LocalOp {
     /// operations get theirs first, ordered by when they were submitted) and again when the
     /// person retries an operation whose outcome was unknown, which sends it to the back.
     order: u64,
+    /// For a reply: the thread it goes to.
+    thread: Option<threads::ReplyTo>,
+    /// When the person sent it, which is the order a restart recovers messages in.
+    submitted_at: Timestamp,
 }
 
 /// The client's state machine.
@@ -122,8 +155,6 @@ pub struct ClientCore {
     /// Where the "New messages" divider goes: the read position captured when the conversation
     /// was opened, kept until the person leaves it.
     marker_anchor: HashMap<ConversationId, EventSeq>,
-    /// The public channel directory from the last browse.
-    browse: Vec<BrowsedChannel>,
     actions: HashMap<ActionKind, ActionState>,
     /// Channel creations and conversation openings whose outcome is not settled, by operation.
     commands: HashMap<OperationId, conversations::PendingCommand>,
@@ -137,6 +168,126 @@ pub struct ClientCore {
     mark_failed: HashMap<ConversationId, EventSeq>,
     /// Conversations the person asked to leave, so their removal is not reported as a surprise.
     leaving: HashSet<ConversationId>,
+
+    // ----- Editing, deleting, permalinks -----
+    /// Edits that have not reached a final state, by message.
+    edits: HashMap<MessageId, messages::EditEntry>,
+    /// The message each unresolved edit operation belongs to.
+    edit_ops: HashMap<OperationId, MessageId>,
+    /// Edit operations dropped while their journal write was still outstanding. Their entry is
+    /// released once the write is reported, never before.
+    abandoned_persists: HashSet<OperationId>,
+    /// The permalink being opened, if any.
+    permalink: Option<permalink::Job>,
+    /// The message the view should scroll to and highlight.
+    jump: Option<JumpTarget>,
+    /// Positions of messages counted as unread from live events, per conversation, that the
+    /// state's position does not yet cover (see `count_message_deleted`).
+    counted_unread: HashMap<ConversationId, BTreeMap<EventSeq, bool>>,
+    /// Per conversation, the position up to which the unread count was last rebuilt from the
+    /// timeline's rows. At or before it, a message is counted only if it has an entry in
+    /// `counted_unread`: the rows are the count, and a message that has none (it was deleted
+    /// before the page was fetched) is not in it. Forgotten whenever a server state replaces the
+    /// count.
+    rebuilt_through: HashMap<ConversationId, EventSeq>,
+    /// The workspace's user groups, ordered by handle.
+    groups: Vec<UserGroup>,
+    /// Who is in each channel the person has looked at, fetched on selection.
+    member_lists: HashMap<ConversationId, groups::MemberList>,
+    /// Source of `MemberList::generation`.
+    next_members_fetch: u64,
+    /// The person's reaction changes that are not yet saved, by message and emoji.
+    reaction_toggles: HashMap<(MessageId, ReactionEmoji), reactions::Toggle>,
+    /// Source of `Toggle::order`, so pending changes are shown in the order they were made.
+    next_toggle: u64,
+    /// The skin tone and recent emoji of this profile.
+    emoji_prefs: EmojiPrefs,
+    /// A channel the person could join to read the message of the last permalink they opened.
+    join_offer: Option<(ConversationId, Permalink)>,
+
+    // ----- Threads -----
+    /// The open thread pane.
+    pane: Option<threads::Pane>,
+    /// Replies of threads that are not open but still have rows being sent (or failed), by root.
+    parked_replies: HashMap<MessageId, Timeline>,
+    /// Reply composer texts, with the conversation each thread belongs to.
+    thread_drafts: HashMap<MessageId, (ConversationId, String)>,
+    /// The person's state for the threads the client holds one for.
+    thread_states: HashMap<MessageId, ThreadUserState>,
+    /// The log position each thread state is current to (see `state_as_of`).
+    thread_as_of: HashMap<MessageId, EventSeq>,
+    /// Replies counted as unread from live events, with whether each mentions the person (see
+    /// `counted_unread`).
+    thread_counted: HashMap<MessageId, BTreeMap<EventSeq, bool>>,
+    /// See `rebuilt_through`.
+    thread_rebuilt: HashMap<MessageId, EventSeq>,
+    /// Open threads whose newest reply the view reports as on screen.
+    thread_at_bottom: HashSet<MessageId>,
+    /// The position of the thread mark-read request in flight, per thread.
+    thread_mark_in_flight: HashMap<MessageId, EventSeq>,
+    /// The position of a thread mark-read request that failed.
+    thread_mark_failed: HashMap<MessageId, EventSeq>,
+    /// Follow changes that are not yet saved, by thread.
+    follows: HashMap<MessageId, threads::Follow>,
+    /// Sends, replies, and edits waiting for a channel's people (see `must_wait_for_members`).
+    held_text: Vec<Input>,
+    /// Source of the generation of replies requests, so an answer to a request made for a pane
+    /// that has since been closed is never taken for the answer to a later one.
+    next_replies_fetch: u64,
+
+    // ----- Webhooks and what the person was looking at -----
+    /// The webhooks of each conversation, as last loaded.
+    webhook_lists: HashMap<ConversationId, Vec<lazy_protocol::Webhook>>,
+    /// The webhook just created, with its one-time address. Never cached or saved.
+    created_webhook: Option<crate::model::CreatedWebhook>,
+    /// Where the caret and selection of each conversation's draft were, as reported.
+    draft_selections: HashMap<ConversationId, crate::model::TextSelection>,
+    /// The same for reply drafts.
+    thread_selections: HashMap<MessageId, crate::model::TextSelection>,
+    /// The conversation last open in each workspace.
+    last_selected: HashMap<WorkspaceId, ConversationId>,
+
+    // ----- Attachments -----
+    files: attachments::Files,
+
+    // ----- Custom emoji -----
+    emojis: emoji::Emojis,
+
+    // ----- Search -----
+    searching: search::Searching,
+
+    // ----- Discovery -----
+    discovery: discovery::Discovery,
+
+    // ----- Notifications and the thread inbox -----
+    notif: notify::Notifications,
+    inboxing: inbox::Inboxing,
+
+    // ----- Workspace administration -----
+    admin: admin::Administration,
+
+    // ----- Several workspaces, profile, appearance -----
+    appearance: crate::workspaces::Appearance,
+    /// The last few errors, by category and code only (see `diagnostics`).
+    recent_errors: diagnostics::RecentErrors,
+    /// A bootstrap has been applied in this run, so the person's notification settings are the
+    /// server's (the cache does not hold them).
+    settings_known: bool,
+    /// The workspace the screen shows.
+    active: Option<WorkspaceId>,
+    /// The workspace whose scope is loaded in the fields above (the active one, except while an
+    /// event or answer of another is being applied).
+    scope: Option<WorkspaceId>,
+    /// The scopes of the other workspaces.
+    parked: HashMap<WorkspaceId, workspaces::WorkspaceScope>,
+    /// The workspace each action in flight was started in, so its answer is applied there.
+    action_scope: HashMap<ActionKind, WorkspaceId>,
+    avatars: workspaces::Avatars,
+    /// The workspace that was active when the app last ran.
+    preferred_active: Option<WorkspaceId>,
+    creating: Option<workspaces::CreateJob>,
+    /// What the rail last showed (see `sync_rail`).
+    last_rail: Vec<(WorkspaceId, String, u32, bool, ConnectionState, bool)>,
 }
 
 impl Default for ClientCore {
@@ -177,7 +328,6 @@ impl ClientCore {
             user_states: HashMap::new(),
             state_as_of: HashMap::new(),
             marker_anchor: HashMap::new(),
-            browse: Vec::new(),
             actions: HashMap::new(),
             commands: HashMap::new(),
             window_active: true,
@@ -185,6 +335,56 @@ impl ClientCore {
             mark_in_flight: HashMap::new(),
             mark_failed: HashMap::new(),
             leaving: HashSet::new(),
+            edits: HashMap::new(),
+            edit_ops: HashMap::new(),
+            abandoned_persists: HashSet::new(),
+            counted_unread: HashMap::new(),
+            rebuilt_through: HashMap::new(),
+            groups: Vec::new(),
+            member_lists: HashMap::new(),
+            next_members_fetch: 0,
+            reaction_toggles: HashMap::new(),
+            next_toggle: 0,
+            emoji_prefs: EmojiPrefs::default(),
+            permalink: None,
+            jump: None,
+            join_offer: None,
+            pane: None,
+            parked_replies: HashMap::new(),
+            thread_drafts: HashMap::new(),
+            thread_states: HashMap::new(),
+            thread_as_of: HashMap::new(),
+            thread_counted: HashMap::new(),
+            thread_rebuilt: HashMap::new(),
+            thread_at_bottom: HashSet::new(),
+            thread_mark_in_flight: HashMap::new(),
+            thread_mark_failed: HashMap::new(),
+            follows: HashMap::new(),
+            held_text: Vec::new(),
+            next_replies_fetch: 0,
+            webhook_lists: HashMap::new(),
+            created_webhook: None,
+            draft_selections: HashMap::new(),
+            thread_selections: HashMap::new(),
+            last_selected: HashMap::new(),
+            files: attachments::Files::default(),
+            emojis: emoji::Emojis::default(),
+            searching: search::Searching::default(),
+            discovery: discovery::Discovery::default(),
+            notif: notify::Notifications::default(),
+            inboxing: inbox::Inboxing::default(),
+            admin: admin::Administration::default(),
+            appearance: crate::workspaces::Appearance::default(),
+            recent_errors: diagnostics::RecentErrors::new(),
+            settings_known: false,
+            active: None,
+            scope: None,
+            parked: HashMap::new(),
+            action_scope: HashMap::new(),
+            avatars: workspaces::Avatars::default(),
+            preferred_active: None,
+            creating: None,
+            last_rail: Vec::new(),
         }
     }
 
@@ -207,32 +407,39 @@ impl ClientCore {
         &self.workspaces
     }
 
-    /// The first workspace, which is the only one the MVP shows.
+    /// The active workspace's entry.
     pub fn primary_workspace(&self) -> Option<&WorkspaceInfo> {
-        self.workspaces.first()
+        let scope = self.scope?;
+        self.workspaces
+            .iter()
+            .find(|info| info.workspace.id == scope)
     }
 
-    /// Conversations the person can read, across workspaces.
+    /// Conversations the person can read in the active workspace.
     pub fn conversations(&self) -> &[Conversation] {
         &self.conversations
     }
 
+    /// A conversation of any workspace the person belongs to.
     pub fn conversation(&self, id: ConversationId) -> Option<&Conversation> {
-        self.conversations.iter().find(|c| c.id == id)
+        self.find_conversation(id)
     }
 
     pub fn selected_conversation(&self) -> Option<ConversationId> {
         self.selected
     }
 
+    /// A person of the active workspace, as that workspace knows them (their status and whether
+    /// they are deactivated are its own). Nobody else: a person of another workspace only is not
+    /// found here, though `display_name` still names them.
     pub fn member(&self, id: UserId) -> Option<&User> {
         self.users.get(&id)
     }
 
-    /// A person's display name, or [`UNKNOWN_MEMBER_NAME`] when the profile is not known.
+    /// A person's display name, or [`UNKNOWN_MEMBER_NAME`] when the profile is not known. Names
+    /// are the person's own, the same in every workspace, so any workspace's copy answers.
     pub fn display_name(&self, id: UserId) -> &str {
-        self.users
-            .get(&id)
+        self.find_user(id)
             .map_or(UNKNOWN_MEMBER_NAME, |user| user.display_name.as_str())
     }
 
@@ -260,10 +467,29 @@ impl ClientCore {
         self.notice.as_deref()
     }
 
-    /// Number of messages that have not reached a final state. Intended for diagnostics and
-    /// tests.
+    /// The message to scroll to and highlight after `Input::OpenPermalink`. Cleared by
+    /// `Input::ClearJumpTarget`, by leaving the conversation, or when the message goes away.
+    pub fn jump_target(&self) -> Option<JumpTarget> {
+        self.jump
+    }
+
+    /// A channel the person has not joined, offered alongside the notice that explains why the
+    /// message of a permalink cannot be shown. Join it with `Input::JoinChannel`; the link then
+    /// opens by itself. Cleared with the notice.
+    pub fn join_offer(&self) -> Option<ConversationId> {
+        self.join_offer.map(|(conversation, _)| conversation)
+    }
+
+    /// Whether a permalink (or a search hit) is still being looked for: its message fetched, or
+    /// its history paged in. It ends with `jump_target`, a notice, or a `join_offer`.
+    pub fn opening_link(&self) -> bool {
+        self.permalink.is_some()
+    }
+
+    /// Number of submissions (sends and edits) that have not reached a final state. Intended for
+    /// diagnostics and tests.
     pub fn unsettled_operations(&self) -> usize {
-        self.ops.len()
+        self.ops.len() + self.edit_ops.len()
     }
 
     // ----- State machine -----
@@ -271,19 +497,40 @@ impl ClientCore {
     /// Applies one input and returns the resulting effects and changes.
     pub fn handle(&mut self, input: Input) -> Output {
         let mut out = self.dispatch(input);
+        self.permalink_housekeeping(&mut out);
+        self.ensure_selected_members(&mut out);
+        self.release_held_text(&mut out);
         self.maybe_mark_read(&mut out);
+        self.maybe_mark_thread_read(&mut out);
+        self.sync_inbox_states(&mut out);
+        self.sync_attention(&mut out);
+        self.sync_rail(&mut out);
         self.flush_cache(&mut out);
         out
     }
 
     fn dispatch(&mut self, input: Input) -> Output {
+        // An event or an answer that belongs to a workspace in the background is applied to that
+        // workspace's own scope, and the loaded scope is the active one again afterwards.
+        if let Some(workspace) = self.route_scope(&input) {
+            let back = self.scope;
+            self.enter_scope(Some(workspace));
+            let out = self.dispatch_in_scope(input);
+            self.enter_scope(back);
+            return out;
+        }
+        self.dispatch_in_scope(input)
+    }
+
+    fn dispatch_in_scope(&mut self, input: Input) -> Output {
         let mut out = Output::default();
         match input {
             Input::Register {
                 username,
                 display_name,
                 password,
-            } => self.register(&username, &display_name, password, &mut out),
+                invite_code,
+            } => self.register(&username, &display_name, password, &invite_code, &mut out),
             Input::SignIn { username, password } => self.sign_in(&username, password, &mut out),
             Input::SignOut => self.sign_out(&mut out),
             Input::RetryLoad => {
@@ -292,12 +539,27 @@ impl ClientCore {
                     self.request_bootstrap(&mut out);
                 } else if self.revalidating {
                     self.request_bootstrap(&mut out);
+                } else if self.workspaces.is_empty() && matches!(self.phase, SessionPhase::Ready) {
+                    // "Check again" with no workspace (access was lost): the person may have
+                    // been let back in.
+                    self.request_bootstrap(&mut out);
                 }
             }
-            Input::SelectConversation(id) => self.select_conversation(id, &mut out),
+            Input::SelectConversation(id) => {
+                self.permalink_selection_chosen();
+                self.retry_member_fetch(id);
+                self.select_conversation(id, &mut out)
+            }
             Input::SetDraft { conversation, text } => self.set_draft(conversation, text, &mut out),
             Input::SendMessage { conversation, text } => {
-                self.send_message(conversation, &text, &mut out)
+                if self.must_wait_for_members(conversation, &text, &mut out)
+                    || self.has_held_text(conversation)
+                {
+                    self.held_text
+                        .push(Input::SendMessage { conversation, text });
+                } else {
+                    self.send_message(conversation, &text, &mut out)
+                }
             }
             Input::RetryOperation {
                 conversation,
@@ -305,6 +567,136 @@ impl ClientCore {
             } => self.retry_operation(conversation, operation, &mut out),
             Input::LoadOlder { conversation } => self.load_older(conversation, &mut out),
             Input::DismissNotice => self.set_notice(None, &mut out),
+            Input::EditMessage {
+                conversation,
+                message,
+                text,
+            } => {
+                if self.must_wait_for_members(conversation, &text, &mut out)
+                    || self.has_held_text(conversation)
+                {
+                    self.held_text.push(Input::EditMessage {
+                        conversation,
+                        message,
+                        text,
+                    });
+                } else {
+                    self.edit_message(conversation, message, &text, &mut out)
+                }
+            }
+            Input::CancelEdit {
+                conversation,
+                message,
+            } => self.cancel_edit(conversation, message, &mut out),
+            Input::RetryEdit {
+                conversation,
+                message,
+            } => self.retry_edit(conversation, message, &mut out),
+            Input::DeleteMessage {
+                conversation,
+                message,
+            } => self.delete_message(conversation, message, &mut out),
+            Input::OpenPermalink(link) => self.open_permalink(link, &mut out),
+            Input::ClearJumpTarget => self.set_jump(None, &mut out),
+            Input::CreateWebhook { conversation, name } => {
+                self.create_webhook(conversation, &name, &mut out)
+            }
+            Input::DeleteWebhook(webhook) => self.delete_webhook(webhook, &mut out),
+            Input::LoadWebhooks(conversation) => self.load_webhooks(conversation, &mut out),
+            Input::DismissCreatedWebhook => self.dismiss_created_webhook(&mut out),
+            Input::SetDraftSelection {
+                conversation,
+                anchor,
+                head,
+            } => self.set_draft_selection(conversation, anchor, head, &mut out),
+            Input::SetThreadDraftSelection { root, anchor, head } => {
+                self.set_thread_draft_selection(root, anchor, head, &mut out)
+            }
+            Input::OpenThread { conversation, root } => {
+                self.open_thread_input(conversation, root, &mut out)
+            }
+            Input::CloseThread => self.close_thread_input(&mut out),
+            Input::LoadOlderReplies { root } => self.load_older_replies(root, &mut out),
+            Input::SendReply {
+                conversation,
+                root,
+                text,
+                also_in_channel,
+            } => {
+                if self.must_wait_for_members(conversation, &text, &mut out)
+                    || self.has_held_text(conversation)
+                {
+                    self.held_text.push(Input::SendReply {
+                        conversation,
+                        root,
+                        text,
+                        also_in_channel,
+                    });
+                } else {
+                    self.send_reply(conversation, root, &text, also_in_channel, &mut out)
+                }
+            }
+            Input::SetThreadDraft { root, text } => self.set_thread_draft(root, text, &mut out),
+            Input::SetThreadFollow { root, following } => {
+                self.set_thread_follow(root, following, &mut out)
+            }
+            Input::ThreadAtBottom { root, at_bottom } => {
+                self.thread_at_bottom_changed(root, at_bottom)
+            }
+            Input::RepliesLoaded {
+                root,
+                generation,
+                result,
+            } => self.replies_loaded(root, generation, result, &mut out),
+            Input::ThreadFollowResult { root, result } => {
+                self.thread_follow_result(root, result, &mut out)
+            }
+            Input::ThreadReadResult {
+                root,
+                up_to,
+                result,
+            } => self.thread_read_result(root, up_to, result, &mut out),
+            Input::CreateGroup {
+                handle,
+                name,
+                members,
+            } => self.create_group(&handle, &name, members, &mut out),
+            Input::UpdateGroup {
+                id,
+                handle,
+                name,
+                members,
+            } => self.update_group(id, handle, name, members, &mut out),
+            Input::DeleteGroup(id) => self.delete_group(id, &mut out),
+            Input::GroupCommandResult { operation, result } => {
+                self.group_command_result(operation, result, &mut out)
+            }
+            Input::MembersFetched {
+                conversation,
+                generation,
+                result,
+            } => self.members_fetched(conversation, generation, result, &mut out),
+            Input::ToggleReaction {
+                conversation,
+                message,
+                emoji,
+            } => self.toggle_reaction(conversation, message, emoji, &mut out),
+            Input::RecordEmojiUse(emoji) => self.record_emoji_use(emoji, &mut out),
+            Input::SetSkinTone(tone) => self.set_skin_tone(tone, &mut out),
+            Input::ReactionResult {
+                message,
+                emoji,
+                result,
+            } => self.reaction_result(message, emoji, result, &mut out),
+            Input::EditResult { operation, result } => {
+                self.edit_result(operation, result, &mut out)
+            }
+            Input::MessageFetched { message, result } => {
+                self.message_fetched(message, result, &mut out)
+            }
+            Input::DeleteResult { message, result } => {
+                self.delete_result(message, result, &mut out)
+            }
             Input::CreateChannel {
                 name,
                 visibility,
@@ -314,7 +706,6 @@ impl ClientCore {
             Input::OpenConversation { participants } => {
                 self.open_conversation(participants, &mut out)
             }
-            Input::BrowseChannels => self.browse_channels(&mut out),
             Input::JoinChannel(id) => self.join_channel(id, &mut out),
             Input::LeaveChannel(id) => self.leave_channel(id, &mut out),
             Input::AddMembers { id, users } => self.add_members(id, users, &mut out),
@@ -356,8 +747,26 @@ impl ClientCore {
 
             Input::Started(state) => {
                 self.drafts = state.drafts;
+                self.thread_selections = state
+                    .thread_drafts
+                    .iter()
+                    .filter_map(|draft| Some((draft.root, draft.selection?)))
+                    .collect();
+                self.thread_drafts = state
+                    .thread_drafts
+                    .into_iter()
+                    .map(|draft| (draft.root, (draft.conversation, draft.text)))
+                    .collect();
+                self.restore_view(state.view);
+                self.emoji_prefs = state.emoji_prefs.sanitized();
+                self.appearance = state.appearance;
+                self.preferred_active = state.active_workspace;
+                self.restore_recent_searches(state.recent_searches);
+                self.restore_recent_conversations(state.recent_conversations);
+                self.recompute_shown_prefs();
                 self.recovered_journal = state.journal;
                 if !state.problems.is_empty() {
+                    self.note_error("storage", "startup_problem");
                     self.set_notice(Some(state.problems.join(" ")), &mut out);
                 }
                 let cache = state
@@ -378,7 +787,8 @@ impl ClientCore {
             }
             Input::Authenticated { user } => self.authenticated(user, &mut out),
             Input::AuthFailed(error) => {
-                let message = error.message();
+                self.note_request_error("auth", &error);
+                let message = self.admin.auth_failure(&error);
                 self.set_phase(
                     SessionPhase::SignedOut {
                         last_error: Some(message),
@@ -389,6 +799,7 @@ impl ClientCore {
             Input::SessionExpired => self.session_expired(&mut out),
             Input::BootstrapLoaded(response) => self.apply_bootstrap(*response, &mut out),
             Input::BootstrapFailed(error) => {
+                self.note_request_error("bootstrap", &error);
                 self.bootstrap_in_flight = false;
                 if error.is_unauthenticated() {
                     self.session_expired(&mut out);
@@ -406,16 +817,24 @@ impl ClientCore {
                 result,
             } => self.history_loaded(conversation, generation, result, &mut out),
             Input::SubmissionPersisted { operation } => {
-                if let Some(op) = self.ops.get_mut(&operation)
-                    && op.stage == OpStage::Persisting
+                if self.abandoned_persists.remove(&operation) {
+                    out.effects.push(Effect::SettleSubmission { operation });
+                } else if self.edit_ops.contains_key(&operation) {
+                    self.edit_persisted(operation, &mut out);
+                } else if self
+                    .ops
+                    .get(&operation)
+                    .is_some_and(|op| op.stage == OpStage::Persisting)
                 {
-                    op.stage = OpStage::Queued;
-                    let conversation = op.conversation;
-                    self.pump(conversation, &mut out);
+                    self.op_persisted(operation, &mut out);
                 }
             }
             Input::SubmissionPersistFailed { operation, message } => {
-                if self
+                if self.abandoned_persists.remove(&operation) {
+                    out.effects.push(Effect::SettleSubmission { operation });
+                } else if self.edit_ops.contains_key(&operation) {
+                    self.edit_persist_failed(operation, &message, &mut out);
+                } else if self
                     .ops
                     .get(&operation)
                     .is_some_and(|op| op.stage == OpStage::Persisting)
@@ -438,17 +857,116 @@ impl ClientCore {
             }
             Input::Socket(event) => self.socket_event(event, &mut out),
             Input::Frame(frame) => self.frame(frame, &mut out),
-            Input::StorageProblem(message) => self.set_notice(Some(message), &mut out),
+            Input::StorageProblem(message) => {
+                self.note_error("storage", "problem");
+                self.set_notice(Some(message), &mut out)
+            }
+            input @ (Input::AttachFiles { .. }
+            | Input::RemoveAttachment { .. }
+            | Input::CancelAttachment { .. }
+            | Input::RetryAttachment { .. }
+            | Input::DiscardOperation { .. }
+            | Input::DownloadAttachment { .. }
+            | Input::CancelDownload(_)
+            | Input::DismissDownload(_)
+            | Input::LoadThumbnail(_)
+            | Input::LoadFullImage(_)
+            | Input::ReleaseFullImage(_)
+            | Input::FileStaged { .. }
+            | Input::UploadProgress { .. }
+            | Input::UploadResult { .. }
+            | Input::DownloadProgress { .. }
+            | Input::DownloadResult { .. }
+            | Input::ImageLoaded { .. }) => self.attachment_input(input, &mut out),
+            input @ (Input::BrowseChannels
+            | Input::SetMessageSaved { .. }
+            | Input::MessageSavedResult { .. }
+            | Input::OpenSaved
+            | Input::CloseSaved
+            | Input::LoadMoreSaved
+            | Input::SavedLoaded { .. }
+            | Input::OpenPeople
+            | Input::ClosePeople
+            | Input::SetPeopleQuery(_)
+            | Input::SetPeopleIncludeDeactivated(_)
+            | Input::LoadMorePeople
+            | Input::PeopleLoaded { .. }
+            | Input::OpenProfile { .. }
+            | Input::CloseProfile
+            | Input::ProfileLoaded { .. }
+            | Input::SetBrowseQuery(_)
+            | Input::SetBrowseJoined(_)
+            | Input::SetBrowseSort(_)
+            | Input::LoadMoreBrowse
+            | Input::CloseBrowse
+            | Input::BrowseLoaded { .. }) => self.discovery_input(input, &mut out),
+            input @ (Input::SwitchWorkspace(_)
+            | Input::CreateWorkspace { .. }
+            | Input::AcceptInvitation { .. }
+            | Input::UpdateProfile { .. }
+            | Input::SetAvatar { .. }
+            | Input::RemoveAvatar
+            | Input::LoadAvatar(_)
+            | Input::SetAppearance(_)
+            | Input::AvatarLoaded { .. }) => self.workspace_input(input, &mut out),
+            input @ (Input::UpdateWorkspace { .. }
+            | Input::SetMemberRole { .. }
+            | Input::SetMemberDeactivated { .. }
+            | Input::OpenInvitations
+            | Input::CloseInvitations
+            | Input::CreateInvitation { .. }
+            | Input::RevokeInvitation(_)
+            | Input::DismissCreatedInvitation
+            | Input::InvitationsLoaded { .. }) => self.admin_input(input, &mut out),
+            Input::ChooseQuickSwitcher(target) => self.choose_quick_switcher(target, &mut out),
+            input @ (Input::Clock(_)
+            | Input::SetNotificationSettings(_)
+            | Input::SetConversationNotificationPrefs { .. }
+            | Input::PauseNotifications { .. }
+            | Input::NotificationSettingsResult { .. }
+            | Input::ConversationPrefsResult { .. }
+            | Input::SetStatus(_)
+            | Input::StatusResult { .. }
+            | Input::NotificationActivated { .. }) => self.notify_input(input, &mut out),
+            input @ (Input::OpenInbox
+            | Input::LoadInbox { .. }
+            | Input::LoadMoreInbox
+            | Input::MarkInboxRead
+            | Input::CloseInbox
+            | Input::InboxLoaded { .. }
+            | Input::InboxReadResult { .. }) => self.inbox_input(input, &mut out),
+            input @ (Input::OpenSearch
+            | Input::SetSearchQuery { .. }
+            | Input::RunSearch
+            | Input::LoadMoreSearch
+            | Input::SetSearchSort(_)
+            | Input::CloseSearch
+            | Input::OpenSearchHit(_)
+            | Input::SearchResult { .. }) => self.search_input(input, &mut out),
+            input @ (Input::AddCustomEmoji { .. }
+            | Input::RenameCustomEmoji { .. }
+            | Input::DeleteCustomEmoji(_)
+            | Input::LoadEmojiImage(_)
+            | Input::CustomEmojiUploaded { .. }
+            | Input::EmojiImageLoaded { .. }) => self.emoji_input(input, &mut out),
         }
         out
     }
 
     // ----- Session -----
 
-    fn register(&mut self, username: &str, display_name: &str, password: String, out: &mut Output) {
+    fn register(
+        &mut self,
+        username: &str,
+        display_name: &str,
+        password: String,
+        invite_code: &str,
+        out: &mut Output,
+    ) {
         if !matches!(self.phase, SessionPhase::SignedOut { .. }) {
             return;
         }
+        self.admin.set_registering(true);
         let username = match Username::parse(username) {
             Ok(username) => username,
             Err(error) => return self.reject_sign_in(error.to_string(), out),
@@ -460,11 +978,18 @@ impl ClientCore {
         if let Some(problem) = password_problem(&password) {
             return self.reject_sign_in(problem, out);
         }
+        // The code is never echoed back in a message, and lives only in the request.
+        let invite_code = match invite_code.trim() {
+            "" => None,
+            code if invite_code_is_wellformed(code) => Some(InviteCode::new(code)),
+            _ => return self.reject_sign_in(admin::MALFORMED_INVITE_CODE.into(), out),
+        };
         self.set_phase(SessionPhase::SigningIn, out);
         out.effects.push(Effect::Register(RegisterRequest {
             username,
             display_name,
             password: Password::new(password),
+            invite_code,
         }));
     }
 
@@ -472,6 +997,7 @@ impl ClientCore {
         if !matches!(self.phase, SessionPhase::SignedOut { .. }) {
             return;
         }
+        self.admin.set_registering(false);
         let username = match Username::parse(username) {
             Ok(username) => username,
             Err(_) if username.trim().is_empty() => {
@@ -511,6 +1037,7 @@ impl ClientCore {
         // Another person's saved content must never be shown to this one.
         if self.cache_owner.is_some_and(|owner| owner != user.id) {
             self.cache_owner = None;
+            self.note_error("cache", "discarded_other_account");
             out.effects.push(Effect::DiscardCache);
         }
         self.users.insert(user.id, user.clone());
@@ -522,7 +1049,15 @@ impl ClientCore {
     fn sign_out(&mut self, out: &mut Output) {
         self.clear_session_data(out);
         self.drafts.clear();
+        self.thread_drafts.clear();
+        self.draft_selections.clear();
+        self.thread_selections.clear();
+        self.last_selected.clear();
         self.recovered_journal.clear();
+        if self.emoji_prefs != EmojiPrefs::default() {
+            self.emoji_prefs = EmojiPrefs::default();
+            out.changes.push(Change::EmojiPrefsChanged);
+        }
         self.cache_owner = None;
         self.set_phase(SessionPhase::SignedOut { last_error: None }, out);
         out.effects.push(Effect::SignOut);
@@ -537,6 +1072,7 @@ impl ClientCore {
         self.selected = None;
         self.timelines.clear();
         self.ops.clear();
+        self.clear_files(out);
         self.sockets.clear();
         self.subscribed.clear();
         self.members.clear();
@@ -548,13 +1084,42 @@ impl ClientCore {
         self.user_states.clear();
         self.state_as_of.clear();
         self.marker_anchor.clear();
-        self.browse.clear();
         self.actions.clear();
         self.commands.clear();
         self.at_bottom.clear();
         self.mark_in_flight.clear();
         self.mark_failed.clear();
         self.leaving.clear();
+        self.edits.clear();
+        self.edit_ops.clear();
+        self.abandoned_persists.clear();
+        self.counted_unread.clear();
+        self.rebuilt_through.clear();
+        self.groups.clear();
+        self.clear_emoji();
+        self.clear_search(out);
+        self.clear_notifications(out);
+        self.clear_inbox(out);
+        self.clear_discovery(out);
+        self.clear_admin(out);
+        self.parked.clear();
+        self.settings_known = false;
+        self.scope = None;
+        self.active = None;
+        self.action_scope.clear();
+        self.avatars = workspaces::Avatars::default();
+        self.creating = None;
+        self.last_rail.clear();
+        self.member_lists.clear();
+        self.reaction_toggles.clear();
+        self.clear_threads();
+        self.clear_webhooks();
+        self.held_text.clear();
+        self.permalink = None;
+        self.join_offer = None;
+        if self.jump.take().is_some() {
+            out.changes.push(Change::JumpTargetChanged);
+        }
         out.changes.push(Change::DirectoryChanged);
         out.changes.push(Change::SelectionChanged);
         self.recompute_connection(out);
@@ -569,7 +1134,9 @@ impl ClientCore {
         ) {
             return;
         }
+        self.note_error("session", "expired");
         self.bootstrap_in_flight = false;
+        self.abandon_emoji_add();
         // Leave the ready phase first: failing one queued message must not release the next one
         // into a request that is bound to be refused.
         self.set_phase(
@@ -588,6 +1155,13 @@ impl ClientCore {
             let reason = "Signed out before this message was confirmed.".to_owned();
             self.fail_operation(operation, reason, RetryKind::SameOperation, false, out);
         }
+        self.fail_running_edits(out);
+        self.drop_all_reaction_toggles(out);
+        self.drop_all_follows(out);
+        self.close_search(out);
+        self.close_inbox(out);
+        self.close_admin_views(out);
+        self.permalink = None;
         self.sockets.clear();
         self.subscribed.clear();
         self.recompute_connection(out);
@@ -624,12 +1198,23 @@ impl ClientCore {
         self.revalidating = false;
         self.cache_suppressed = false;
 
-        self.users.insert(response.user.id, response.user.clone());
         let me = response.user.id;
         self.me = Some(response.user.clone());
+        self.settings_known = true;
 
+        let held_workspace = self.held_workspace();
+        let held_all: Vec<WorkspaceInfo> = self.workspaces.clone();
+        let listed: HashSet<WorkspaceId> = response
+            .workspaces
+            .iter()
+            .map(|bootstrap| bootstrap.workspace.id)
+            .collect();
+        // What belongs to a workspace that is no longer listed goes with it.
+        if self.scope.is_some_and(|scope| !listed.contains(&scope)) {
+            self.enter_scope(None);
+        }
+        self.parked.retain(|id, _| listed.contains(id));
         self.workspaces.clear();
-        self.conversations.clear();
         self.members.clear();
         for bootstrap in &response.workspaces {
             self.workspaces.push(WorkspaceInfo {
@@ -637,14 +1222,35 @@ impl ClientCore {
                 role: bootstrap.role,
             });
             let ids = self.members.entry(bootstrap.workspace.id).or_default();
-            for member in &bootstrap.members {
-                self.users.insert(member.id, member.clone());
-                ids.insert(member.id);
-            }
-            self.conversations
-                .extend(bootstrap.conversations.iter().cloned());
+            ids.extend(bootstrap.members.iter().map(|member| member.id));
         }
+        for bootstrap in &response.workspaces {
+            let user = response.user.clone();
+            self.in_scope(bootstrap.workspace.id, |core| {
+                core.fill_scope(bootstrap, Some(&user), out)
+            });
+        }
+        // The workspace shown: the one that was, else the one the app last showed, else the first.
+        let chosen = self
+            .active
+            .filter(|active| listed.contains(active))
+            .or(self
+                .preferred_active
+                .filter(|wanted| listed.contains(wanted)))
+            .or(response.workspaces.first().map(|b| b.workspace.id));
+        self.enter_scope(chosen);
+        if self.active != chosen {
+            self.active = chosen;
+            self.selected = None;
+            out.changes.push(Change::ActiveWorkspaceChanged);
+            out.effects.push(Effect::PersistActiveWorkspace(chosen));
+        }
+        self.reconcile_avatars(out);
+        self.adopt_bootstrap_access(held_workspace, &held_all, out);
+        self.adopt_bootstrap_prefs(&response, out);
+        self.adopt_bootstrap_saved(&response, out);
         out.changes.push(Change::DirectoryChanged);
+        out.changes.push(Change::GroupsChanged);
 
         if revalidate {
             self.keep_cached_content(&response, out);
@@ -660,6 +1266,7 @@ impl ClientCore {
         self.cache_changed(true);
         // Sends that were waiting for the session (or for this bootstrap) can go now.
         self.pump_all(out);
+        self.pump_edits(out);
     }
 
     /// Whether the content on screen came from the cache of this same person and is still
@@ -684,8 +1291,9 @@ impl ClientCore {
     /// that began at the cached cursor fills the gap. Only conversations the person can no
     /// longer read are dropped.
     fn keep_cached_content(&mut self, response: &BootstrapResponse, out: &mut Output) {
-        let readable: HashSet<ConversationId> = self.conversations.iter().map(|c| c.id).collect();
+        let readable: HashSet<ConversationId> = self.all_conversation_ids();
         self.adopt_bootstrap_states(response, false);
+        self.adopt_bootstrap_thread_states(response, false);
         let lost: Vec<ConversationId> = self
             .timelines
             .keys()
@@ -693,6 +1301,9 @@ impl ClientCore {
             .copied()
             .collect();
         for conversation in lost {
+            self.drop_edits_in(conversation, out);
+            self.drop_reactions_in(conversation);
+            self.forget_threads_of(conversation, out);
             let still_sending = self
                 .timelines
                 .get(&conversation)
@@ -725,17 +1336,32 @@ impl ClientCore {
     /// being delivered survive), and the subscription starts after the snapshot's `head`, which
     /// misses nothing because the snapshot reflects everything up to it.
     fn rebuild_from_snapshot(&mut self, response: &BootstrapResponse, out: &mut Output) {
+        self.search_resynced(out);
+        self.inbox_resynced(out);
+        self.discovery_resynced(out);
         self.adopt_bootstrap_states(response, true);
+        self.adopt_bootstrap_thread_states(response, true);
         let known: Vec<ConversationId> = self.timelines.keys().copied().collect();
         for conversation in known {
             if let Some(timeline) = self.timelines.get_mut(&conversation) {
                 timeline.reset_keeping_local(conversation, &mut out.changes);
             }
         }
+        self.refresh_pane(out);
 
         self.applied.clear();
-        self.subscribed.clear();
+        let previously_subscribed = std::mem::take(&mut self.subscribed);
         let previous_sockets = std::mem::take(&mut self.sockets);
+        // A workspace the server no longer lists is not read any more.
+        for workspace in previously_subscribed {
+            if !response
+                .workspaces
+                .iter()
+                .any(|w| w.workspace.id == workspace)
+            {
+                out.effects.push(Effect::Unsubscribe { workspace });
+            }
+        }
         for bootstrap in &response.workspaces {
             let id = bootstrap.workspace.id;
             self.applied.insert(id, bootstrap.head);
@@ -776,7 +1402,6 @@ impl ClientCore {
     /// the background. Nothing is refetched for a cached conversation.
     fn restore_from_cache(&mut self, cache: ContentCache, out: &mut Output) {
         let me = cache.user;
-        self.users.insert(me.id, me.clone());
         self.me = Some(me.clone());
         for cached in cache.workspaces {
             let CachedWorkspace {
@@ -787,19 +1412,64 @@ impl ClientCore {
                 cursor,
                 timelines,
                 user_state,
+                groups,
+                custom_emoji,
+                threads,
             } = cached;
             let id = workspace.id;
             self.workspaces.push(WorkspaceInfo { workspace, role });
             let ids = self.members.entry(id).or_default();
-            for member in members {
-                ids.insert(member.id);
-                self.users.insert(member.id, member);
-            }
-            self.conversations.extend(conversations);
+            ids.extend(members.iter().map(|member| member.id));
+            let person = me.clone();
+            self.in_scope(id, |core| {
+                core.groups = groups;
+                core.restore_emoji(custom_emoji);
+                core.users = members
+                    .into_iter()
+                    .map(|member| (member.id, member))
+                    .collect();
+                core.users.entry(person.id).or_insert(person);
+                core.conversations = conversations;
+            });
             for cached_state in user_state {
                 let conversation = cached_state.state.conversation_id;
+                if !cached_state.counted.is_empty() {
+                    let mentioning: HashSet<EventSeq> =
+                        cached_state.counted_mentions.into_iter().collect();
+                    self.counted_unread.insert(
+                        conversation,
+                        cached_state
+                            .counted
+                            .into_iter()
+                            .map(|seq| (seq, mentioning.contains(&seq)))
+                            .collect(),
+                    );
+                }
+                if let Some(through) = cached_state.rebuilt_through {
+                    self.rebuilt_through.insert(conversation, through);
+                }
                 self.state_as_of.insert(conversation, cached_state.as_of);
                 self.user_states.insert(conversation, cached_state.state);
+            }
+            for cached_thread in threads {
+                let root = cached_thread.state.root_id;
+                if !cached_thread.counted.is_empty() {
+                    let mentioning: HashSet<EventSeq> =
+                        cached_thread.counted_mentions.into_iter().collect();
+                    self.thread_counted.insert(
+                        root,
+                        cached_thread
+                            .counted
+                            .into_iter()
+                            .map(|seq| (seq, mentioning.contains(&seq)))
+                            .collect(),
+                    );
+                }
+                if let Some(through) = cached_thread.rebuilt_through {
+                    self.thread_rebuilt.insert(root, through);
+                }
+                self.thread_as_of.insert(root, cached_thread.as_of);
+                self.thread_states.insert(root, cached_thread.state);
             }
             self.applied.insert(id, cursor);
             self.subscribed.insert(id);
@@ -815,6 +1485,12 @@ impl ClientCore {
                 out.changes.push(Change::TimelineReset { conversation });
             }
         }
+        let chosen = self
+            .preferred_active
+            .filter(|wanted| self.knows_workspace(*wanted))
+            .or(self.workspaces.first().map(|info| info.workspace.id));
+        self.enter_scope(chosen);
+        self.active = chosen;
         out.changes.push(Change::DirectoryChanged);
         self.recompute_connection(out);
         self.revalidating = true;
@@ -840,17 +1516,18 @@ impl ClientCore {
                 let id = info.workspace.id;
                 let cursor = *self.applied.get(&id)?;
                 let conversations: Vec<Conversation> = self
-                    .conversations
+                    .scope_conversations(id)
                     .iter()
                     .filter(|c| c.workspace_id == id)
                     .cloned()
                     .collect();
+                let scope_users = self.scope_users(id)?;
                 let members = self
                     .members
                     .get(&id)
                     .into_iter()
                     .flatten()
-                    .filter_map(|member| self.users.get(member).cloned())
+                    .filter_map(|member| scope_users.get(member).cloned())
                     .collect();
                 let timelines = conversations
                     .iter()
@@ -862,9 +1539,71 @@ impl ClientCore {
                         Some(CachedUserState {
                             state: self.user_states.get(&c.id)?.clone(),
                             as_of: *self.state_as_of.get(&c.id)?,
+                            counted: self
+                                .counted_unread
+                                .get(&c.id)
+                                .map(|counted| counted.keys().copied().collect())
+                                .unwrap_or_default(),
+                            rebuilt_through: self.rebuilt_through.get(&c.id).copied(),
+                            counted_mentions: self
+                                .counted_unread
+                                .get(&c.id)
+                                .map(|counted| {
+                                    counted
+                                        .iter()
+                                        .filter(|(_, mentioning)| **mentioning)
+                                        .map(|(seq, _)| *seq)
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
                         })
                     })
                     .collect();
+                let groups = self
+                    .scope_groups(id)
+                    .iter()
+                    .filter(|group| group.workspace_id == id)
+                    .cloned()
+                    .collect();
+                let known: HashSet<ConversationId> = conversations.iter().map(|c| c.id).collect();
+                let mut threads: Vec<CachedThreadState> = self
+                    .thread_states
+                    .values()
+                    .filter(|state| known.contains(&state.conversation_id))
+                    .filter_map(|state| {
+                        let root = state.root_id;
+                        // A state shown for a follow that is not saved yet is not the server's,
+                        // and it has no position: it is never cached.
+                        if self
+                            .thread_as_of
+                            .get(&root)
+                            .is_none_or(|as_of| *as_of == EventSeq::ZERO)
+                        {
+                            return None;
+                        }
+                        let counted = self.thread_counted.get(&root);
+                        let mut saved = state.clone();
+                        saved.following = self.saved_following(root, saved.following);
+                        Some(CachedThreadState {
+                            state: saved,
+                            as_of: *self.thread_as_of.get(&root)?,
+                            counted: counted
+                                .map(|counted| counted.keys().copied().collect())
+                                .unwrap_or_default(),
+                            counted_mentions: counted
+                                .map(|counted| {
+                                    counted
+                                        .iter()
+                                        .filter(|(_, mentioning)| **mentioning)
+                                        .map(|(seq, _)| *seq)
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            rebuilt_through: self.thread_rebuilt.get(&root).copied(),
+                        })
+                    })
+                    .collect();
+                threads.sort_by_key(|thread| thread.state.root_id);
                 Some(CachedWorkspace {
                     workspace: info.workspace.clone(),
                     role: info.role,
@@ -873,6 +1612,9 @@ impl ClientCore {
                     cursor,
                     timelines,
                     user_state,
+                    groups,
+                    custom_emoji: self.scope_emoji(id).to_vec(),
+                    threads,
                 })
             })
             .collect();
@@ -921,10 +1663,21 @@ impl ClientCore {
     /// content on hand and the saved cache can no longer be trusted: discard both and start over
     /// as on a first run.
     fn snapshot_required(&mut self, out: &mut Output) {
+        self.note_error("snapshot", "required");
+        // The server is about to close the connection: what arrives until a new one has caught up
+        // is not news.
+        for state in self.sockets.values_mut() {
+            if *state == ConnectionState::Live {
+                *state = ConnectionState::CatchingUp;
+            }
+        }
+        self.recompute_connection(out);
         self.revalidating = false;
         self.cache_suppressed = true;
+        self.member_lists.clear();
         self.request_bootstrap(out);
         if self.cache_owner.take().is_some() {
+            self.note_error("cache", "discarded_snapshot_required");
             out.effects.push(Effect::DiscardCache);
         }
         let known: Vec<ConversationId> = self.timelines.keys().copied().collect();
@@ -933,6 +1686,7 @@ impl ClientCore {
                 timeline.reset_keeping_local(conversation, &mut out.changes);
             }
         }
+        self.reset_pane(out);
     }
 
     /// Shows journaled submissions from a previous run as unknown outcomes and asks the server
@@ -947,11 +1701,25 @@ impl ClientCore {
         let mut mine = mine;
         mine.sort_by_key(|entry| entry.submitted_at);
         for entry in mine {
-            if self.ops.contains_key(&entry.operation_id) {
+            if self.ops.contains_key(&entry.operation_id)
+                || self.edit_ops.contains_key(&entry.operation_id)
+            {
+                continue;
+            }
+            if let JournalKind::Edit {
+                message_id,
+                base_revision,
+            } = entry.kind
+            {
+                self.recover_edit(entry, message_id, base_revision, out);
                 continue;
             }
             let operation = entry.operation_id;
             let order = self.take_order();
+            let thread = entry.thread_root.map(|root| threads::ReplyTo {
+                root,
+                also_in_channel: entry.also_in_channel,
+            });
             self.ops.insert(
                 operation,
                 LocalOp {
@@ -960,18 +1728,22 @@ impl ClientCore {
                     stage: OpStage::Querying,
                     resends: 0,
                     order,
+                    thread,
+                    submitted_at: entry.submitted_at,
                 },
             );
-            self.timeline_mut(entry.conversation_id).push_local(
-                entry.conversation_id,
-                TimelineItem {
-                    key: ItemKey::Operation(operation),
-                    author_id: me,
-                    document: entry.document,
-                    delivery: Delivery::UnknownOutcome,
-                },
-                &mut out.changes,
+            self.restore_op_files(operation, entry.conversation_id, &entry.attachments);
+            let (attachments, upload) = self.op_row_files(operation);
+            let row = local_row(
+                operation,
+                me,
+                entry.document,
+                Delivery::UnknownOutcome,
+                thread,
+                attachments,
+                upload,
             );
+            self.push_local_row(entry.conversation_id, thread, row, out);
             out.effects.push(Effect::QueryOperationStatus { operation });
         }
     }
@@ -979,8 +1751,12 @@ impl ClientCore {
     // ----- Conversations and drafts -----
 
     fn select_conversation(&mut self, id: ConversationId, out: &mut Output) {
-        if self.conversation(id).is_none() {
+        let Some(workspace) = self.conversation(id).map(|c| c.workspace_id) else {
             return;
+        };
+        // A conversation of another workspace brings that workspace with it.
+        if self.active != Some(workspace) {
+            self.switch_workspace(workspace, out);
         }
         self.change_selection(Some(id), out);
         self.mark_failed.remove(&id);
@@ -1021,6 +1797,8 @@ impl ClientCore {
     ) {
         let timeline = self.timeline_mut(conversation);
         timeline.generation += 1;
+        // What arrived since an earlier request is already in the page this one will get.
+        timeline.clear_unloaded_updates();
         timeline.history = HistoryStatus::Loading;
         out.effects.push(Effect::FetchHistory {
             conversation,
@@ -1055,6 +1833,7 @@ impl ClientCore {
                     .filter(|m| m.conversation_id == conversation)
                     .collect();
                 timeline.merge_messages(conversation, &belongs, &mut out.changes);
+                timeline.clear_unloaded_updates();
                 timeline.note_page(belongs.iter().map(|m| m.seq).min(), page.has_more);
                 timeline.history = HistoryStatus::Ready {
                     has_more: page.has_more,
@@ -1062,31 +1841,42 @@ impl ClientCore {
                 out.changes
                     .push(Change::HistoryStatusChanged { conversation });
                 self.cache_changed(true);
+                // Rows that have just appeared may belong to edits that are still unresolved.
+                self.resync_edit_rows(conversation, out);
+                self.resync_reaction_rows(conversation, out);
             }
             Err(error) => {
+                let code = error.code();
                 timeline.history = HistoryStatus::Failed {
                     message: error.message(),
                 };
                 out.changes
                     .push(Change::HistoryStatusChanged { conversation });
+                self.note_error("history", code);
                 if error.is_unauthenticated() {
                     self.session_expired(out);
                 }
             }
         }
+        self.permalink_advance(out);
     }
 
     fn set_draft(&mut self, conversation: ConversationId, text: String, out: &mut Output) {
         if self.draft(conversation) == text {
             return;
         }
-        if text.is_empty() {
+        let emptied = text.is_empty();
+        if emptied {
             self.drafts.remove(&conversation);
         } else {
             self.drafts.insert(conversation, text);
         }
         out.changes.push(Change::DraftChanged { conversation });
         self.persist_drafts(out);
+        // A draft with no text has no caret to keep.
+        if emptied && self.draft_selections.remove(&conversation).is_some() {
+            self.persist_view(out);
+        }
     }
 
     fn persist_drafts(&self, out: &mut Output) {
@@ -1105,15 +1895,23 @@ impl ClientCore {
         if !matches!(self.phase, SessionPhase::Ready) || self.conversation(conversation).is_none() {
             return;
         }
-        let document = match MessageDocument::from_plain_text(text) {
+        let target = ComposerTarget::Conversation(conversation);
+        let document = match parse_composer(text, &self.mention_directory(conversation)) {
             Ok(document) => document,
+            // A message that is only files has no text.
+            Err(DocumentError::Empty) if self.composer_allows_empty(target) => {
+                MessageDocument::empty()
+            }
             Err(DocumentError::Empty) => return,
             Err(error) => {
                 self.set_notice(Some(format!("Message not sent: {error}.")), out);
                 return;
             }
         };
-        self.submit(conversation, document, out);
+        let Some(files) = self.take_composer_files(target, out) else {
+            return;
+        };
+        self.submit(conversation, document, None, files, out);
         if self.drafts.remove(&conversation).is_some() {
             out.changes.push(Change::DraftChanged { conversation });
             self.persist_drafts(out);
@@ -1122,10 +1920,16 @@ impl ClientCore {
 
     /// Creates a new operation: a pending row, then a durable journal write. The send itself
     /// waits for the write to be reported durable.
+    ///
+    /// `files` are the attachments of a message that has them, already copied or being copied
+    /// into the outbox. The journal entry waits until the copies are in, so it never names a
+    /// file that is not there.
     fn submit(
         &mut self,
         conversation: ConversationId,
         document: MessageDocument,
+        thread: Option<threads::ReplyTo>,
+        files: Vec<AttachmentId>,
         out: &mut Output,
     ) {
         let Some(me) = self.me.as_ref().map(|user| user.id) else {
@@ -1133,32 +1937,61 @@ impl ClientCore {
         };
         let operation = OperationId::generate();
         let order = self.take_order();
+        self.adopt_files(operation, &files);
+        self.restage_files(&files, out);
+        let staging = self.op_is_staging(operation);
         self.ops.insert(
             operation,
             LocalOp {
                 conversation,
                 document: document.clone(),
-                stage: OpStage::Persisting,
+                stage: if staging {
+                    OpStage::Staging
+                } else {
+                    OpStage::Persisting
+                },
                 resends: 0,
                 order,
+                thread,
+                submitted_at: Timestamp::now(),
             },
         );
-        self.timeline_mut(conversation).push_local(
-            conversation,
-            TimelineItem {
-                key: ItemKey::Operation(operation),
-                author_id: me,
-                document: document.clone(),
-                delivery: Delivery::Pending,
-            },
-            &mut out.changes,
+        let (attachments, upload) = self.op_row_files(operation);
+        let row = local_row(
+            operation,
+            me,
+            document,
+            Delivery::Pending,
+            thread,
+            attachments,
+            upload,
         );
+        self.push_local_row(conversation, thread, row, out);
+        if !staging {
+            self.persist_send(operation, out);
+        }
+    }
+
+    /// Asks the runtime to journal a send.
+    pub(super) fn persist_send(&mut self, operation: OperationId, out: &mut Output) {
+        let Some(me) = self.me.as_ref().map(|user| user.id) else {
+            return;
+        };
+        let attachments = self.journal_files(operation);
+        let Some(op) = self.ops.get_mut(&operation) else {
+            return;
+        };
+        op.stage = OpStage::Persisting;
         out.effects.push(Effect::PersistSubmission(JournalEntry {
             operation_id: operation,
             user_id: me,
-            conversation_id: conversation,
-            document,
-            submitted_at: Timestamp::now(),
+            conversation_id: op.conversation,
+            document: op.document.clone(),
+            submitted_at: op.submitted_at,
+            kind: JournalKind::Send,
+            thread_root: op.thread.map(|reply| reply.root),
+            also_in_channel: op.thread.is_some_and(|reply| reply.also_in_channel),
+            attachments,
         }));
     }
 
@@ -1176,11 +2009,32 @@ impl ClientCore {
             // Already settled by the live event, or superseded.
             return;
         }
+        if let Err(error) = &result {
+            self.note_request_error("send", error);
+        }
         match result {
             Ok(response) => self.confirm_operation(operation, &response.message, out),
             Err(error) if error.is_unauthenticated() => self.session_expired(out),
             Err(RequestError::Rejected(error)) => {
-                self.fail_operation(operation, error.message, RetryKind::NewOperation, true, out)
+                let op = self.ops.get(&operation);
+                let document = op.map(|op| &op.document);
+                let reply = op.is_some_and(|op| op.thread.is_some());
+                let thread_gone = reply && error.code == lazy_protocol::ErrorCode::NotFound;
+                let reason = mention_refusal(document, &error)
+                    .or_else(|| {
+                        (reply && error.code == lazy_protocol::ErrorCode::NotFound).then(|| {
+                            "The message that started this thread was deleted, so it can't be \
+                             replied to."
+                                .to_owned()
+                        })
+                    })
+                    .unwrap_or(error.message);
+                self.fail_operation(operation, reason, RetryKind::NewOperation, true, out);
+                // A reply to a thread that no longer exists can never be sent, and its row may
+                // be out of sight: its files are not kept for a retry.
+                if thread_gone {
+                    self.files_of_message_settled(operation, out);
+                }
             }
             Err(RequestError::Unknown(_)) => self.begin_status_query(operation, out),
         }
@@ -1195,6 +2049,9 @@ impl ClientCore {
         if self.commands.contains_key(&operation) {
             return self.command_status_result(operation, result, out);
         }
+        if let Some(&message) = self.edit_ops.get(&operation) {
+            return self.edit_status_result(message, operation, result, out);
+        }
         if !self
             .ops
             .get(&operation)
@@ -1206,7 +2063,11 @@ impl ClientCore {
             Ok(OperationStatus::Committed { message }) => {
                 self.confirm_operation(operation, &message, out)
             }
-            Ok(OperationStatus::ConversationCommitted { .. }) => {
+            Ok(
+                OperationStatus::ConversationCommitted { .. }
+                | OperationStatus::EditCommitted { .. }
+                | OperationStatus::GroupCommitted { .. },
+            ) => {
                 let reason = "The server gave an unexpected answer.".to_owned();
                 self.fail_operation(operation, reason, RetryKind::SameOperation, false, out);
             }
@@ -1226,6 +2087,14 @@ impl ClientCore {
                 op.stage = OpStage::Queued;
                 let conversation = op.conversation;
                 self.set_item_delivery(conversation, operation, Delivery::Pending, out);
+                // Files the server may not hold go up first (the same upload repeated is
+                // harmless); then the message follows.
+                if !self.op_uploaded(operation) {
+                    if let Some(op) = self.ops.get_mut(&operation) {
+                        op.stage = OpStage::Uploading;
+                    }
+                    self.begin_op_uploads(operation, out);
+                }
                 self.pump(conversation, out);
             }
             Err(error) if error.is_unauthenticated() => self.session_expired(out),
@@ -1260,13 +2129,10 @@ impl ClientCore {
         if !matches!(self.phase, SessionPhase::Ready) {
             return;
         }
-        let Some(timeline) = self.timelines.get(&conversation) else {
+        // The row is in the conversation's timeline, or, for a reply, in its thread's.
+        let Some((item, thread)) = self.locate_local_row(conversation, operation) else {
             return;
         };
-        let Some(index) = timeline.index_of(ItemKey::Operation(operation)) else {
-            return;
-        };
-        let item = &timeline.items()[index];
         let Delivery::Failed { retry, .. } = item.delivery else {
             return;
         };
@@ -1281,22 +2147,24 @@ impl ClientCore {
                     op.resends = 0;
                     op.order = order;
                     self.next_order += 1;
-                    self.timeline_mut(conversation).move_to_back(
-                        conversation,
-                        ItemKey::Operation(operation),
-                        &mut out.changes,
-                    );
+                    self.in_local_timeline(conversation, thread, out, |timeline, changes| {
+                        timeline.move_to_back(conversation, ItemKey::Operation(operation), changes)
+                    });
                     self.begin_status_query(operation, out);
                 }
             }
             RetryKind::NewOperation => {
                 let document = item.document.clone();
-                self.timeline_mut(conversation).remove(
-                    conversation,
-                    ItemKey::Operation(operation),
-                    &mut out.changes,
-                );
-                self.submit(conversation, document, out);
+                let files = self.take_failed_files(operation);
+                self.in_local_timeline(conversation, thread, out, |timeline, changes| {
+                    timeline.remove(conversation, ItemKey::Operation(operation), changes);
+                });
+                self.tidy_parked(thread);
+                // A message of only files whose files are gone has nothing left to send.
+                if document.has_no_content() && files.is_empty() {
+                    return;
+                }
+                self.submit(conversation, document, thread, files, out);
             }
         }
     }
@@ -1307,17 +2175,36 @@ impl ClientCore {
         let Some(op) = self.ops.get(&operation) else {
             return;
         };
-        let conversation = op.conversation;
+        let (conversation, thread) = (op.conversation, op.thread);
         if message.conversation_id != conversation {
             return;
         }
-        self.timeline_mut(conversation).confirm_local(
-            conversation,
-            operation,
-            message,
-            &mut out.changes,
-        );
+        if message.deleted {
+            // Sent, and deleted before the client heard back: the row never becomes a message.
+            self.in_local_timeline(conversation, thread, out, |timeline, changes| {
+                timeline.remove(conversation, ItemKey::Operation(operation), changes);
+            });
+            self.tidy_parked(thread);
+            self.cache_changed(false);
+            self.files_of_message_settled(operation, out);
+            self.settle_operation(operation, out);
+            return;
+        }
+        self.in_local_timeline(conversation, thread, out, |timeline, changes| {
+            timeline.confirm_local(conversation, operation, message, changes)
+        });
+        if thread.is_some() {
+            // A reply is also in the channel when it was sent there, and may already be in the
+            // thread's rows if a page brought it in first.
+            self.place_reply(message, out);
+            self.tidy_parked(thread);
+        }
+        if self.edits.contains_key(&message.id) {
+            self.sync_edit_row(conversation, message.id, out);
+        }
+        self.sync_reaction_row(conversation, message.id, out);
         self.cache_changed(false);
+        self.files_of_message_settled(operation, out);
         self.settle_operation(operation, out);
     }
 
@@ -1336,6 +2223,8 @@ impl ClientCore {
         };
         op.stage = OpStage::Failed;
         let conversation = op.conversation;
+        let thread_root = op.thread.map(|reply| reply.root);
+        self.stop_op_files(operation, out);
         self.set_item_delivery(
             conversation,
             operation,
@@ -1345,6 +2234,12 @@ impl ClientCore {
         let released = settle || retry == RetryKind::NewOperation;
         if released {
             self.settle_operation(operation, out);
+        }
+        // A reply that can never be sent, because its thread has ended, keeps no copies.
+        if retry == RetryKind::NewOperation
+            && thread_root.is_some_and(|root| self.thread_has_ended(root))
+        {
+            self.files_of_message_settled(operation, out);
         }
         // A failed message no longer holds up the ones behind it.
         self.pump(conversation, out);
@@ -1383,6 +2278,7 @@ impl ClientCore {
         let Some(operation) = head else {
             return;
         };
+        let attachments = self.op_file_ids(operation);
         if let Some(op) = self.ops.get_mut(&operation)
             && op.stage == OpStage::Queued
         {
@@ -1391,6 +2287,9 @@ impl ClientCore {
                 operation,
                 conversation,
                 document: op.document.clone(),
+                thread_root: op.thread.map(|reply| reply.root),
+                also_in_channel: op.thread.is_some_and(|reply| reply.also_in_channel),
+                attachments,
             });
         }
     }
@@ -1403,6 +2302,7 @@ impl ClientCore {
         for conversation in conversations {
             self.pump(conversation, out);
         }
+        self.pump_uploads(out);
     }
 
     fn set_item_delivery(
@@ -1412,12 +2312,15 @@ impl ClientCore {
         delivery: Delivery,
         out: &mut Output,
     ) {
-        self.timeline_mut(conversation).set_delivery(
-            conversation,
-            ItemKey::Operation(operation),
-            delivery,
-            &mut out.changes,
-        );
+        let thread = self.ops.get(&operation).and_then(|op| op.thread);
+        self.in_local_timeline(conversation, thread, out, |timeline, changes| {
+            timeline.set_delivery(
+                conversation,
+                ItemKey::Operation(operation),
+                delivery,
+                changes,
+            );
+        });
     }
 
     // ----- Realtime -----
@@ -1431,12 +2334,31 @@ impl ClientCore {
                     self.recompute_connection(out);
                     self.advance_cursor(workspace_id, seq);
                     self.retry_revalidation(out);
+                    self.retry_unseen_edits(out);
+                    self.retry_unseen_replies(out);
+                    self.retry_pane_root(out);
+                    self.retry_failed_images(out);
+                    self.retry_failed_emoji_images(out);
+                    self.retry_failed_avatars(out);
+                    self.members_may_be_stale();
                 }
             }
             ServerFrame::SnapshotRequired { .. } => self.snapshot_required(out),
             ServerFrame::Error { code, message } => {
+                self.note_error(
+                    "realtime",
+                    crate::diagnostics::snake_case(&format!("{code:?}")),
+                );
                 if code == lazy_protocol::ErrorCode::Unauthenticated {
                     self.session_expired(out);
+                } else if matches!(
+                    code,
+                    lazy_protocol::ErrorCode::Forbidden | lazy_protocol::ErrorCode::NotFound
+                ) {
+                    // The server ended this subscription because the person may not read the
+                    // workspace any more (they were deactivated). Whether that still holds is
+                    // for the bootstrap to say.
+                    self.snapshot_required(out);
                 } else {
                     self.set_notice(Some(message), out);
                 }
@@ -1456,7 +2378,70 @@ impl ClientCore {
             Event::MessageCreated {
                 message,
                 operation_id,
-            } => self.apply_message(message, operation_id, out),
+            } => {
+                // Only an event that arrives once the connection has caught up is news.
+                let live = self.sockets.get(&workspace) == Some(&ConnectionState::Live);
+                let seen = message.clone();
+                self.apply_message(message, operation_id, out);
+                self.inbox_message_created(&seen, out);
+                self.notify_message(&seen, envelope.occurred_at, live, out);
+            }
+            Event::MessageEdited {
+                message,
+                operation_id,
+                previous_mentions,
+            } => self.apply_message_edited(
+                message,
+                operation_id,
+                &previous_mentions,
+                envelope.seq,
+                out,
+            ),
+            Event::MessageDeleted {
+                message,
+                had_mentions,
+            } => self.apply_message_deleted(message, &had_mentions, envelope.seq, out),
+            Event::ThreadChanged {
+                conversation_id,
+                root_id,
+                summary,
+            } => {
+                let seen = summary.clone();
+                self.apply_thread_changed(conversation_id, root_id, summary, envelope.seq, out);
+                self.inbox_thread_changed(root_id, seen.as_ref(), out);
+            }
+            Event::ThreadStateChanged { state } => {
+                let root = state.root_id;
+                self.apply_thread_state_changed(state, envelope.seq, out);
+                // What is on screen, which keeps a follow change that is not saved yet.
+                if let Some(shown) = self.thread_states.get(&root).cloned() {
+                    self.inbox_thread_state(&shown, out);
+                }
+            }
+            Event::SavedChanged { message_id, saved } => self.event_saved(message_id, saved, out),
+            Event::NotificationSettingsChanged { settings } => {
+                self.event_notification_settings(workspace, settings, out)
+            }
+            Event::ConversationNotificationPrefsChanged { prefs } => {
+                self.event_conversation_prefs(prefs, out)
+            }
+            Event::UserStatusChanged { user_id, status } => {
+                self.event_user_status(user_id, status, out)
+            }
+            Event::GroupChanged { group } => self.apply_group_changed(group, out),
+            Event::EmojiChanged { emoji } => self.apply_emoji_changed(emoji, out),
+            Event::GroupDeleted { group_id } => self.apply_group_deleted(group_id, out),
+            Event::ReactionsChanged {
+                conversation_id,
+                message_id,
+                reactions,
+            } => self.apply_reactions_changed(
+                conversation_id,
+                message_id,
+                reactions,
+                envelope.seq,
+                out,
+            ),
             Event::MemberJoined { user } => {
                 self.members.entry(workspace).or_default().insert(user.id);
                 self.users.insert(user.id, user);
@@ -1480,6 +2465,17 @@ impl ClientCore {
             Event::UserStateChanged { state } => {
                 self.event_user_state_changed(state, envelope.seq, out)
             }
+            Event::WorkspaceUpdated { workspace } => self.apply_workspace(workspace, out),
+            Event::MemberRoleChanged { user_id, role } => self.apply_role(user_id, role, out),
+            Event::MemberDeactivated {
+                user_id,
+                deactivated,
+            } => self.apply_deactivated(user_id, deactivated, out),
+            Event::UserProfileChanged {
+                user_id,
+                display_name,
+                avatar_version,
+            } => self.apply_profile(user_id, display_name, avatar_version, out),
         }
         self.advance_cursor(workspace, envelope.seq);
     }
@@ -1495,26 +2491,40 @@ impl ClientCore {
         if self.conversation(message.conversation_id).is_none() {
             return;
         }
-        self.count_message_event(&message, out);
         let own = self
             .me
             .as_ref()
             .is_some_and(|me| me.id == message.author_id);
-        if let Some(operation) = operation
-            && own
-            && self.ops.contains_key(&operation)
-        {
+        let own_operation = operation.filter(|operation| own && self.ops.contains_key(operation));
+        let conversation = message.conversation_id;
+        // A replay serves the earlier events of a deleted message as tombstones. It never appears
+        // and never counts as unread (its deletion event follows), but a tombstone is still a
+        // position: the person's own message moved their read position when it was sent.
+        self.count_message_event(&message, out);
+        self.count_reply_event(&message, out);
+        if message.deleted {
+            // A send of ours that was deleted before it was confirmed simply ends.
+            match own_operation {
+                Some(operation) => self.confirm_operation(operation, &message, out),
+                None => self.each_home(conversation, out, |_, timeline, _| {
+                    timeline.note_unloaded_update(&message);
+                }),
+            }
+            return;
+        }
+        if let Some(operation) = own_operation {
             self.confirm_operation(operation, &message, out);
             return;
         }
-        let conversation = message.conversation_id;
-        let added = self.timeline_mut(conversation).merge_messages(
-            conversation,
-            std::slice::from_ref(&message),
-            &mut out.changes,
-        );
+        let added = self.place_message(&message, out);
         if added > 0 {
             self.cache_changed(false);
+            // The row may belong to an edit recovered from the journal, or carry reaction changes
+            // that are still being saved.
+            if self.edits.contains_key(&message.id) {
+                self.sync_edit_row(conversation, message.id, out);
+            }
+            self.sync_reaction_row(conversation, message.id, out);
         }
     }
 
@@ -1556,6 +2566,9 @@ impl ClientCore {
             self.recompute_connection(out);
             if matches!(event, SocketEvent::Opened { .. }) {
                 self.retry_revalidation(out);
+            }
+            if matches!(event, SocketEvent::Closed { .. }) {
+                self.note_error("socket", "closed");
             }
         }
     }
@@ -1601,9 +2614,48 @@ impl ClientCore {
     fn set_notice(&mut self, notice: Option<String>, out: &mut Output) {
         if self.notice != notice {
             self.notice = notice;
+            self.join_offer = None;
             out.changes.push(Change::NoticeChanged);
         }
     }
+}
+
+/// What to tell the person when the server refuses a message that mentions something, if the
+/// mention is the likely reason. Only `@channel` in the default channel is `forbidden` for a
+/// reason in the content, and `invalid_request` for a message with a mention most likely means
+/// a person or group that no longer exists.
+pub(crate) fn mention_refusal(
+    document: Option<&MessageDocument>,
+    error: &lazy_protocol::ApiError,
+) -> Option<String> {
+    let mentions = document?.mentions();
+    match error.code {
+        lazy_protocol::ErrorCode::Forbidden
+            if mentions.contains(&lazy_domain::MentionTarget::Channel) =>
+        {
+            Some(
+                "You can't use @channel here: in the default channel it is for admins and owners."
+                    .to_owned(),
+            )
+        }
+        lazy_protocol::ErrorCode::InvalidRequest if !mentions.is_empty() => Some(
+            "A mention in that message isn't valid: the person may have left the workspace, or \
+             the group may no longer exist."
+                .to_owned(),
+        ),
+        _ => None,
+    }
+}
+
+/// Turns composer text into a document: `:shortcode:` becomes its emoji (only where it stands
+/// alone, never in code or after a backslash), then the source syntax is parsed, with `@name`
+/// becoming a mention where `directory` knows the name. The text the
+/// person typed (a draft, an editor's source) is not changed; only what is sent is.
+pub(crate) fn parse_composer(
+    text: &str,
+    directory: &dyn lazy_domain::MentionDirectory,
+) -> Result<MessageDocument, DocumentError> {
+    MessageDocument::from_markdown_with(&lazy_domain::emoji::replace_shortcodes(text), directory)
 }
 
 fn password_problem(password: &str) -> Option<String> {

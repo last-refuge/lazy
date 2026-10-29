@@ -567,6 +567,7 @@ fn picker_host(cx: &mut TestAppContext, max: usize) -> PickerFixture<'_> {
         id: UserId::generate(),
         name: name.into(),
         detail: detail.into(),
+        status: None,
     })
     .collect();
     let events = Rc::new(RefCell::new(Vec::new()));

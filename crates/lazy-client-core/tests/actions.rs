@@ -460,20 +460,24 @@ fn ready_with_alpha() -> (World, Driver, Conversation) {
 #[test]
 fn browsing_reports_progress_and_failures() {
     let (_, mut driver, _) = ready_with_alpha();
-    let kind = ActionKind::Browse;
     let out = driver.send(Input::BrowseChannels);
-    assert!(matches!(&out.effects[..], [Effect::BrowseChannels { .. }]));
-    assert_eq!(*driver.core.action(kind), ActionState::InFlight);
-    assert!(
-        driver.send(Input::BrowseChannels).effects.is_empty(),
-        "already loading"
+    let [Effect::LoadBrowse { generation, .. }] = &out.effects[..] else {
+        panic!("the directory is asked for: {:?}", out.effects);
+    };
+    assert_eq!(
+        driver.core.browse().status,
+        lazy_client_core::LoadStatus::Loading
     );
-    driver.send(Input::ActionResult {
-        kind,
+    driver.send(Input::BrowseLoaded {
+        generation: *generation,
         result: Err(unknown()),
     });
-    assert!(failed(&driver, kind).contains("Couldn't reach the server"));
-    assert!(driver.core.browse_results().is_empty());
+    assert!(matches!(
+        &driver.core.browse().status,
+        lazy_client_core::LoadStatus::Failed { reason, can_retry: true }
+            if reason.contains("Couldn't reach the server")
+    ));
+    assert!(driver.core.browse().channels.is_empty());
 }
 
 #[test]
@@ -760,7 +764,6 @@ fn every_action_has_its_own_state() {
         *driver.core.action(ActionKind::SetFavorite(alpha.id)),
         ActionState::InFlight
     );
-    assert_eq!(*driver.core.action(ActionKind::Browse), ActionState::Idle);
     assert_eq!(
         *driver.core.action(ActionKind::Unarchive(alpha.id)),
         ActionState::Idle

@@ -41,6 +41,7 @@ use crate::accounts::{self, Principal};
 use crate::dispatcher::{BATCH_SIZE, Dispatcher};
 use crate::error::AppError;
 use crate::events::{self, StoredEvent, Visibility};
+use crate::logging::Describe;
 
 /// Frames queued for the socket before senders wait.
 const OUTBOUND_QUEUE: usize = 256;
@@ -127,7 +128,7 @@ pub async fn serve_connection(
                         close = Some((CLOSE_POLICY, "session ended"));
                         break;
                     }
-                    Err(error) => tracing::warn!(%error, "cannot recheck session"),
+                    Err(error) => tracing::warn!(error = %error.describe(), "cannot recheck session"),
                 }
                 if out.try_send(Message::Ping(Vec::new().into())).is_err() {
                     // Queue full or closed: the client is not keeping up.
@@ -138,7 +139,7 @@ pub async fn serve_connection(
                 if let Err(error) = joined
                     && error.is_panic()
                 {
-                    tracing::error!(%error, "subscription task panicked");
+                    tracing::error!(error = %error.describe(), "subscription task panicked");
                 }
             }
             incoming = stream.next() => {
@@ -175,7 +176,7 @@ pub async fn serve_connection(
     }
     drop(out);
     if let Err(error) = writer.await {
-        tracing::warn!(%error, "websocket writer task failed");
+        tracing::warn!(error = %error.describe(), "websocket writer task failed");
     }
 }
 
@@ -208,7 +209,7 @@ async fn handle_client_text(
         }
         Err(error) => {
             // Report what was wrong with the frame's shape, never its contents.
-            tracing::debug!(%error, "malformed client frame");
+            tracing::debug!(error = %error.describe(), "malformed client frame");
             let _ = send_frame(
                 out,
                 &ServerFrame::Error {
@@ -245,7 +246,7 @@ impl Subscription {
         match self.run().await {
             Ok(()) | Err(Exit::Done | Exit::OutputClosed) => {}
             Err(Exit::Failed(error)) => {
-                tracing::warn!(workspace_id = %self.workspace_id, %error, "subscription failed");
+                tracing::warn!(workspace_id = %self.workspace_id, error = %error.describe(), "subscription failed");
                 let api = error.to_api_error();
                 let _ = send_frame(
                     &self.out,

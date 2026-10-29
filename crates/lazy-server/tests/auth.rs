@@ -185,6 +185,7 @@ async fn registration_can_be_closed(pool: PgPool) {
         pool,
         ServerOptions {
             open_registration: false,
+            open_workspace_creation: true,
             password_cost: PasswordCost::FAST_FOR_TESTS,
             retention: RetentionPolicy::disabled(),
         },

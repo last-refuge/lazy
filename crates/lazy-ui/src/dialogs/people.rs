@@ -59,6 +59,7 @@ impl PeopleDialog {
                     id: user.id,
                     name: user.display_name.to_string().into(),
                     detail: format!("@{}", user.username).into(),
+                    status: crate::status_mark::StatusMark::lookup(core, user.id),
                 })
                 .collect();
             people.sort_by_key(|person| person.name.to_lowercase());

@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::config::RetentionPolicy;
 use crate::error::AppError;
+use crate::logging::Describe;
 
 /// Most events deleted by one transaction. Large backlogs are pruned in several transactions so
 /// that writers, who wait on the workspace row lock, are never stalled for long.
@@ -191,7 +192,7 @@ impl PrunerHandle {
     pub async fn join(mut self) {
         while let Some(result) = self.tasks.join_next().await {
             if let Err(error) = result {
-                tracing::error!(%error, "pruner task failed");
+                tracing::error!(error = %error.describe(), "pruner task failed");
             }
         }
     }
@@ -213,7 +214,7 @@ pub fn spawn(pool: PgPool, policy: RetentionPolicy, shutdown: CancellationToken)
                             tracing::info!(deleted, "pruned old events");
                         }
                     }
-                    Err(error) => tracing::warn!(%error, "event pruning failed; will retry"),
+                    Err(error) => tracing::warn!(error = %error.describe(), "event pruning failed; will retry"),
                 }
                 completed.send_modify(|count| *count += 1);
                 tokio::select! {

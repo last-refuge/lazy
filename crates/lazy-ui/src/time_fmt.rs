@@ -36,6 +36,43 @@ pub fn day_label(day: Date, today: Date) -> String {
     }
 }
 
+/// How long ago `then` was, for the line under a thread's root: `just now`, `5 minutes ago`,
+/// `3 hours ago`, `yesterday`, a weekday for the last week, else the date (with the year when it
+/// is not the current one). A time in the future (clock skew) reads as `just now`.
+pub fn ago_label(then: &Zoned, now: &Zoned) -> String {
+    let seconds = now.timestamp().duration_since(then.timestamp()).as_secs();
+    let plural = |n: i64, unit: &str| {
+        if n == 1 {
+            format!("1 {unit} ago")
+        } else {
+            format!("{n} {unit}s ago")
+        }
+    };
+    if seconds < 60 {
+        return "just now".to_owned();
+    }
+    if seconds < 3_600 {
+        return plural(seconds / 60, "minute");
+    }
+    let today = now.date();
+    let day = then.date();
+    if day == today {
+        return plural(seconds / 3_600, "hour");
+    }
+    if today.yesterday().is_ok_and(|yesterday| yesterday == day) {
+        return "yesterday".to_owned();
+    }
+    let days = (today - day).get_days();
+    if (2..7).contains(&days) {
+        return then.strftime("%A").to_string();
+    }
+    if day.year() == today.year() {
+        then.strftime("%b %-d").to_string()
+    } else {
+        then.strftime("%b %-d, %Y").to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use jiff::civil::date;
@@ -68,5 +105,41 @@ mod tests {
         );
         let zoned = to_zoned(stamp, &TimeZone::get("America/Phoenix").unwrap());
         assert_eq!(clock_label(&zoned), "1:00 AM");
+    }
+
+    fn at(seconds_ago: i64, now: &Zoned) -> Zoned {
+        now.checked_sub(jiff::SignedDuration::from_secs(seconds_ago))
+            .unwrap()
+    }
+
+    #[test]
+    fn recent_times_read_as_minutes_then_hours() {
+        let now = date(2026, 10, 28)
+            .at(15, 0, 0, 0)
+            .to_zoned(TimeZone::UTC)
+            .unwrap();
+        assert_eq!(ago_label(&at(5, &now), &now), "just now");
+        assert_eq!(
+            ago_label(&at(-30, &now), &now),
+            "just now",
+            "the future is now"
+        );
+        assert_eq!(ago_label(&at(60, &now), &now), "1 minute ago");
+        assert_eq!(ago_label(&at(5 * 60 + 20, &now), &now), "5 minutes ago");
+        assert_eq!(ago_label(&at(3_600, &now), &now), "1 hour ago");
+        assert_eq!(ago_label(&at(3 * 3_600, &now), &now), "3 hours ago");
+    }
+
+    #[test]
+    fn older_times_read_as_yesterday_a_weekday_or_a_date() {
+        let now = date(2026, 10, 28)
+            .at(15, 0, 0, 0)
+            .to_zoned(TimeZone::UTC)
+            .unwrap();
+        // 20 hours ago crosses midnight: yesterday, not "20 hours ago".
+        assert_eq!(ago_label(&at(20 * 3_600, &now), &now), "yesterday");
+        assert_eq!(ago_label(&at(3 * 86_400, &now), &now), "Sunday");
+        assert_eq!(ago_label(&at(10 * 86_400, &now), &now), "Oct 18");
+        assert_eq!(ago_label(&at(400 * 86_400, &now), &now), "Sep 23, 2025");
     }
 }

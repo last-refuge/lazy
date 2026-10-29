@@ -15,28 +15,38 @@ path = "src/main.rs"
 
 [features]
 # Test helpers (`lazy_server::testing`) for in-process end-to-end tests, including from other crates.
-testing = []
+testing = ["dep:tempfile"]
 
 [dependencies]
 lazy-domain.workspace = true
 lazy-protocol.workspace = true
 argon2.workspace = true
 axum.workspace = true
+bytes = "1"
 clap.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
+# Thumbnails and the dimensions of uploaded images: the four raster formats that are shown inline,
+# and nothing else (no AVIF, TIFF, EXR, ..., and no rayon).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
+# Constant-time comparison of webhook secret hashes (already in the lockfile through argon2).
+subtle = "2"
 thiserror.workspace = true
 time.workspace = true
-tokio.workspace = true
-tokio-util.workspace = true
+# `fs` and `io-util`: attachment files are written and read through tokio.
+tokio = { workspace = true, features = ["fs", "io-util"] }
+# `io`: a file's reader becomes a response body stream.
+tokio-util = { workspace = true, features = ["io"] }
+tempfile = { workspace = true, optional = true }
 tower-http = { workspace = true, features = ["timeout"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-uuid.workspace = true
+# `v5`: an Idempotency-Key becomes an operation id, a UUID v5 of (webhook id, key).
+uuid = { workspace = true, features = ["v5"] }
 
 [dev-dependencies]
 # Integration tests use the in-process test server.

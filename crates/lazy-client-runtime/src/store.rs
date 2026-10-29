@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-use lazy_client_core::{ContentCache, JournalEntry};
+use lazy_client_core::{ContentCache, JournalEntry, ThreadDraft, ViewState};
 use lazy_domain::{ConversationId, OperationId};
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,10 @@ use crate::files::{FileError, FileKind, FileStore, Loaded, WriteStep};
 pub(crate) const MAX_JOURNAL_ENTRIES: usize = 256;
 /// Most drafts kept.
 pub(crate) const MAX_DRAFTS: usize = 200;
+/// Most thread drafts kept.
+pub(crate) const MAX_THREAD_DRAFTS: usize = 200;
+/// Most workspaces whose last open conversation is remembered.
+pub(crate) const MAX_REMEMBERED_WORKSPACES: usize = 50;
 /// Longest saved draft, in bytes.
 pub(crate) const MAX_DRAFT_BYTES: usize = 64 * 1024;
 
@@ -31,6 +35,13 @@ struct JournalFile {
 #[derive(Serialize, Deserialize)]
 struct DraftsFile {
     drafts: Vec<(ConversationId, String)>,
+    /// Reply composer texts. Absent in files written before threads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    thread_drafts: Vec<ThreadDraft>,
+    /// The last open conversation per workspace and the caret of each draft. Absent in files
+    /// written before they were kept.
+    #[serde(default, skip_serializing_if = "ViewState::is_empty")]
+    view: ViewState,
 }
 
 /// Why a state write failed.
@@ -71,6 +82,8 @@ struct CacheFromDisk {
 pub(crate) struct Recovered {
     pub(crate) journal: Vec<JournalEntry>,
     pub(crate) drafts: HashMap<ConversationId, String>,
+    pub(crate) thread_drafts: Vec<ThreadDraft>,
+    pub(crate) view: ViewState,
     /// The saved content cache, normalized and bounded, if one could be read.
     pub(crate) cache: Option<ContentCache>,
     pub(crate) problems: Vec<String>,
@@ -80,6 +93,8 @@ pub(crate) struct StateStore {
     files: FileStore,
     journal: Vec<JournalEntry>,
     drafts: BTreeMap<ConversationId, String>,
+    thread_drafts: Vec<ThreadDraft>,
+    view: ViewState,
     /// Kinds that must not be written because the file on disk cannot be safely replaced.
     locked: Vec<FileKind>,
 }
@@ -123,8 +138,16 @@ impl StateStore {
         journal.truncate(MAX_JOURNAL_ENTRIES);
 
         let mut drafts = BTreeMap::new();
+        let mut thread_drafts = Vec::new();
+        let mut view = ViewState::default();
         match files.load::<DraftsFile>(FileKind::Drafts) {
-            Loaded::Value(file) => drafts.extend(file.drafts.into_iter().take(MAX_DRAFTS)),
+            Loaded::Value(file) => {
+                drafts.extend(file.drafts.into_iter().take(MAX_DRAFTS));
+                thread_drafts.extend(file.thread_drafts.into_iter().take(MAX_THREAD_DRAFTS));
+                view = file.view;
+                view.last_selected.truncate(MAX_REMEMBERED_WORKSPACES);
+                view.draft_selections.truncate(MAX_DRAFTS);
+            }
             Loaded::Missing => {}
             Loaded::Corrupt(message) | Loaded::Unreadable(message) => {
                 note(FileKind::Drafts, message, false, &mut recovered.problems)
@@ -148,11 +171,16 @@ impl StateStore {
                         Ok(cache) => recovered.cache = Some(cache.bounded()),
                         Err(error) => {
                             // Same protocol, wrong shape: that is damage, not age.
+                            tracing::warn!(
+                                reason = %crate::api::describe_json(&error),
+                                "discarding the saved message cache: its contents are invalid"
+                            );
                             files.remove_current(FileKind::Cache);
                             note(
                                 FileKind::Cache,
                                 format!(
-                                    "The saved message cache had invalid contents ({error}) and was discarded. Saved messages will be downloaded again."
+                                    "The saved message cache had invalid contents ({}) and was discarded. Saved messages will be downloaded again.",
+                                    crate::api::describe_json(&error)
                                 ),
                                 false,
                                 &mut recovered.problems,
@@ -195,15 +223,25 @@ impl StateStore {
 
         recovered.journal = journal.clone();
         recovered.drafts = drafts.iter().map(|(k, v)| (*k, v.clone())).collect();
+        recovered.thread_drafts = thread_drafts.clone();
+        recovered.view = view.clone();
         (
             Self {
                 files,
                 journal,
                 drafts,
+                thread_drafts,
+                view,
                 locked,
             },
             recovered,
         )
+    }
+
+    /// Whether the journal was read (or there was none), so what it names is what is wanted. A
+    /// journal that could not be read may still name files that matter.
+    pub(crate) fn journal_is_trusted(&self) -> bool {
+        !self.locked.contains(&FileKind::Journal)
     }
 
     fn check_writable(&self, kind: FileKind) -> Result<(), StoreError> {
@@ -273,8 +311,39 @@ impl StateStore {
             .take(MAX_DRAFTS)
             .map(|(id, text)| (*id, truncate_to(text, MAX_DRAFT_BYTES).to_owned()))
             .collect();
+        self.write_drafts()
+    }
+
+    /// Replaces all saved reply drafts, bounded like the conversation drafts. They share a file
+    /// with those, which is rewritten whole.
+    pub(crate) fn save_thread_drafts(&mut self, drafts: &[ThreadDraft]) -> Result<(), StoreError> {
+        self.check_writable(FileKind::Drafts)?;
+        self.thread_drafts = drafts
+            .iter()
+            .take(MAX_THREAD_DRAFTS)
+            .map(|draft| ThreadDraft {
+                text: truncate_to(&draft.text, MAX_DRAFT_BYTES).to_owned(),
+                ..draft.clone()
+            })
+            .collect();
+        self.write_drafts()
+    }
+
+    /// Replaces what was saved of what the person was looking at, beside the drafts.
+    pub(crate) fn save_view(&mut self, view: &ViewState) -> Result<(), StoreError> {
+        self.check_writable(FileKind::Drafts)?;
+        let mut view = view.clone();
+        view.last_selected.truncate(MAX_REMEMBERED_WORKSPACES);
+        view.draft_selections.truncate(MAX_DRAFTS);
+        self.view = view;
+        self.write_drafts()
+    }
+
+    fn write_drafts(&self) -> Result<(), StoreError> {
         let file = DraftsFile {
             drafts: self.drafts.iter().map(|(k, v)| (*k, v.clone())).collect(),
+            thread_drafts: self.thread_drafts.clone(),
+            view: self.view.clone(),
         };
         Ok(self.files.save(FileKind::Drafts, &file)?)
     }
@@ -356,6 +425,10 @@ mod tests {
             conversation_id: ConversationId::generate(),
             document: MessageDocument::from_plain_text(text).unwrap(),
             submitted_at: Timestamp::now(),
+            kind: lazy_client_core::JournalKind::Send,
+            thread_root: None,
+            also_in_channel: false,
+            attachments: Vec::new(),
         }
     }
 
@@ -489,10 +562,15 @@ mod tests {
             id: UserId::generate(),
             username: Username::parse("cacher").unwrap(),
             display_name: DisplayName::parse("Cacher").unwrap(),
+            is_bot: false,
+            status: None,
+            deactivated: false,
+            avatar_version: 0,
         };
         let workspace = Workspace {
             id: WorkspaceId::generate(),
             name: "W".into(),
+            settings: Default::default(),
         };
         let mut conversations = Vec::new();
         let mut cached = Vec::new();
@@ -524,6 +602,15 @@ mod tests {
                         created_at: Timestamp::now(),
                         revision: 1,
                         seq: EventSeq::new((index * 1000 + m + 1) as i64).unwrap(),
+                        edited_at: None,
+                        thread_root: None,
+                        in_channel: false,
+                        thread: None,
+                        reactions: Vec::new(),
+                        reactions_as_of: EventSeq::ZERO,
+                        mentions: lazy_protocol::Mentions::default(),
+                        deleted: false,
+                        attachments: Vec::new(),
                     })
                     .collect(),
                 has_more: false,
@@ -543,6 +630,9 @@ mod tests {
                     mention_count: 0,
                 },
                 as_of: EventSeq::new(cursor).unwrap(),
+                counted: Vec::new(),
+                counted_mentions: Vec::new(),
+                rebuilt_through: None,
             })
             .collect();
         ContentCache {
@@ -555,6 +645,9 @@ mod tests {
                 cursor: EventSeq::new(cursor).unwrap(),
                 timelines: cached,
                 user_state,
+                groups: Vec::new(),
+                custom_emoji: Vec::new(),
+                threads: Vec::new(),
             }],
         }
     }
@@ -739,6 +832,810 @@ mod tests {
         store.save_cache(cache_of(1, 1, 5, 6)).unwrap();
         let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
         assert!(again.cache.is_some() && again.problems.is_empty());
+    }
+
+    #[test]
+    fn a_cache_written_by_protocol_two_is_discarded_without_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+
+        // A cache exactly as version 2 wrote it: valid for its protocol, but its messages have
+        // neither `edited_at` nor `deleted`, and it is stamped with version 2.
+        let mut previous = serde_json::to_value(cache_of(1, 3, 10, 5)).unwrap();
+        for workspace in previous["workspaces"].as_array_mut().unwrap() {
+            for timeline in workspace["timelines"].as_array_mut().unwrap() {
+                for message in timeline["messages"].as_array_mut().unwrap() {
+                    let message = message.as_object_mut().unwrap();
+                    message.remove("edited_at");
+                    message.remove("deleted");
+                }
+            }
+        }
+        files
+            .save(
+                FileKind::Cache,
+                &serde_json::json!({ "protocol_version": 2, "cache": previous }),
+            )
+            .unwrap();
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "an older protocol's cache is not used"
+        );
+        assert!(
+            recovered.problems.is_empty(),
+            "and not reported as damage: {:?}",
+            recovered.problems
+        );
+        assert!(
+            !dir.path().join("cache.enc").exists(),
+            "it is removed, since the next run writes a fresh one"
+        );
+    }
+
+    #[test]
+    fn a_cache_written_by_protocol_three_is_discarded_without_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+
+        // A cache exactly as version 3 wrote it: valid for its protocol, but its messages have no
+        // reactions and its read states no `counted`, and it is stamped with version 3.
+        let mut previous = serde_json::to_value(cache_of(1, 3, 10, 5)).unwrap();
+        for workspace in previous["workspaces"].as_array_mut().unwrap() {
+            for timeline in workspace["timelines"].as_array_mut().unwrap() {
+                for message in timeline["messages"].as_array_mut().unwrap() {
+                    let message = message.as_object_mut().unwrap();
+                    message.remove("reactions");
+                    message.remove("reactions_as_of");
+                }
+            }
+        }
+        files
+            .save(
+                FileKind::Cache,
+                &serde_json::json!({ "protocol_version": 3, "cache": previous }),
+            )
+            .unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "an older protocol's cache is not used"
+        );
+        assert!(
+            recovered.problems.is_empty(),
+            "and not reported as damage: {:?}",
+            recovered.problems
+        );
+        assert!(
+            !dir.path().join("cache.enc").exists(),
+            "it is removed, since the next run writes a fresh one"
+        );
+        // The next save is a normal version 4 cache with reactions.
+        let mut fresh = cache_of(1, 2, 10, 5);
+        let message = &mut fresh.workspaces[0].timelines[0].messages[0];
+        message.reactions = vec![lazy_protocol::ReactionSummary {
+            emoji: lazy_domain::ReactionEmoji::parse("🎉").unwrap(),
+            users: vec![UserId::generate()],
+        }];
+        message.reactions_as_of = EventSeq::new(9).unwrap();
+        store.save_cache(fresh.clone()).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(again.cache, Some(fresh.bounded()));
+    }
+
+    #[test]
+    fn a_cache_written_by_protocol_four_is_discarded_without_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+
+        // A cache exactly as version 4 wrote it: valid for its protocol, but its messages have
+        // no mentions, its workspaces no groups, and its read states nothing about mentions.
+        let mut previous = serde_json::to_value(cache_of(1, 3, 10, 5)).unwrap();
+        for workspace in previous["workspaces"].as_array_mut().unwrap() {
+            workspace.as_object_mut().unwrap().remove("groups");
+            for timeline in workspace["timelines"].as_array_mut().unwrap() {
+                for message in timeline["messages"].as_array_mut().unwrap() {
+                    message.as_object_mut().unwrap().remove("mentions");
+                }
+            }
+            for state in workspace["user_state"].as_array_mut().unwrap() {
+                let state = state.as_object_mut().unwrap();
+                state.remove("counted_mentions");
+                state.remove("rebuilt_through");
+            }
+        }
+        files
+            .save(
+                FileKind::Cache,
+                &serde_json::json!({ "protocol_version": 4, "cache": previous }),
+            )
+            .unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "an older protocol's cache is not used"
+        );
+        assert!(
+            recovered.problems.is_empty(),
+            "and not reported as damage: {:?}",
+            recovered.problems
+        );
+        assert!(
+            !dir.path().join("cache.enc").exists(),
+            "it is removed, since the next run writes a fresh one"
+        );
+        // The next save is a normal cache that carries mentions and groups.
+        let mut fresh = cache_of(1, 2, 10, 5);
+        fresh.workspaces[0].timelines[0].messages[0].mentions = lazy_protocol::Mentions {
+            users: vec![UserId::generate()],
+            channel: true,
+        };
+        fresh.workspaces[0].groups = vec![lazy_protocol::UserGroup {
+            id: lazy_domain::GroupId::generate(),
+            workspace_id: fresh.workspaces[0].workspace.id,
+            handle: lazy_domain::GroupHandle::parse("design-team").unwrap(),
+            name: lazy_domain::DisplayName::parse("Design Team").unwrap(),
+            members: vec![UserId::generate()],
+        }];
+        store.save_cache(fresh.clone()).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(again.cache, Some(fresh.bounded()));
+    }
+
+    #[test]
+    fn a_cache_message_without_mentions_and_a_workspace_without_groups_still_read() {
+        let mut value = serde_json::to_value(cache_of(1, 1, 10, 5)).unwrap();
+        let workspace = &mut value["workspaces"][0];
+        workspace.as_object_mut().unwrap().remove("groups");
+        workspace["timelines"][0]["messages"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("mentions");
+        let cache: ContentCache = serde_json::from_value(value).unwrap();
+        assert!(cache.workspaces[0].groups.is_empty());
+        assert!(
+            cache.workspaces[0].timelines[0].messages[0]
+                .mentions
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_cache_written_by_protocol_five_is_discarded_without_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+
+        // A cache exactly as version 5 wrote it: its messages have no thread fields and its
+        // workspaces no thread states.
+        let mut previous = serde_json::to_value(cache_of(1, 3, 10, 5)).unwrap();
+        for workspace in previous["workspaces"].as_array_mut().unwrap() {
+            workspace.as_object_mut().unwrap().remove("threads");
+            for timeline in workspace["timelines"].as_array_mut().unwrap() {
+                for message in timeline["messages"].as_array_mut().unwrap() {
+                    let message = message.as_object_mut().unwrap();
+                    message.remove("thread_root");
+                    message.remove("in_channel");
+                    message.remove("thread");
+                }
+            }
+        }
+        files
+            .save(
+                FileKind::Cache,
+                &serde_json::json!({ "protocol_version": 5, "cache": previous }),
+            )
+            .unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "an older protocol's cache is not used"
+        );
+        assert!(
+            recovered.problems.is_empty(),
+            "and not reported as damage: {:?}",
+            recovered.problems
+        );
+        assert!(!dir.path().join("cache.enc").exists());
+        // The next save is a normal cache that carries thread state.
+        let mut fresh = cache_of(1, 2, 10, 5);
+        let root = lazy_domain::MessageId::generate();
+        let conversation = fresh.workspaces[0].conversations[0].id;
+        fresh.workspaces[0].threads = vec![lazy_client_core::CachedThreadState {
+            state: lazy_protocol::ThreadUserState {
+                root_id: root,
+                conversation_id: conversation,
+                following: true,
+                last_read: EventSeq::new(3).unwrap(),
+                unread_count: 2,
+                mention_count: 1,
+            },
+            as_of: EventSeq::new(5).unwrap(),
+            counted: vec![EventSeq::new(6).unwrap()],
+            counted_mentions: vec![EventSeq::new(6).unwrap()],
+            rebuilt_through: None,
+        }];
+        store.save_cache(fresh.clone()).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(again.cache, Some(fresh.bounded()));
+    }
+
+    #[test]
+    fn a_cache_written_by_protocol_seven_is_discarded_without_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+
+        // A cache exactly as version 7 wrote it: its messages have no `attachments`.
+        let mut previous = serde_json::to_value(cache_of(1, 3, 10, 5)).unwrap();
+        for workspace in previous["workspaces"].as_array_mut().unwrap() {
+            for timeline in workspace["timelines"].as_array_mut().unwrap() {
+                for message in timeline["messages"].as_array_mut().unwrap() {
+                    assert!(
+                        message
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("attachments")
+                            .is_none()
+                    );
+                }
+            }
+        }
+        files
+            .save(
+                FileKind::Cache,
+                &serde_json::json!({ "protocol_version": 7, "cache": previous }),
+            )
+            .unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "an older protocol's cache is not used"
+        );
+        assert!(
+            recovered.problems.is_empty(),
+            "and not reported as damage: {:?}",
+            recovered.problems
+        );
+        assert!(!dir.path().join("cache.enc").exists());
+
+        // The next save is a normal cache, and a message with files keeps them across a restart.
+        let mut fresh = cache_of(1, 2, 10, 5);
+        let file = lazy_protocol::Attachment {
+            id: lazy_domain::AttachmentId::generate(),
+            name: "photo.png".into(),
+            media_type: "image/png".into(),
+            size: 900,
+            sha256: "ab".repeat(32),
+            width: Some(40),
+            height: Some(30),
+            has_thumbnail: true,
+        };
+        fresh.workspaces[0].timelines[0].messages[0].attachments = vec![file.clone()];
+        store.save_cache(fresh.clone()).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        let again = again.cache.expect("the cache is read");
+        assert_eq!(
+            again.workspaces[0].timelines[0].messages[0].attachments,
+            vec![file]
+        );
+        assert_eq!(again, fresh.bounded());
+    }
+
+    #[test]
+    fn a_cache_written_by_protocol_thirteen_is_discarded_without_a_warning_and_avatars_survive_a_save()
+     {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+        // A cache exactly as version 13 wrote it: its people have no `avatar_version`.
+        let mut previous = serde_json::to_value(cache_of(1, 3, 10, 5)).unwrap();
+        previous["user"]
+            .as_object_mut()
+            .unwrap()
+            .remove("avatar_version");
+        for workspace in previous["workspaces"].as_array_mut().unwrap() {
+            for member in workspace["members"].as_array_mut().unwrap() {
+                member.as_object_mut().unwrap().remove("avatar_version");
+            }
+        }
+        files
+            .save(
+                FileKind::Cache,
+                &serde_json::json!({ "protocol_version": 13, "cache": previous }),
+            )
+            .unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "an older protocol's cache is not used"
+        );
+        assert!(recovered.problems.is_empty(), "{:?}", recovered.problems);
+        assert!(!dir.path().join("cache.enc").exists());
+
+        // The next save keeps a person's avatar version, and a cache with several workspaces.
+        let mut fresh = cache_of(1, 2, 10, 5);
+        fresh.user.avatar_version = 3;
+        let mut second = fresh.workspaces[0].clone();
+        second.workspace.id = lazy_domain::WorkspaceId::generate();
+        second.workspace.name = "Second".into();
+        for conversation in &mut second.conversations {
+            conversation.workspace_id = second.workspace.id;
+        }
+        second.timelines.clear();
+        second.user_state.clear();
+        fresh.workspaces.push(second);
+        store.save_cache(fresh.clone()).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        let again = again.cache.expect("the cache is read");
+        assert_eq!(again.workspaces.len(), 2);
+        assert_eq!(again.user.avatar_version, 3);
+        assert_eq!(again, fresh.bounded());
+    }
+
+    #[test]
+    fn a_cache_written_by_protocol_twelve_is_discarded_without_a_warning_and_settings_survive_a_save()
+     {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+        // A cache exactly as version 12 wrote it: its workspaces have no `settings` and its
+        // people no `deactivated`.
+        let mut previous = serde_json::to_value(cache_of(1, 3, 10, 5)).unwrap();
+        previous["user"]
+            .as_object_mut()
+            .unwrap()
+            .remove("deactivated");
+        for workspace in previous["workspaces"].as_array_mut().unwrap() {
+            workspace["workspace"]
+                .as_object_mut()
+                .unwrap()
+                .remove("settings");
+            for member in workspace["members"].as_array_mut().unwrap() {
+                member.as_object_mut().unwrap().remove("deactivated");
+            }
+        }
+        files
+            .save(
+                FileKind::Cache,
+                &serde_json::json!({ "protocol_version": 12, "cache": previous }),
+            )
+            .unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "an older protocol's cache is not used"
+        );
+        assert!(recovered.problems.is_empty(), "{:?}", recovered.problems);
+        assert!(!dir.path().join("cache.enc").exists());
+
+        // The next save keeps the workspace's settings, a person's deactivation, and the role.
+        let mut fresh = cache_of(1, 2, 10, 5);
+        fresh.workspaces[0].workspace.settings = lazy_domain::workspace::WorkspaceSettings {
+            registration: lazy_domain::workspace::RegistrationPolicy::InviteOnly,
+            channel_creation: lazy_domain::workspace::ChannelCreationPolicy::AdminsOnly,
+        };
+        fresh.workspaces[0].role = lazy_domain::WorkspaceRole::Admin;
+        let mut amy = fresh.user.clone();
+        amy.id = lazy_domain::UserId::generate();
+        amy.deactivated = true;
+        fresh.workspaces[0].members.push(amy);
+        store.save_cache(fresh.clone()).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(again.cache.expect("the cache is read"), fresh.bounded());
+    }
+
+    #[test]
+    fn a_cache_written_by_protocol_eleven_is_discarded_without_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+        // A cache exactly as version 11 wrote it: nothing in it names the saved messages, because
+        // the cache never holds them.
+        let previous = serde_json::to_value(cache_of(1, 3, 10, 5)).unwrap();
+        files
+            .save(
+                FileKind::Cache,
+                &serde_json::json!({ "protocol_version": 11, "cache": previous }),
+            )
+            .unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "an older protocol's cache is not used"
+        );
+        assert!(recovered.problems.is_empty(), "{:?}", recovered.problems);
+        assert!(!dir.path().join("cache.enc").exists());
+        // The next save is a normal cache.
+        let fresh = cache_of(1, 2, 10, 5);
+        store.save_cache(fresh.clone()).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(again.cache.expect("the cache is read"), fresh.bounded());
+    }
+
+    #[test]
+    fn a_cache_written_by_protocol_ten_is_discarded_without_a_warning_and_statuses_survive_a_save()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+
+        // A cache exactly as version 10 wrote it: its people have no status.
+        let previous = serde_json::to_value(cache_of(1, 3, 10, 5)).unwrap();
+        for member in previous["workspaces"][0]["members"].as_array().unwrap() {
+            assert!(member.get("status").is_none());
+        }
+        assert!(previous["user"].get("status").is_none());
+        files
+            .save(
+                FileKind::Cache,
+                &serde_json::json!({ "protocol_version": 10, "cache": previous }),
+            )
+            .unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "an older protocol's cache is not used"
+        );
+        assert!(
+            recovered.problems.is_empty(),
+            "and not reported as damage: {:?}",
+            recovered.problems
+        );
+        assert!(!dir.path().join("cache.enc").exists());
+
+        // The next save is a normal cache, and a person's status comes back with it.
+        let mut fresh = cache_of(1, 2, 10, 5);
+        let status =
+            lazy_domain::notification::UserStatus::new("In a meeting", None, None).unwrap();
+        fresh.workspaces[0].members[0].status = Some(status.clone());
+        store.save_cache(fresh.clone()).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        let again = again.cache.expect("the cache is read");
+        assert_eq!(again.workspaces[0].members[0].status, Some(status));
+        assert_eq!(again, fresh.bounded());
+
+        // A version 11 cache whose people simply have no status field reads as having none.
+        let plain = serde_json::to_value(cache_of(1, 2, 10, 5)).unwrap();
+        files
+            .save(
+                FileKind::Cache,
+                &serde_json::json!({
+                    "protocol_version": lazy_protocol::PROTOCOL_VERSION,
+                    "cache": plain,
+                }),
+            )
+            .unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        let again = again.cache.expect("the cache is read");
+        assert!(
+            again.workspaces[0]
+                .members
+                .iter()
+                .all(|m| m.status.is_none())
+        );
+    }
+
+    #[test]
+    fn a_cache_written_by_protocol_eight_is_discarded_without_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+
+        // A cache exactly as version 8 wrote it: its workspaces have no custom emoji.
+        let mut previous = serde_json::to_value(cache_of(1, 3, 10, 5)).unwrap();
+        for workspace in previous["workspaces"].as_array_mut().unwrap() {
+            assert!(
+                workspace
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("custom_emoji")
+                    .is_none()
+            );
+        }
+        files
+            .save(
+                FileKind::Cache,
+                &serde_json::json!({ "protocol_version": 8, "cache": previous }),
+            )
+            .unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert!(
+            recovered.cache.is_none(),
+            "an older protocol's cache is not used"
+        );
+        assert!(
+            recovered.problems.is_empty(),
+            "and not reported as damage: {:?}",
+            recovered.problems
+        );
+        assert!(!dir.path().join("cache.enc").exists());
+
+        // The next save is a normal cache, and the emoji list survives a restart.
+        let mut fresh = cache_of(1, 2, 10, 5);
+        let emoji = lazy_protocol::CustomEmoji {
+            id: lazy_domain::EmojiId::generate(),
+            workspace_id: fresh.workspaces[0].workspace.id,
+            name: "party_parrot".into(),
+            created_by: fresh.user.id,
+            created_at: lazy_domain::Timestamp::now(),
+            deleted: false,
+        };
+        let gone = lazy_protocol::CustomEmoji {
+            id: lazy_domain::EmojiId::generate(),
+            name: "old_one".into(),
+            deleted: true,
+            ..emoji.clone()
+        };
+        fresh.workspaces[0].custom_emoji = vec![emoji, gone];
+        store.save_cache(fresh.clone()).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        let again = again.cache.expect("the cache is read");
+        assert_eq!(again.workspaces[0].custom_emoji.len(), 2);
+        assert_eq!(again, fresh.bounded());
+    }
+
+    #[test]
+    fn a_cache_workspace_without_custom_emoji_still_reads_as_having_none() {
+        let mut value = serde_json::to_value(cache_of(1, 1, 10, 5)).unwrap();
+        value["workspaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("custom_emoji");
+        let cache: ContentCache = serde_json::from_value(value).unwrap();
+        assert!(cache.workspaces[0].custom_emoji.is_empty());
+    }
+
+    #[test]
+    fn a_cache_message_without_attachments_still_reads_as_having_none() {
+        let mut value = serde_json::to_value(cache_of(1, 1, 10, 5)).unwrap();
+        value["workspaces"][0]["timelines"][0]["messages"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("attachments");
+        let cache: ContentCache = serde_json::from_value(value).unwrap();
+        assert!(
+            cache.workspaces[0].timelines[0].messages[0]
+                .attachments
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_journal_from_before_attachments_loads_and_one_with_files_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = JournalEntry {
+            operation_id: OperationId::generate(),
+            user_id: lazy_domain::UserId::generate(),
+            conversation_id: ConversationId::generate(),
+            document: MessageDocument::from_plain_text("old").unwrap(),
+            submitted_at: lazy_domain::Timestamp::now(),
+            kind: lazy_client_core::JournalKind::Send,
+            thread_root: None,
+            also_in_channel: false,
+            attachments: Vec::new(),
+        };
+        // The file exactly as the previous version wrote it: no `attachments` in the entry.
+        let mut entry = serde_json::to_value(&old).unwrap();
+        assert!(
+            entry
+                .as_object_mut()
+                .unwrap()
+                .remove("attachments")
+                .is_none()
+        );
+        FileStore::new(dir.path().to_owned(), &KEY)
+            .save(
+                FileKind::Journal,
+                &serde_json::json!({ "entries": [entry] }),
+            )
+            .unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(recovered.journal, vec![old.clone()]);
+
+        let mut with_files = old.clone();
+        with_files.operation_id = OperationId::generate();
+        with_files.document = MessageDocument::empty();
+        with_files.attachments = vec![lazy_client_core::JournalAttachment {
+            id: lazy_domain::AttachmentId::generate(),
+            name: "a.pdf".into(),
+            size: 12,
+        }];
+        store.add_journal(with_files.clone()).unwrap();
+        let (_, again) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(again.journal, vec![old, with_files]);
+    }
+
+    #[test]
+    fn a_cache_message_without_thread_fields_and_a_workspace_without_threads_still_read() {
+        let mut value = serde_json::to_value(cache_of(1, 1, 10, 5)).unwrap();
+        let workspace = &mut value["workspaces"][0];
+        workspace.as_object_mut().unwrap().remove("threads");
+        let message = workspace["timelines"][0]["messages"][0]
+            .as_object_mut()
+            .unwrap();
+        message.remove("thread_root");
+        message.remove("in_channel");
+        message.remove("thread");
+        let cache: ContentCache = serde_json::from_value(value).unwrap();
+        let message = &cache.workspaces[0].timelines[0].messages[0];
+        assert!(cache.workspaces[0].threads.is_empty());
+        assert!(message.thread_root.is_none() && !message.in_channel && message.thread.is_none());
+    }
+
+    #[test]
+    fn a_drafts_file_from_before_threads_loads_and_thread_drafts_are_saved_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = ConversationId::generate();
+        // The file exactly as the previous version wrote it: no thread drafts at all.
+        {
+            let files = FileStore::new(dir.path().to_owned(), &KEY);
+            files
+                .save(
+                    FileKind::Drafts,
+                    &serde_json::json!({ "drafts": [[conversation, "an old draft"]] }),
+                )
+                .unwrap();
+        }
+        let thread = ThreadDraft {
+            root: lazy_domain::MessageId::generate(),
+            conversation,
+            text: "a reply".into(),
+            selection: None,
+        };
+        {
+            let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+            assert_eq!(recovered.drafts[&conversation], "an old draft");
+            assert!(recovered.thread_drafts.is_empty());
+            store
+                .save_thread_drafts(std::slice::from_ref(&thread))
+                .unwrap();
+            // Saving the conversation drafts keeps the thread drafts, and the other way round.
+            store
+                .save_drafts(&[(conversation, "a newer draft".into())])
+                .unwrap();
+        }
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(recovered.drafts[&conversation], "a newer draft");
+        assert_eq!(recovered.thread_drafts, vec![thread]);
+    }
+
+    #[test]
+    fn a_drafts_file_from_before_carets_loads_and_the_view_is_saved_beside_the_drafts() {
+        use lazy_client_core::{DraftSelection, TextSelection};
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = ConversationId::generate();
+        let root = lazy_domain::MessageId::generate();
+        // The file exactly as the previous version wrote it: drafts and reply drafts, with no
+        // carets and no remembered conversation.
+        {
+            let files = FileStore::new(dir.path().to_owned(), &KEY);
+            files
+                .save(
+                    FileKind::Drafts,
+                    &serde_json::json!({
+                        "drafts": [[conversation, "a draft"]],
+                        "thread_drafts": [{ "root": root, "conversation": conversation, "text": "a reply" }],
+                    }),
+                )
+                .unwrap();
+        }
+        let view = lazy_client_core::ViewState {
+            last_selected: vec![(lazy_domain::WorkspaceId::generate(), conversation)],
+            draft_selections: vec![DraftSelection {
+                conversation,
+                selection: TextSelection { anchor: 1, head: 4 },
+            }],
+        };
+        {
+            let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+            assert_eq!(recovered.drafts[&conversation], "a draft");
+            assert_eq!(recovered.thread_drafts[0].text, "a reply");
+            assert_eq!(recovered.thread_drafts[0].selection, None);
+            assert!(recovered.view.is_empty());
+            store.save_view(&view).unwrap();
+            // Saving the drafts keeps the view, and the other way round.
+            store
+                .save_drafts(&[(conversation, "a newer draft".into())])
+                .unwrap();
+        }
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(recovered.drafts[&conversation], "a newer draft");
+        assert_eq!(recovered.view, view);
+        assert_eq!(
+            recovered.thread_drafts.len(),
+            1,
+            "the reply draft is still there"
+        );
+    }
+
+    #[test]
+    fn the_remembered_view_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let view = lazy_client_core::ViewState {
+            last_selected: (0..MAX_REMEMBERED_WORKSPACES + 20)
+                .map(|_| {
+                    (
+                        lazy_domain::WorkspaceId::generate(),
+                        ConversationId::generate(),
+                    )
+                })
+                .collect(),
+            draft_selections: (0..MAX_DRAFTS + 20)
+                .map(|_| lazy_client_core::DraftSelection {
+                    conversation: ConversationId::generate(),
+                    selection: lazy_client_core::TextSelection { anchor: 0, head: 0 },
+                })
+                .collect(),
+        };
+        {
+            let (mut store, _) = StateStore::open(dir.path().to_owned(), &KEY);
+            store.save_view(&view).unwrap();
+        }
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(
+            recovered.view.last_selected.len(),
+            MAX_REMEMBERED_WORKSPACES
+        );
+        assert_eq!(recovered.view.draft_selections.len(), MAX_DRAFTS);
+    }
+
+    #[test]
+    fn a_cache_message_without_the_reaction_fields_still_reads() {
+        let mut value = serde_json::to_value(cache_of(1, 1, 10, 5)).unwrap();
+        let message = &mut value["workspaces"][0]["timelines"][0]["messages"][0];
+        message.as_object_mut().unwrap().remove("reactions");
+        message.as_object_mut().unwrap().remove("reactions_as_of");
+        let cache: ContentCache = serde_json::from_value(value).unwrap();
+        let message = &cache.workspaces[0].timelines[0].messages[0];
+        assert!(message.reactions.is_empty() && message.reactions_as_of == EventSeq::ZERO);
+    }
+
+    #[test]
+    fn a_cache_message_without_the_edit_fields_still_reads() {
+        // The new fields default, so a message that lacks them is an unedited, undeleted one.
+        let mut value = serde_json::to_value(cache_of(1, 1, 10, 5)).unwrap();
+        let message = &mut value["workspaces"][0]["timelines"][0]["messages"][0];
+        message.as_object_mut().unwrap().remove("edited_at");
+        message.as_object_mut().unwrap().remove("deleted");
+        let cache: ContentCache = serde_json::from_value(value).unwrap();
+        let message = &cache.workspaces[0].timelines[0].messages[0];
+        assert!(!message.deleted && message.edited_at.is_none());
+    }
+
+    #[test]
+    fn a_journal_written_before_edits_existed_still_loads_and_edits_survive_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _) = StateStore::open(dir.path().to_owned(), &KEY);
+        let files = FileStore::new(dir.path().to_owned(), &KEY);
+
+        // An entry exactly as the previous build stored it: no `kind`.
+        let sent = entry("sent last time");
+        let mut old = serde_json::to_value(&sent).unwrap();
+        old.as_object_mut().unwrap().remove("kind");
+        files
+            .save(FileKind::Journal, &serde_json::json!({ "entries": [old] }))
+            .unwrap();
+        let (mut store, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(recovered.journal, vec![sent.clone()]);
+        assert!(recovered.problems.is_empty(), "{:?}", recovered.problems);
+
+        // An edit is journaled alongside it and comes back as an edit.
+        let edit = JournalEntry {
+            kind: lazy_client_core::JournalKind::Edit {
+                message_id: lazy_domain::MessageId::generate(),
+                base_revision: 4,
+            },
+            ..entry("edited text")
+        };
+        store.add_journal(edit.clone()).unwrap();
+        drop(store);
+        let (_, recovered) = StateStore::open(dir.path().to_owned(), &KEY);
+        assert_eq!(recovered.journal, vec![sent, edit]);
+        assert!(recovered.problems.is_empty());
     }
 
     #[test]

@@ -41,6 +41,9 @@ impl CreateChannelDialog {
                 |this, _input, event: &TextInputEvent, window, cx| match event {
                     TextInputEvent::Submit => this.create(cx),
                     TextInputEvent::Tab { backwards } => this.trap.tab(*backwards, window, cx),
+                    TextInputEvent::UpWhenEmpty
+                    | TextInputEvent::PasteAttachments
+                    | TextInputEvent::Suggestion(_) => {}
                     TextInputEvent::Changed => cx.notify(),
                 },
             ));

@@ -6,8 +6,8 @@ mod common;
 use common::{Driver, World, channel, people, read_state, seq, user};
 use lazy_client_core::{
     Change, ConnectionState, ContentCache, Delivery, Effect, HistoryStatus, Input, ItemKey,
-    JournalEntry, MAX_CACHED_CONVERSATIONS, MAX_CACHED_MESSAGES, RequestError, SessionPhase,
-    SocketEvent, StartupState,
+    JournalEntry, JournalKind, MAX_CACHED_CONVERSATIONS, MAX_CACHED_MESSAGES, RequestError,
+    SessionPhase, SocketEvent, StartupState,
 };
 use lazy_domain::{ConversationId, MessageDocument, OperationId, Timestamp};
 use lazy_protocol::{
@@ -732,6 +732,10 @@ fn journal_entry(world: &World, text: &str, at: i64) -> JournalEntry {
         submitted_at: Timestamp::from(
             time::OffsetDateTime::from_unix_timestamp(1_800_000_000 + at).unwrap(),
         ),
+        kind: JournalKind::Send,
+        thread_root: None,
+        also_in_channel: false,
+        attachments: Vec::new(),
     }
 }
 

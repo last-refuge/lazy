@@ -5,11 +5,19 @@
 //! [`Runtime::execute`] and feeds the [`lazy_client_core::Input`]s from the receiver back into the
 //! core. The runtime never touches UI code.
 
+mod active_workspace;
 mod api;
+mod appearance;
+mod blob;
 mod config;
 mod files;
+mod images;
+mod outbox;
+mod prefs;
 mod realtime;
+mod recent_conversations;
 mod runtime;
+mod searches;
 mod secure;
 mod store;
 

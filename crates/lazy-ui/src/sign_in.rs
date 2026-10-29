@@ -23,6 +23,8 @@ pub struct SignInView {
     username: Entity<TextInput>,
     display_name: Entity<TextInput>,
     password: Entity<TextInput>,
+    /// The code of an invitation, optional, when creating an account.
+    invite_code: Entity<TextInput>,
     submit_focus: FocusHandle,
     toggle_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
@@ -48,16 +50,27 @@ impl SignInView {
         let username = field("Username", "Username", false, cx);
         let display_name = field("Display name", "Display name", false, cx);
         let password = field("Password", "Password", true, cx);
+        // A code is a secret like a password: shown as typed here only while the person looks, but
+        // never kept in a log or a label (its field is labelled by its name alone).
+        let invite_code = field(
+            crate::states::INVITE_CODE_PLACEHOLDER,
+            "Invitation code",
+            false,
+            cx,
+        );
 
         let mut subscriptions = Vec::new();
-        for input in [&username, &display_name, &password] {
+        for input in [&username, &display_name, &password, &invite_code] {
             subscriptions.push(cx.subscribe_in(
                 input,
                 window,
                 move |this, _input, event: &TextInputEvent, window, cx| match event {
                     TextInputEvent::Submit => this.submit(cx),
                     TextInputEvent::Tab { backwards } => this.move_focus(*backwards, window, cx),
-                    TextInputEvent::Changed => {}
+                    TextInputEvent::Changed
+                    | TextInputEvent::UpWhenEmpty
+                    | TextInputEvent::PasteAttachments
+                    | TextInputEvent::Suggestion(_) => {}
                 },
             ));
         }
@@ -71,6 +84,7 @@ impl SignInView {
             username,
             display_name,
             password,
+            invite_code,
             submit_focus: cx.focus_handle().tab_stop(true),
             toggle_focus: cx.focus_handle().tab_stop(true),
             _subscriptions: subscriptions,
@@ -104,6 +118,7 @@ impl SignInView {
                 username,
                 display_name: self.display_name.read(cx).text().to_owned(),
                 password,
+                invite_code: self.invite_code.read(cx).text().trim().to_owned(),
             },
         };
         self.model.update(cx, |model, cx| model.dispatch(input, cx));
@@ -207,6 +222,15 @@ impl Render for SignInView {
             form = form.child(self.labeled(&theme, "Display name", &self.display_name, window, cx));
         }
         form = form.child(self.labeled(&theme, "Password", &self.password, window, cx));
+        if creating {
+            form = form.child(self.labeled(
+                &theme,
+                crate::states::INVITE_CODE_LABEL,
+                &self.invite_code,
+                window,
+                cx,
+            ));
+        }
         if let Some(error) = error {
             form = form.child(
                 div()

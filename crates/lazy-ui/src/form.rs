@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement,
-    IntoElement, KeyDownEvent, ParentElement, SharedString, Stateful, StatefulInteractiveElement,
-    Styled, Window, div, prelude::*, transparent_black,
+    IntoElement, KeyDownEvent, ParentElement, Role, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Window, div, prelude::*, px, transparent_black,
 };
 
 use crate::keyboard::is_activation;
@@ -41,6 +41,13 @@ pub fn button(
     let on_activate = Rc::new(on_activate);
     let on_key = on_activate.clone();
     let on_click = on_activate;
+    // The ring is the accent color, which is also a primary button's fill: there it would vanish,
+    // so a filled button is outlined in the text color, which contrasts with the surface around it
+    // (white-on-white would not).
+    let focus_ring = match kind {
+        ButtonKind::Primary => colors.text,
+        ButtonKind::Secondary | ButtonKind::Danger => colors.focus_ring,
+    };
     let (bg, fg, hover_bg, border) = match kind {
         ButtonKind::Primary => (
             colors.accent,
@@ -76,7 +83,7 @@ pub fn button(
         .flex()
         .items_center()
         .justify_center()
-        .focus_visible(move |style| style.border_color(colors.focus_ring).border_2())
+        .focus_visible(move |style| style.border_color(focus_ring).border_2())
         .when(enabled, |button| {
             button
                 .cursor_pointer()
@@ -100,6 +107,82 @@ pub fn button(
         .child(label.into())
 }
 
+/// A labelled checkbox that is one tab stop: Space or Enter toggles it, and so does a click on
+/// the box or its label. `id` doubles as the element id and the test label.
+pub fn checkbox(
+    theme: &Theme,
+    id: &'static str,
+    label: impl Into<SharedString>,
+    checked: bool,
+    focus: &FocusHandle,
+    on_toggle: impl Fn(bool, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let colors = theme.colors;
+    let label: SharedString = label.into();
+    let on_toggle = Rc::new(on_toggle);
+    let on_key = on_toggle.clone();
+    div()
+        .id(ElementId::Name(id.into()))
+        .debug_selector(move || id.to_owned())
+        .track_focus(focus)
+        .role(Role::CheckBox)
+        .aria_label(label.clone())
+        .aria_toggled(if checked {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .flex()
+        .items_center()
+        .gap_2()
+        // As wide as its label, so the focus ring wraps the control and not the whole row.
+        .self_start()
+        .px_1()
+        .py_0p5()
+        .rounded(theme.radii.small)
+        .border_1()
+        .border_color(transparent_black())
+        .focus_visible(move |style| style.border_color(colors.focus_ring))
+        .cursor_pointer()
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if is_activation(event) {
+                on_key(!checked, window, cx);
+                cx.stop_propagation();
+            }
+        })
+        .on_click(move |_, window, cx| on_toggle(!checked, window, cx))
+        .child(
+            div()
+                .size(px(16.))
+                .flex_none()
+                .rounded(px(4.))
+                .border_1()
+                .border_color(if checked {
+                    colors.accent
+                } else {
+                    colors.border_strong
+                })
+                .bg(if checked {
+                    colors.accent
+                } else {
+                    colors.surface_raised
+                })
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(11.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(colors.on_accent)
+                .child(if checked { "✓" } else { "" }),
+        )
+        .child(
+            div()
+                .text_size(theme.type_scale.small)
+                .text_color(colors.text_muted)
+                .child(label),
+        )
+}
+
 /// A label above an input box. The border takes the focus-ring color while the input is
 /// focused. `hint` is small text under the box; `error` replaces it in the danger color.
 pub fn labeled_field(
@@ -113,6 +196,10 @@ pub fn labeled_field(
 ) -> AnyElement {
     let focused = input.read(cx).is_focused(window);
     let colors = theme.colors;
+    let label: SharedString = label.into();
+    // Test labels for the text under the box: `field-error-Name`, `field-hint-Name`.
+    let error_selector = format!("field-error-{label}");
+    let hint_selector = format!("field-hint-{label}");
     div()
         .flex()
         .flex_col()
@@ -122,7 +209,7 @@ pub fn labeled_field(
                 .text_size(theme.type_scale.small)
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(colors.text_muted)
-                .child(label.into()),
+                .child(label),
         )
         .child(
             div()
@@ -143,6 +230,7 @@ pub fn labeled_field(
         .children(match (error, hint) {
             (Some(error), _) => Some(
                 div()
+                    .debug_selector(move || error_selector)
                     .text_size(theme.type_scale.small)
                     .text_color(colors.danger)
                     .child(error)
@@ -150,6 +238,7 @@ pub fn labeled_field(
             ),
             (None, Some(hint)) => Some(
                 div()
+                    .debug_selector(move || hint_selector)
                     .text_size(theme.type_scale.small)
                     .text_color(colors.text_faint)
                     .child(hint)
@@ -244,13 +333,87 @@ pub fn segmented(
                         })
                         .child(segment.label.clone()),
                 )
-                .child(
+                .children((!segment.detail.is_empty()).then(|| {
                     div()
                         .text_size(theme.type_scale.small)
                         .text_color(colors.text_muted)
-                        .child(segment.detail.clone()),
-                ),
+                        .child(segment.detail.clone())
+                })),
         );
     }
     row
+}
+
+/// A compact toggle of two or more choices, one of them chosen, as one tab stop: Left and Right
+/// move the choice (Enter and Space step to the next, wrapping), and a click chooses. `options`
+/// are `(label, selector)`; `aria` names the group for a screen reader.
+pub fn toggle_group(
+    theme: &Theme,
+    id: &'static str,
+    aria: &'static str,
+    options: &[(&'static str, &'static str)],
+    selected: usize,
+    focus: &FocusHandle,
+    on_select: impl Fn(usize, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let colors = theme.colors;
+    let count = options.len();
+    let on_select = Rc::new(on_select);
+    let on_key = on_select.clone();
+    let mut group = div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .role(Role::RadioGroup)
+        .aria_label(aria)
+        .track_focus(focus)
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap_0p5()
+        .p_0p5()
+        .rounded(theme.radii.medium)
+        .bg(colors.surface_hover)
+        .border_1()
+        .border_color(transparent_black())
+        .focus_visible(move |style| style.border_color(colors.focus_ring))
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if event.keystroke.modifiers.modified() || count == 0 {
+                return;
+            }
+            let next = match event.keystroke.key.as_str() {
+                "left" if selected > 0 => selected - 1,
+                "right" if selected + 1 < count => selected + 1,
+                "enter" | "space" if !event.is_held => (selected + 1) % count,
+                _ => return,
+            };
+            on_key(next, window, cx);
+            cx.stop_propagation();
+        });
+    for (index, (label, selector)) in options.iter().copied().enumerate() {
+        let chosen = index == selected;
+        let on_select = on_select.clone();
+        group = group.child(
+            div()
+                .id(selector)
+                .debug_selector(move || selector.into())
+                .role(Role::RadioButton)
+                .aria_label(label)
+                .px_2()
+                .py_0p5()
+                .rounded(theme.radii.small)
+                .text_size(theme.type_scale.small)
+                .cursor_pointer()
+                .when(chosen, |d| {
+                    d.bg(colors.surface_raised)
+                        .border_1()
+                        .border_color(colors.border_strong)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors.text)
+                })
+                .when(!chosen, |d| d.text_color(colors.text_muted))
+                .on_click(move |_, window, cx| on_select(index, window, cx))
+                .child(label),
+        );
+    }
+    group
 }

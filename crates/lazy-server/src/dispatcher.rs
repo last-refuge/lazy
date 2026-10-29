@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::AppError;
 use crate::events::{self, NOTIFY_CHANNEL, StoredEvent};
+use crate::logging::Describe;
 
 /// How often the log is polled when no notification arrives.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -115,7 +116,7 @@ impl DispatcherTasks {
     pub async fn join(mut self) {
         while let Some(result) = self.tasks.join_next().await {
             if let Err(error) = result {
-                tracing::error!(%error, "dispatcher task failed");
+                tracing::error!(error = %error.describe(), "dispatcher task failed");
             }
         }
     }
@@ -137,16 +138,18 @@ async fn listen_loop(inner: Arc<Inner>) {
                             received = listener.recv() => match received {
                                 Ok(_) => inner.wake.notify_one(),
                                 Err(error) => {
-                                    tracing::warn!(%error, "event listener lost; reconnecting");
+                                    tracing::warn!(error = %error.describe(), "event listener lost; reconnecting");
                                     break;
                                 }
                             },
                         }
                     }
                 }
-                Err(error) => tracing::warn!(%error, "cannot listen for events"),
+                Err(error) => tracing::warn!(error = %error.describe(), "cannot listen for events"),
             },
-            Err(error) => tracing::warn!(%error, "cannot connect event listener"),
+            Err(error) => {
+                tracing::warn!(error = %error.describe(), "cannot connect event listener")
+            }
         }
         tokio::select! {
             () = inner.shutdown.cancelled() => return,
@@ -173,7 +176,7 @@ async fn dispatch_loop(inner: Arc<Inner>) {
                     Ok(true) => continue,
                     Ok(false) => break,
                     Err(error) => {
-                        tracing::warn!(%workspace_id, %error, "dispatch failed; will retry");
+                        tracing::warn!(%workspace_id, error = %error.describe(), "dispatch failed; will retry");
                         break;
                     }
                 }

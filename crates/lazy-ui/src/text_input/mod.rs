@@ -28,16 +28,20 @@ mod tests;
 
 pub use model::{Direction, EditorModel, Selection, Unit};
 pub use style::{SubmitChord, TextInputOptions, TextInputStyle};
-pub use view::{KEY_CONTEXT, TextInput, TextInputEvent, bind_keys};
+pub use view::{
+    KEY_CONTEXT, SuggestionKey, TextInput, TextInputEvent, any_input_composing, bind_keys,
+    cancel_any_composition, editing_keystrokes, editing_keystrokes_for, focused_input,
+};
 
 /// The GPUI actions the input handles, for hosts that want to bind or dispatch them.
 pub mod actions {
     pub use super::view::{
         Backspace, CopySelection, CutSelection, DeleteForward, DeleteWordBackward,
-        DeleteWordForward, Enter, InsertNewline, MoveDocumentEnd, MoveDocumentStart, MoveDown,
-        MoveLeft, MoveLineEnd, MoveLineStart, MoveRight, MoveUp, MoveWordLeft, MoveWordRight,
-        PasteClipboard, Redo, SelectAll, SelectDocumentEnd, SelectDocumentStart, SelectDown,
-        SelectLeft, SelectLineEnd, SelectLineStart, SelectRight, SelectUp, SelectWordLeft,
-        SelectWordRight, ShowCharacterPalette, SubmitModified, Tab, TabBackwards, Undo,
+        DeleteWordForward, Enter, FormatBold, FormatItalic, FormatStrike, InsertNewline,
+        MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveLineEnd, MoveLineStart,
+        MoveRight, MoveUp, MoveWordLeft, MoveWordRight, PasteClipboard, Redo, SelectAll,
+        SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft, SelectLineEnd,
+        SelectLineStart, SelectRight, SelectUp, SelectWordLeft, SelectWordRight,
+        ShowCharacterPalette, SubmitModified, Tab, TabBackwards, Undo,
     };
 }

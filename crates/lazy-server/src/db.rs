@@ -7,20 +7,38 @@ use lazy_domain::{
     Username, WorkspaceId, WorkspaceRole,
 };
 use lazy_protocol::User;
-use sqlx::PgPool;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::ConnectOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::error::AppError;
 
 /// Opens a connection pool. The URL carries credentials, so errors are reported without it.
 pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool, AppError> {
+    let options: PgConnectOptions = database_url.parse().map_err(AppError::from)?;
+    connect_with(quiet(options), max_connections).await
+}
+
+/// Opens a pool with the given options (already [`quiet`] if they should be).
+pub async fn connect_with(
+    options: PgConnectOptions,
+    max_connections: u32,
+) -> Result<PgPool, AppError> {
     PgPoolOptions::new()
         .max_connections(max_connections)
         .acquire_timeout(Duration::from_secs(10))
-        .connect(database_url)
+        .connect_with(options)
         .await
         .map_err(AppError::from)
+}
+
+/// The options with SQLx's statement logging off, both the ordinary and the slow-statement kind:
+/// it is the one logger that writes the text of statements, and a statement that was built with
+/// data in it would carry the data into the log. (Values bound to `$n` are never logged by SQLx;
+/// this makes that not depend on it.)
+pub fn quiet(options: PgConnectOptions) -> PgConnectOptions {
+    options.disable_statement_logging()
 }
 
 /// Applies the migrations embedded in this binary.
@@ -58,27 +76,58 @@ pub async fn seed_default_workspace(pool: &PgPool) -> Result<Option<SeededWorksp
         return Ok(None);
     }
     let workspace_id = WorkspaceId::generate();
-    let general_id = ConversationId::generate();
-    sqlx::query("INSERT INTO workspaces (id, name) VALUES ($1, $2)")
-        .bind(workspace_id.as_uuid())
-        .bind("Lazy")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        "INSERT INTO conversations (id, workspace_id, kind, name, topic, visibility, is_default) \
-         VALUES ($1, $2, 'channel', $3, $4, 'public', true)",
-    )
-    .bind(general_id.as_uuid())
-    .bind(workspace_id.as_uuid())
-    .bind("general")
-    .bind("Where everyone starts")
-    .execute(&mut *tx)
-    .await?;
+    let general_id = insert_workspace(&mut tx, workspace_id, "Lazy", None)
+        .await?
+        .ok_or_else(|| AppError::internal("a new workspace id was already taken"))?;
     tx.commit().await?;
     Ok(Some(SeededWorkspace {
         workspace_id,
         general_id,
     }))
+}
+
+/// Inserts a workspace with default settings and its default channel, `#general`, and returns the
+/// channel's id; `None` (nothing inserted) if the id is taken. `created_by` is the person who made
+/// it, or `None` for the one the server seeds. Nobody is a member yet: the caller adds them in the
+/// same transaction.
+pub(crate) async fn insert_workspace(
+    conn: &mut PgConnection,
+    id: WorkspaceId,
+    name: &str,
+    created_by: Option<UserId>,
+) -> Result<Option<ConversationId>, AppError> {
+    let inserted = sqlx::query(
+        "INSERT INTO workspaces (id, name, created_by) VALUES ($1, $2, $3) \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(id.as_uuid())
+    .bind(name)
+    .bind(created_by.map(|user| user.as_uuid()))
+    .execute(&mut *conn)
+    .await?;
+    if inserted.rows_affected() == 0 {
+        return Ok(None);
+    }
+    let general_id = ConversationId::generate();
+    sqlx::query(
+        "INSERT INTO conversations (id, workspace_id, kind, name, topic, visibility, is_default) \
+         VALUES ($1, $2, 'channel', $3, $4, 'public', true)",
+    )
+    .bind(general_id.as_uuid())
+    .bind(id.as_uuid())
+    .bind("general")
+    .bind("Where everyone starts")
+    .execute(&mut *conn)
+    .await?;
+    Ok(Some(general_id))
+}
+
+pub(crate) fn role_to_db(role: WorkspaceRole) -> &'static str {
+    match role {
+        WorkspaceRole::Owner => "owner",
+        WorkspaceRole::Admin => "admin",
+        WorkspaceRole::Member => "member",
+    }
 }
 
 pub(crate) fn role_from_db(text: &str) -> Result<WorkspaceRole, AppError> {
@@ -128,19 +177,29 @@ pub(crate) fn kind_to_db(kind: ConversationKind) -> &'static str {
     }
 }
 
-pub(crate) fn user_from_db(id: Uuid, username: &str, display_name: &str) -> Result<User, AppError> {
-    let username = Username::parse(username)
-        .map_err(|e| AppError::internal(format!("stored username is invalid: {e}")))?;
+pub(crate) fn user_from_db(
+    id: Uuid,
+    username: &str,
+    display_name: &str,
+    is_bot: bool,
+    avatar_version: i32,
+) -> Result<User, AppError> {
+    let username =
+        Username::parse(username).map_err(|_| AppError::internal("stored username is invalid"))?;
     let display_name = DisplayName::parse(display_name)
-        .map_err(|e| AppError::internal(format!("stored display name is invalid: {e}")))?;
+        .map_err(|_| AppError::internal("stored display name is invalid"))?;
     Ok(User {
         id: UserId::from_uuid(id),
         username,
         display_name,
+        is_bot,
+        status: None,
+        deactivated: false,
+        avatar_version: u32::try_from(avatar_version)
+            .map_err(|_| AppError::internal("stored avatar version is negative"))?,
     })
 }
 
 pub(crate) fn channel_name_from_db(text: &str) -> Result<ChannelName, AppError> {
-    ChannelName::parse(text)
-        .map_err(|e| AppError::internal(format!("stored channel name is invalid: {e}")))
+    ChannelName::parse(text).map_err(|_| AppError::internal("stored channel name is invalid"))
 }

@@ -31,6 +31,7 @@ tracing = "0.1"
 proptest = "1"
 unicode-segmentation = "1"
 jiff = "0.2"
+emojis = "0.9.1"
 
 # Server.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }

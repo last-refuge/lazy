@@ -131,6 +131,45 @@ pub fn new_session_token() -> Result<(SessionToken, [u8; 32]), AppError> {
     Ok((SessionToken::new(token), hash))
 }
 
+/// A new webhook secret: 256 random bits as 64 lowercase hex characters, and the SHA-256 hash that
+/// is stored in its place. The secret is shown once, in the webhook's address, and never kept.
+pub fn new_webhook_secret() -> Result<(String, [u8; 32]), AppError> {
+    let mut random = [0u8; 32];
+    fill_random(&mut random)?;
+    let secret = hex(&random);
+    let hash = webhook_secret_hash(&secret);
+    Ok((secret, hash))
+}
+
+/// A new invitation code: 192 random bits as 32 URL-safe characters, and the SHA-256 hash that is
+/// stored in its place. The code is shown once, in the response that creates the invitation.
+pub fn new_invite_code() -> Result<(lazy_protocol::InviteCode, [u8; 32]), AppError> {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut random = [0u8; 24];
+    fill_random(&mut random)?;
+    let mut code = String::with_capacity(32);
+    for chunk in random.chunks(3) {
+        let bits = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
+        for shift in [18, 12, 6, 0] {
+            code.push(char::from(ALPHABET[((bits >> shift) & 63) as usize]));
+        }
+    }
+    let hash = invite_code_hash(&code);
+    Ok((lazy_protocol::InviteCode::new(code), hash))
+}
+
+/// The hash an invitation code is stored and looked up as. Any text hashes, so a guess of the wrong
+/// shape costs the same as one of the right shape.
+pub fn invite_code_hash(code: &str) -> [u8; 32] {
+    Sha256::digest(code.as_bytes()).into()
+}
+
+/// The hash a webhook secret is stored and compared as. Any text can be hashed, so a guess of the
+/// wrong shape costs the same as one of the right shape.
+pub fn webhook_secret_hash(secret: &str) -> [u8; 32] {
+    Sha256::digest(secret.as_bytes()).into()
+}
+
 /// The value stored for a token. Returns `None` for text that cannot be a token we issued.
 pub fn token_hash_if_wellformed(token: &str) -> Option<[u8; 32]> {
     let random = token.strip_prefix(TOKEN_PREFIX)?;
@@ -145,18 +184,76 @@ fn token_hash(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
-/// Fingerprint of a send request, stored with its operation receipt to detect an operation id
+/// Fingerprints of a send request, stored with its operation receipt to detect an operation id
 /// reused for a different message.
-pub fn request_fingerprint(
+///
+/// The first is the one to store. A document is hashed in its serialized form, which carries the
+/// document version, and documents moved from version 1 to 2; a receipt written before that holds
+/// the version 1 form. The second is that form, so that a person whose acknowledgment was lost
+/// across an upgrade, and who retries the same send, is recognized rather than told they conflict
+/// with themselves. It can never match a document that uses anything version 1 lacked.
+pub fn request_fingerprints(
     conversation_id: ConversationId,
     document: &lazy_domain::MessageDocument,
-) -> Result<[u8; 32], AppError> {
-    let body = serde_json::to_vec(document)
+) -> Result<[[u8; 32]; 2], AppError> {
+    let current = serde_json::to_vec(document)
         .map_err(|e| AppError::internal(format!("cannot serialize document: {e}")))?;
+    let blocks = serde_json::to_string(document.blocks())
+        .map_err(|e| AppError::internal(format!("cannot serialize document: {e}")))?;
+    let legacy = format!("{{\"version\":1,\"blocks\":{blocks}}}").into_bytes();
+    Ok([
+        send_fingerprint(conversation_id, &current),
+        send_fingerprint(conversation_id, &legacy),
+    ])
+}
+
+fn send_fingerprint(conversation_id: ConversationId, document: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(conversation_id.as_uuid().as_bytes());
-    hasher.update(&body);
-    Ok(hasher.finalize().into())
+    hasher.update(document);
+    hasher.finalize().into()
+}
+
+/// `fingerprints` of a send, with the files it names mixed in (in order), so that an operation id
+/// reused for the same words with other files is a conflict. A send without files keeps the
+/// fingerprint it always had.
+pub fn attachment_fingerprints(
+    fingerprints: [[u8; 32]; 2],
+    attachments: &[lazy_domain::AttachmentId],
+) -> [[u8; 32]; 2] {
+    if attachments.is_empty() {
+        return fingerprints;
+    }
+    fingerprints.map(|fingerprint| {
+        let mut hasher = Sha256::new();
+        hasher.update(b"attachments");
+        hasher.update(fingerprint);
+        for id in attachments {
+            hasher.update(id.as_uuid().as_bytes());
+        }
+        hasher.finalize().into()
+    })
+}
+
+/// [`request_fingerprints`] for a reply: the same, with the thread it is in and whether it was
+/// also sent to the channel mixed in, so an operation id reused for the same words in another
+/// thread (or without the flag) is a conflict. A send that is not a reply keeps the fingerprint it
+/// always had.
+pub fn reply_fingerprints(
+    conversation_id: ConversationId,
+    document: &lazy_domain::MessageDocument,
+    root: lazy_domain::MessageId,
+    also_in_channel: bool,
+) -> Result<[[u8; 32]; 2], AppError> {
+    let base = request_fingerprints(conversation_id, document)?;
+    Ok(base.map(|fingerprint| {
+        let mut hasher = Sha256::new();
+        hasher.update(b"reply");
+        hasher.update(fingerprint);
+        hasher.update(root.as_uuid().as_bytes());
+        hasher.update([u8::from(also_in_channel)]);
+        hasher.finalize().into()
+    }))
 }
 
 /// Fingerprint of a command other than a send, stored with its receipt. `tag` names the command
@@ -268,12 +365,28 @@ mod tests {
         let conversation = ConversationId::generate();
         let one = MessageDocument::from_plain_text("one").unwrap();
         let two = MessageDocument::from_plain_text("two").unwrap();
-        let base = request_fingerprint(conversation, &one).unwrap();
-        assert_eq!(base, request_fingerprint(conversation, &one).unwrap());
-        assert_ne!(base, request_fingerprint(conversation, &two).unwrap());
+        let base = request_fingerprints(conversation, &one).unwrap();
+        assert_eq!(base, request_fingerprints(conversation, &one).unwrap());
+        assert_ne!(base, request_fingerprints(conversation, &two).unwrap());
         assert_ne!(
             base,
-            request_fingerprint(ConversationId::generate(), &one).unwrap()
+            request_fingerprints(ConversationId::generate(), &one).unwrap()
+        );
+        assert_ne!(
+            base[0], base[1],
+            "the legacy form differs from the current one"
+        );
+    }
+
+    #[test]
+    fn the_legacy_fingerprint_is_what_a_version_1_server_stored() {
+        // A receipt written before documents moved to version 2 hashed exactly these bytes.
+        let conversation = ConversationId::generate();
+        let document = MessageDocument::from_plain_text("one").unwrap();
+        let stored_then = br#"{"version":1,"blocks":[{"type":"paragraph","inlines":[{"type":"text","text":"one"}]}]}"#;
+        assert_eq!(
+            request_fingerprints(conversation, &document).unwrap()[1],
+            send_fingerprint(conversation, stored_then)
         );
     }
 }

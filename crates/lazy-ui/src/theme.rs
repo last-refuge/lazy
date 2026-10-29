@@ -5,6 +5,7 @@
 //! alone: failure and unknown states also carry text and icons in the views that use them.
 
 use gpui::{App, Global, Hsla, Pixels, WindowAppearance, px, rgb};
+use lazy_client_core::{Appearance, MotionChoice, ThemeChoice};
 
 /// Which palette is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +19,10 @@ pub enum ThemeMode {
 pub struct Colors {
     /// Narrow workspace rail on the far left.
     pub rail: Hsla,
+    /// A workspace's square on the rail when it is not the current one, and the text on it (and
+    /// on the rail itself).
+    pub rail_square: Hsla,
+    pub rail_text: Hsla,
     /// Channel and conversation sidebar.
     pub sidebar: Hsla,
     pub sidebar_text: Hsla,
@@ -35,8 +40,26 @@ pub struct Colors {
     pub text: Hsla,
     pub text_muted: Hsla,
     pub text_faint: Hsla,
+    /// Background of inline code and code blocks.
+    pub code_surface: Hsla,
+    /// The bar beside a quote.
+    pub quote_bar: Hsla,
+    /// Background of a message the person was taken to, such as by a permalink.
+    pub highlight: Hsla,
     pub accent: Hsla,
+    /// A pale wash of the accent, behind things that are "on": a reaction the person made.
+    pub accent_surface: Hsla,
     pub accent_hover: Hsla,
+    /// Text of a mention (`@alice`) in a message.
+    pub mention_text: Hsla,
+    /// Behind a mention of someone else.
+    pub mention_surface: Hsla,
+    /// Behind a mention of the person looking: a stronger wash.
+    pub mention_me_surface: Hsla,
+    /// Behind a whole message that notifies the person.
+    pub mention_row: Hsla,
+    /// The bar down the left of such a message.
+    pub mention_bar: Hsla,
     /// Text drawn on top of `accent`.
     pub on_accent: Hsla,
     pub danger: Hsla,
@@ -58,6 +81,9 @@ pub struct Typography {
     pub title: Pixels,
     pub heading: Pixels,
     pub line_height_body: Pixels,
+    /// Monospace text in messages.
+    pub code: Pixels,
+    pub line_height_code: Pixels,
 }
 
 /// Corner radii.
@@ -89,6 +115,8 @@ impl Theme {
             mode: ThemeMode::Light,
             colors: Colors {
                 rail: c(0x2f2a26),
+                rail_square: c(0x453e38),
+                rail_text: c(0xf1ebe2),
                 sidebar: c(0xf1ebe2),
                 sidebar_text: c(0x2b2622),
                 sidebar_text_muted: c(0x6b6259),
@@ -103,15 +131,24 @@ impl Theme {
                 text: c(0x2b2622),
                 text_muted: c(0x6b6259),
                 text_faint: c(0x8a8076),
-                accent: c(0x1f7a6d),
+                code_surface: c(0xf0e9dd),
+                quote_bar: c(0xc9bfb0),
+                highlight: c(0xfdf1d6),
+                accent: c(0x1a6f63),
+                accent_surface: c(0xdcefea),
                 accent_hover: c(0x186157),
+                mention_text: c(0x14584f),
+                mention_surface: c(0xe3f1ed),
+                mention_me_surface: c(0xc4e5dd),
+                mention_row: c(0xf0f6f1),
+                mention_bar: c(0x1f7a6d),
                 on_accent: c(0xffffff),
                 danger: c(0xb3261e),
                 danger_surface: c(0xfbe9e7),
                 warning: c(0x8a5a00),
                 warning_surface: c(0xfdf1d6),
                 success: c(0x2e7d32),
-                selection: c(0xbfe3dc),
+                selection: c(0xd2e3f6),
                 caret: c(0x1f7a6d),
                 focus_ring: c(0x1f7a6d),
                 scrim: Hsla {
@@ -127,6 +164,8 @@ impl Theme {
                 title: px(15.),
                 heading: px(20.),
                 line_height_body: px(21.),
+                code: px(13.),
+                line_height_code: px(19.),
             },
             radii: Radii {
                 small: px(4.),
@@ -141,6 +180,8 @@ impl Theme {
             mode: ThemeMode::Dark,
             colors: Colors {
                 rail: c(0x0f0e0d),
+                rail_square: c(0x24211e),
+                rail_text: c(0xe9e3da),
                 sidebar: c(0x181614),
                 sidebar_text: c(0xe9e3da),
                 sidebar_text_muted: c(0x9d9489),
@@ -155,15 +196,24 @@ impl Theme {
                 text: c(0xece6dd),
                 text_muted: c(0xa59c91),
                 text_faint: c(0x82796f),
+                code_surface: c(0x2a2724),
+                quote_bar: c(0x6a635b),
+                highlight: c(0x33280f),
                 accent: c(0x4fb3a2),
+                accent_surface: c(0x1f3f3a),
                 accent_hover: c(0x6cc4b5),
+                mention_text: c(0x9fe0d3),
+                mention_surface: c(0x243d39),
+                mention_me_surface: c(0x2d5a53),
+                mention_row: c(0x212a28),
+                mention_bar: c(0x4fb3a2),
                 on_accent: c(0x081513),
                 danger: c(0xf2877f),
                 danger_surface: c(0x3a1f1d),
                 warning: c(0xe5b54d),
                 warning_surface: c(0x33280f),
                 success: c(0x7bc67f),
-                selection: c(0x24534c),
+                selection: c(0x213450),
                 caret: c(0x4fb3a2),
                 focus_ring: c(0x4fb3a2),
                 scrim: Hsla {
@@ -179,12 +229,24 @@ impl Theme {
                 title: px(15.),
                 heading: px(20.),
                 line_height_body: px(21.),
+                code: px(13.),
+                line_height_code: px(19.),
             },
             radii: Radii {
                 small: px(4.),
                 medium: px(8.),
                 large: px(12.),
             },
+        }
+    }
+
+    /// The theme for what the person chose: the operating system's appearance when they follow
+    /// it, else the one they picked.
+    pub fn for_choice(choice: ThemeChoice, os: WindowAppearance) -> Self {
+        match choice {
+            ThemeChoice::System => Self::for_appearance(os),
+            ThemeChoice::Light => Self::light(),
+            ThemeChoice::Dark => Self::dark(),
         }
     }
 
@@ -202,9 +264,53 @@ impl Theme {
     }
 }
 
-/// Installs the theme matching `appearance` as the application's global theme.
+/// What decides the theme: the operating system's appearance and the person's choice. Kept
+/// together so a change of either installs the right theme.
+#[derive(Debug, Clone, Copy)]
+struct Preference {
+    os: WindowAppearance,
+    choice: ThemeChoice,
+}
+
+impl Global for Preference {}
+
+/// Records the operating system's current `appearance` and installs the theme for it and the
+/// person's choice (following the system until one is made). Called at startup and whenever the
+/// system's appearance changes.
 pub fn install(cx: &mut App, appearance: WindowAppearance) {
-    cx.set_global(Theme::for_appearance(appearance));
+    let choice = cx
+        .try_global::<Preference>()
+        .map_or(ThemeChoice::System, |preference| preference.choice);
+    set(cx, appearance, choice);
+}
+
+/// Installs the theme for the person's `choice`, keeping the system's appearance as last
+/// reported.
+pub fn set_choice(cx: &mut App, choice: ThemeChoice) {
+    let os = cx
+        .try_global::<Preference>()
+        .map_or(WindowAppearance::Light, |preference| preference.os);
+    set(cx, os, choice);
+}
+
+fn set(cx: &mut App, os: WindowAppearance, choice: ThemeChoice) {
+    cx.set_global(Preference { os, choice });
+    cx.set_global(Theme::for_choice(choice, os));
+}
+
+/// Applies how this device looks and moves: the theme now, and reduced motion to GPUI, which
+/// holds still every animation it runs (animated images among them). GPUI does not tell us the
+/// operating system's own preference, so "follow the system" means full motion for now.
+pub fn apply_appearance(cx: &mut App, appearance: Appearance) {
+    set_choice(cx, appearance.theme);
+    cx.set_reduce_motion(effective_reduced_motion(appearance.motion));
+    cx.refresh_windows();
+}
+
+/// Whether motion is reduced for a choice: on when asked for; "follow the system" cannot read the
+/// system's setting and so is off.
+pub fn effective_reduced_motion(choice: MotionChoice) -> bool {
+    matches!(choice, MotionChoice::Reduce)
 }
 
 /// A stable avatar background for a person, picked from a warm palette by hashing their id.
@@ -248,10 +354,35 @@ mod tests {
                 ("text/surface", k.text, k.surface),
                 ("muted/surface", k.text_muted, k.surface),
                 ("text/raised", k.text, k.surface_raised),
+                ("rail text/square", k.rail_text, k.rail_square),
+                ("rail text/rail", k.rail_text, k.rail),
                 ("sidebar text", k.sidebar_text, k.sidebar),
                 ("sidebar muted", k.sidebar_text_muted, k.sidebar),
                 ("selected", k.sidebar_selected_text, k.sidebar_selected),
                 ("on accent", k.on_accent, k.accent),
+                ("link/surface", k.accent, k.surface),
+                ("text/code", k.text, k.code_surface),
+                ("text/chip-on", k.text, k.accent_surface),
+                ("mention/surface", k.mention_text, k.mention_surface),
+                ("mention/me", k.mention_text, k.mention_me_surface),
+                ("mention/row-text", k.text, k.mention_row),
+                ("mention/row-muted", k.text_muted, k.mention_row),
+                ("mention/in-row", k.mention_text, k.mention_row),
+                ("mention/me-in-row", k.mention_text, k.mention_row),
+                ("muted/chip", k.text_muted, k.surface_raised),
+                ("link/highlight", k.accent, k.highlight),
+                ("link/row", k.accent, k.mention_row),
+                ("badge/accent-surface", k.accent, k.accent_surface),
+                // Selected text is drawn over the selection color, whatever style it has.
+                ("text/selection", k.text, k.selection),
+                ("link/selection", k.accent, k.selection),
+                ("mention/selection", k.mention_text, k.selection),
+                ("muted/selection", k.text_muted, k.selection),
+                ("link/raised", k.accent, k.surface_raised),
+                ("muted/row-raised", k.text_muted, k.surface_raised),
+                ("text/highlight", k.text, k.highlight),
+                ("muted/highlight", k.text_muted, k.highlight),
+                ("muted/code", k.text_muted, k.code_surface),
                 ("danger", k.danger, k.danger_surface),
                 ("warning", k.warning, k.warning_surface),
             ];

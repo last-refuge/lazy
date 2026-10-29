@@ -127,14 +127,16 @@ async fn channels_are_created_browsed_joined_and_left(pool: PgPool) {
     );
     bob.act(Input::BrowseChannels);
     bob.wait_until("the directory", |core| {
-        core.browse_results()
+        core.browse()
+            .channels
             .iter()
             .any(|b| b.conversation.id == design)
     })
     .await;
     let joinable = bob.read(|core| {
         let entry = core
-            .browse_results()
+            .browse()
+            .channels
             .iter()
             .find(|b| b.conversation.id == design)
             .unwrap()
@@ -205,10 +207,11 @@ async fn a_member_removed_while_offline_never_receives_what_followed(pool: PgPoo
     alice.send("before bob joined");
     alice.wait_confirmed("before bob joined").await;
     bob.act(Input::BrowseChannels);
-    bob.wait_until("the directory", |core| !core.browse_results().is_empty())
+    bob.wait_until("the directory", |core| !core.browse().channels.is_empty())
         .await;
     assert!(bob.read(|core| {
-        core.browse_results()
+        core.browse()
+            .channels
             .iter()
             .all(|b| b.conversation.id != secret)
     }));
@@ -459,7 +462,8 @@ async fn unread_counts_and_favorites_follow_a_person_across_devices(pool: PgPool
     phone.act(Input::BrowseChannels);
     phone
         .wait_until("the directory", |core| {
-            core.browse_results()
+            core.browse()
+                .channels
                 .iter()
                 .any(|b| b.conversation.id == news)
         })
@@ -565,7 +569,8 @@ async fn archiving_closes_a_channel_but_keeps_it_readable_and_taken_names_are_re
     let ops = create_channel(&alice, "ops", ChannelVisibility::Public).await;
     bob.act(Input::BrowseChannels);
     bob.wait_until("the directory", |core| {
-        core.browse_results()
+        core.browse()
+            .channels
             .iter()
             .any(|b| b.conversation.id == ops)
     })

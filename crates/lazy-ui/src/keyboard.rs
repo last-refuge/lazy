@@ -18,6 +18,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("tab", FocusNextControl, Some(SHELL_CONTEXT)),
         KeyBinding::new("shift-tab", FocusPrevControl, Some(SHELL_CONTEXT)),
     ]);
+    // Every other shell shortcut (Ctrl+K, Ctrl+F, Ctrl+1 to 9, and the rest) comes from the
+    // command registry.
+    crate::commands::bind_shortcuts(cx);
 }
 
 /// Whether a key press should activate the focused control.

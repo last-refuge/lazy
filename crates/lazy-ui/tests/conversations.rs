@@ -53,6 +53,10 @@ struct World {
 
 fn person(name: &str) -> User {
     User {
+        is_bot: false,
+        deactivated: false,
+        avatar_version: 0,
+        status: None,
         id: UserId::generate(),
         username: Username::parse(name).unwrap(),
         display_name: DisplayName::parse(&format!("User {name}")).unwrap(),
@@ -149,9 +153,16 @@ impl World {
             protocol_version: PROTOCOL_VERSION,
             user: self.me.clone(),
             workspaces: vec![WorkspaceBootstrap {
+                saved: Vec::new(),
+                notification_settings: Default::default(),
+                conversation_notification_prefs: Vec::new(),
+                custom_emoji: Vec::new(),
+                threads: Vec::new(),
+                groups: Vec::new(),
                 workspace: Workspace {
                     id: self.workspace,
                     name: "Lazy".into(),
+                    settings: Default::default(),
                 },
                 role,
                 conversations: vec![
@@ -238,6 +249,11 @@ impl World {
 
     fn message(&self, author: &User, seq: i64) -> Message {
         Message {
+            attachments: vec![],
+            thread_root: None,
+            in_channel: false,
+            thread: None,
+            mentions: Default::default(),
             id: MessageId::generate(),
             conversation_id: self.general,
             author_id: author.id,
@@ -245,6 +261,10 @@ impl World {
             created_at: Timestamp::now(),
             revision: 1,
             seq: EventSeq::new(seq).unwrap(),
+            edited_at: None,
+            reactions: vec![],
+            reactions_as_of: EventSeq::ZERO,
+            deleted: false,
         }
     }
 
@@ -414,7 +434,7 @@ fn an_empty_workspace_offers_browse_and_new_message(cx: &mut TestAppContext) {
         world
             .take_effects()
             .iter()
-            .any(|e| matches!(e, Effect::BrowseChannels { .. }))
+            .any(|e| matches!(e, Effect::LoadBrowse { .. }))
     );
 }
 
@@ -532,6 +552,29 @@ fn escape_closes_the_dialog_and_focus_returns_to_the_plus_button(cx: &mut TestAp
     );
 }
 
+/// The generation of the newest directory request among `effects`.
+fn browse_generation(effects: &[Effect]) -> u64 {
+    effects
+        .iter()
+        .rev()
+        .find_map(|effect| match effect {
+            Effect::LoadBrowse { generation, .. } => Some(*generation),
+            _ => None,
+        })
+        .expect("the directory was asked for")
+}
+
+/// The server's answer to a directory request: one page, with nothing after it.
+fn browse_page(generation: u64, channels: Vec<BrowsedChannel>) -> Input {
+    Input::BrowseLoaded {
+        generation,
+        result: Ok(lazy_protocol::BrowseChannelsResponse {
+            channels,
+            has_more: false,
+        }),
+    }
+}
+
 // ---- Browsing and joining ----
 
 #[gpui::test]
@@ -541,19 +584,14 @@ fn browsing_lists_public_channels_and_joining_opens_the_channel(cx: &mut TestApp
     click(cx, "add-channel");
     cx.simulate_keystrokes("down enter"); // "Browse channels"
     assert!(on_screen(cx, "dialog-card"));
-    assert!(
-        world
-            .take_effects()
-            .iter()
-            .any(|e| matches!(e, Effect::BrowseChannels { .. }))
-    );
+    let generation = browse_generation(&world.take_effects());
 
     let random = world.channel(ConversationId::generate(), "random", None);
     world.dispatch(
         cx,
-        Input::ActionResult {
-            kind: ActionKind::Browse,
-            result: Ok(ActionOutcome::Browse(vec![
+        browse_page(
+            generation,
+            vec![
                 BrowsedChannel {
                     conversation: world.channel(world.general, "general", None),
                     joined: true,
@@ -562,8 +600,8 @@ fn browsing_lists_public_channels_and_joining_opens_the_channel(cx: &mut TestApp
                     conversation: random.clone(),
                     joined: false,
                 },
-            ])),
-        },
+            ],
+        ),
     );
     assert!(
         on_screen(cx, "browse-open-general"),
@@ -605,29 +643,44 @@ fn the_browse_filter_narrows_the_list_from_the_keyboard(cx: &mut TestAppContext)
     world.reach_quietly(cx);
     click(cx, "add-channel");
     cx.simulate_keystrokes("down enter");
-    world.take_effects();
+    let generation = browse_generation(&world.take_effects());
+    let recipes = BrowsedChannel {
+        conversation: world.channel(ConversationId::generate(), "recipes", None),
+        joined: false,
+    };
     world.dispatch(
         cx,
-        Input::ActionResult {
-            kind: ActionKind::Browse,
-            result: Ok(ActionOutcome::Browse(vec![
+        browse_page(
+            generation,
+            vec![
                 BrowsedChannel {
                     conversation: world.channel(ConversationId::generate(), "random", None),
                     joined: false,
                 },
-                BrowsedChannel {
-                    conversation: world.channel(ConversationId::generate(), "recipes", None),
-                    joined: false,
-                },
+                recipes.clone(),
                 BrowsedChannel {
                     conversation: world.channel(ConversationId::generate(), "support", None),
                     joined: false,
                 },
-            ])),
-        },
+            ],
+        ),
     );
     assert!(on_screen(cx, "browse-row-random") && on_screen(cx, "browse-row-support"));
+    // The search is the server's: typing asks again with the text, and the answer is the list.
     cx.simulate_input("rec");
+    let effects = world.take_effects();
+    let asked = effects
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            Effect::LoadBrowse {
+                generation, query, ..
+            } => Some((*generation, query.query.clone())),
+            _ => None,
+        })
+        .expect("typing searches the directory");
+    assert_eq!(asked.1.as_deref(), Some("rec"));
+    world.dispatch(cx, browse_page(asked.0, vec![recipes]));
     assert!(on_screen(cx, "browse-row-recipes"));
     assert!(
         !on_screen(cx, "browse-row-support"),

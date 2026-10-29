@@ -23,18 +23,22 @@
 use std::collections::HashSet;
 
 use lazy_domain::{ConversationId, EventSeq, WorkspaceRole};
-use lazy_protocol::{Conversation, ConversationUserState, Message, User, Workspace};
+use lazy_protocol::{
+    Conversation, ConversationUserState, Message, ThreadUserState, User, UserGroup, Workspace,
+};
 use serde::{Deserialize, Serialize};
 
 /// Most messages cached per conversation (the newest ones).
 pub const MAX_CACHED_MESSAGES: usize = 200;
 /// Most conversations with cached messages. The least recently active are dropped first.
 pub const MAX_CACHED_CONVERSATIONS: usize = 50;
+/// Most thread states cached per workspace (the bootstrap lists at most 500).
+pub const MAX_CACHED_THREAD_STATES: usize = 500;
 /// Largest cache file, in bytes. The runtime enforces it by evicting with [`ContentCache::shrink`].
 pub const MAX_CACHE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// A consistent snapshot of one signed-in person's client state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentCache {
     /// Whose cache this is. A cache is shown only to the person who produced it.
     pub user: User,
@@ -58,6 +62,18 @@ pub struct CachedWorkspace {
     /// field existed has none, and the next bootstrap supplies the baseline.
     #[serde(default)]
     pub user_state: Vec<CachedUserState>,
+    /// The workspace's user groups at the last bootstrap, kept current by events.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<UserGroup>,
+    /// The workspace's custom emoji, deleted ones included, as of the last bootstrap and kept
+    /// current by events.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_emoji: Vec<lazy_protocol::CustomEmoji>,
+    /// The person's state for the threads the client holds one for, with the same tracking as
+    /// `user_state`. Root summaries are on the cached messages. A cache written before threads
+    /// has none, and the next bootstrap supplies the baselines.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<CachedThreadState>,
 }
 
 /// One conversation's read state and the log position it is current to.
@@ -68,6 +84,34 @@ pub struct CachedUserState {
     /// again. Usually the workspace cursor; later when the baseline came from a bootstrap that
     /// was ahead of the cursor.
     pub as_of: EventSeq,
+    /// Messages after `as_of` that `state` counts as unread because their events arrived live.
+    /// A deletion that is found after a restart subtracts only a message counted here (or one at
+    /// or before `as_of`); a message the client saw only as a replayed tombstone was never
+    /// counted. A cache written before this field existed has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub counted: Vec<EventSeq>,
+    /// The subset of `counted` that the state counts as mentioning the person (see
+    /// `ClientCore::count_message_deleted` for how deletions and edits use it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub counted_mentions: Vec<EventSeq>,
+    /// The position up to which `counted` is the whole count: a message at or before it that is
+    /// not listed is not counted, whatever `as_of` says. See `ClientCore::rebuilt_through`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rebuilt_through: Option<EventSeq>,
+}
+
+/// One thread's read state and the log position it is current to; the fields mean what they do
+/// in [`CachedUserState`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedThreadState {
+    pub state: ThreadUserState,
+    pub as_of: EventSeq,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub counted: Vec<EventSeq>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub counted_mentions: Vec<EventSeq>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rebuilt_through: Option<EventSeq>,
 }
 
 /// The newest messages of one conversation.
@@ -98,6 +142,11 @@ impl ContentCache {
                 known.contains(&s.state.conversation_id)
                     && seen_state.insert(s.state.conversation_id)
             });
+            let mut seen_thread = HashSet::new();
+            workspace.threads.retain(|t| {
+                known.contains(&t.state.conversation_id) && seen_thread.insert(t.state.root_id)
+            });
+            workspace.threads.truncate(MAX_CACHED_THREAD_STATES);
             for timeline in &mut workspace.timelines {
                 let conversation = timeline.conversation;
                 timeline
@@ -182,6 +231,10 @@ mod tests {
             id: UserId::generate(),
             username: Username::parse("tester").unwrap(),
             display_name: DisplayName::parse("Tester").unwrap(),
+            is_bot: false,
+            status: None,
+            deactivated: false,
+            avatar_version: 0,
         }
     }
 
@@ -211,6 +264,15 @@ mod tests {
             created_at: Timestamp::now(),
             revision: 1,
             seq: EventSeq::new(seq).unwrap(),
+            edited_at: None,
+            thread_root: None,
+            in_channel: false,
+            thread: None,
+            reactions: Vec::new(),
+            reactions_as_of: EventSeq::ZERO,
+            mentions: lazy_protocol::Mentions::default(),
+            deleted: false,
+            attachments: Vec::new(),
         }
     }
 
@@ -219,6 +281,7 @@ mod tests {
         let workspace = Workspace {
             id: WorkspaceId::generate(),
             name: "W".into(),
+            settings: Default::default(),
         };
         let conversations = timelines.iter().map(|(c, _)| c.clone()).collect();
         let timelines = timelines
@@ -239,6 +302,9 @@ mod tests {
                 cursor: EventSeq::new(1000).unwrap(),
                 timelines,
                 user_state: Vec::new(),
+                groups: Vec::new(),
+                custom_emoji: Vec::new(),
+                threads: Vec::new(),
             }],
         }
     }

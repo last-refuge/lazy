@@ -17,11 +17,23 @@ pub enum ErrorCode {
     /// The request conflicts with existing state, such as an operation id reused for a different
     /// message.
     Conflict,
+    /// An edit was based on a revision that is no longer current: someone, perhaps the same
+    /// person on another device, changed the message first. Fetch the message and reconcile.
+    StaleRevision,
     /// Registration failed because the username is taken.
     UsernameTaken,
     /// A channel with that name already exists in the workspace.
     NameTaken,
+    /// The invitation code is wrong, expired, revoked, or used up. The server does not say which,
+    /// so codes cannot be probed.
+    InvitationInvalid,
     PayloadTooLarge,
+    /// The content is not something the server accepts: an image it cannot decode, or one far
+    /// larger than it will decode. Retrying unchanged will fail again.
+    UnsupportedMedia,
+    /// A limit on how much of something there may be was reached, such as the number of
+    /// different emoji on one message. Retrying unchanged will fail again.
+    LimitReached,
     RateLimited,
     /// The server failed. The outcome of a mutation may be unknown.
     Internal,
@@ -33,12 +45,14 @@ impl ErrorCode {
     /// The HTTP status used for this code.
     pub const fn http_status(self) -> u16 {
         match self {
-            Self::InvalidRequest => 400,
+            Self::InvalidRequest | Self::InvitationInvalid => 400,
             Self::Unauthenticated | Self::InvalidCredentials => 401,
             Self::Forbidden => 403,
             Self::NotFound => 404,
-            Self::Conflict | Self::UsernameTaken | Self::NameTaken => 409,
+            Self::Conflict | Self::StaleRevision | Self::UsernameTaken | Self::NameTaken => 409,
             Self::PayloadTooLarge => 413,
+            Self::UnsupportedMedia => 415,
+            Self::LimitReached => 422,
             Self::RateLimited => 429,
             Self::Internal => 500,
             Self::Unavailable => 503,
@@ -92,9 +106,40 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_edit_is_a_definitive_conflict_with_its_own_code() {
+        assert_eq!(ErrorCode::StaleRevision.http_status(), 409);
+        assert!(ErrorCode::StaleRevision.is_definitive_rejection());
+        assert_eq!(
+            serde_json::to_string(&ErrorCode::StaleRevision).unwrap(),
+            r#""stale_revision""#
+        );
+    }
+
+    #[test]
+    fn reaching_a_limit_is_a_definitive_unprocessable_request() {
+        assert_eq!(ErrorCode::LimitReached.http_status(), 422);
+        assert!(ErrorCode::LimitReached.is_definitive_rejection());
+        assert_eq!(
+            serde_json::to_string(&ErrorCode::LimitReached).unwrap(),
+            r#""limit_reached""#
+        );
+    }
+
+    #[test]
     fn only_server_side_failures_leave_the_outcome_unknown() {
         assert!(ErrorCode::Forbidden.is_definitive_rejection());
         assert!(!ErrorCode::Internal.is_definitive_rejection());
         assert!(!ErrorCode::Unavailable.is_definitive_rejection());
+    }
+
+    #[test]
+    fn a_bad_invitation_is_a_definitive_bad_request_with_its_own_code() {
+        let code = ErrorCode::InvitationInvalid;
+        assert_eq!(code.http_status(), 400);
+        assert!(code.is_definitive_rejection());
+        assert_eq!(
+            serde_json::to_string(&code).unwrap(),
+            r#""invitation_invalid""#
+        );
     }
 }

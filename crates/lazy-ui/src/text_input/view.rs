@@ -5,10 +5,10 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    Action, App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, IntoElement, KeyBinding, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, Role, ScrollEvent, SharedString,
-    UTF16Selection, Window, actions, div, point, prelude::*, px,
+    Action, App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, Entity,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, IntoElement, KeyBinding, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, Role, ScrollEvent,
+    SharedString, UTF16Selection, WeakEntity, Window, actions, div, point, prelude::*, px,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -64,6 +64,9 @@ actions!(
         Tab,
         TabBackwards,
         ShowCharacterPalette,
+        FormatBold,
+        FormatItalic,
+        FormatStrike,
     ]
 );
 
@@ -74,63 +77,138 @@ pub fn bind_keys(cx: &mut App) {
         return;
     }
     cx.set_global(KeysBound);
+    cx.bind_keys(editing_bindings(cfg!(target_os = "macos")));
+}
 
-    fn bind<A: Action>(mac: &'static str, other: &'static str, action: A) -> KeyBinding {
-        let keys = if cfg!(target_os = "macos") {
-            mac
-        } else {
-            other
+/// The keystrokes the input takes for editing, on this platform. A shell shortcut must not be one
+/// of them (a test in the commands module compares the two tables).
+pub fn editing_keystrokes() -> Vec<gpui::Keystroke> {
+    editing_keystrokes_for(cfg!(target_os = "macos"))
+}
+
+/// Like [`editing_keystrokes`], for either platform's table.
+pub fn editing_keystrokes_for(mac: bool) -> Vec<gpui::Keystroke> {
+    editing_bindings(mac)
+        .iter()
+        .flat_map(|binding| {
+            binding
+                .keystrokes()
+                .iter()
+                .map(|keystroke| keystroke.inner().clone())
+        })
+        .collect()
+}
+
+fn editing_bindings(on_mac: bool) -> Vec<KeyBinding> {
+    fn bind_for<A: Action>(
+        on_mac: bool,
+        mac: &'static str,
+        other: &'static str,
+        action: A,
+    ) -> KeyBinding {
+        KeyBinding::new(if on_mac { mac } else { other }, action, Some(KEY_CONTEXT))
+    }
+    macro_rules! bind {
+        ($mac:expr, $other:expr, $action:expr $(,)?) => {
+            bind_for(on_mac, $mac, $other, $action)
         };
-        KeyBinding::new(keys, action, Some(KEY_CONTEXT))
     }
 
     let mut bindings = vec![
-        bind("backspace", "backspace", Backspace),
-        bind("delete", "delete", DeleteForward),
-        bind("alt-backspace", "ctrl-backspace", DeleteWordBackward),
-        bind("alt-delete", "ctrl-delete", DeleteWordForward),
-        bind("left", "left", MoveLeft),
-        bind("right", "right", MoveRight),
-        bind("up", "up", MoveUp),
-        bind("down", "down", MoveDown),
-        bind("alt-left", "ctrl-left", MoveWordLeft),
-        bind("alt-right", "ctrl-right", MoveWordRight),
-        bind("cmd-left", "home", MoveLineStart),
-        bind("cmd-right", "end", MoveLineEnd),
-        bind("cmd-up", "ctrl-home", MoveDocumentStart),
-        bind("cmd-down", "ctrl-end", MoveDocumentEnd),
-        bind("shift-left", "shift-left", SelectLeft),
-        bind("shift-right", "shift-right", SelectRight),
-        bind("shift-up", "shift-up", SelectUp),
-        bind("shift-down", "shift-down", SelectDown),
-        bind("alt-shift-left", "ctrl-shift-left", SelectWordLeft),
-        bind("alt-shift-right", "ctrl-shift-right", SelectWordRight),
-        bind("cmd-shift-left", "shift-home", SelectLineStart),
-        bind("cmd-shift-right", "shift-end", SelectLineEnd),
-        bind("cmd-shift-up", "ctrl-shift-home", SelectDocumentStart),
-        bind("cmd-shift-down", "ctrl-shift-end", SelectDocumentEnd),
-        bind("cmd-a", "ctrl-a", SelectAll),
-        bind("cmd-c", "ctrl-c", CopySelection),
-        bind("cmd-x", "ctrl-x", CutSelection),
-        bind("cmd-v", "ctrl-v", PasteClipboard),
-        bind("cmd-z", "ctrl-z", Undo),
-        bind("cmd-shift-z", "ctrl-shift-z", Redo),
-        bind("enter", "enter", Enter),
-        bind("shift-enter", "shift-enter", InsertNewline),
-        bind("cmd-enter", "ctrl-enter", SubmitModified),
-        bind("tab", "tab", Tab),
-        bind("shift-tab", "shift-tab", TabBackwards),
+        bind!("backspace", "backspace", Backspace),
+        bind!("delete", "delete", DeleteForward),
+        bind!("alt-backspace", "ctrl-backspace", DeleteWordBackward),
+        bind!("alt-delete", "ctrl-delete", DeleteWordForward),
+        bind!("left", "left", MoveLeft),
+        bind!("right", "right", MoveRight),
+        bind!("up", "up", MoveUp),
+        bind!("down", "down", MoveDown),
+        bind!("alt-left", "ctrl-left", MoveWordLeft),
+        bind!("alt-right", "ctrl-right", MoveWordRight),
+        bind!("cmd-left", "home", MoveLineStart),
+        bind!("cmd-right", "end", MoveLineEnd),
+        bind!("cmd-up", "ctrl-home", MoveDocumentStart),
+        bind!("cmd-down", "ctrl-end", MoveDocumentEnd),
+        bind!("shift-left", "shift-left", SelectLeft),
+        bind!("shift-right", "shift-right", SelectRight),
+        bind!("shift-up", "shift-up", SelectUp),
+        bind!("shift-down", "shift-down", SelectDown),
+        bind!("alt-shift-left", "ctrl-shift-left", SelectWordLeft),
+        bind!("alt-shift-right", "ctrl-shift-right", SelectWordRight),
+        bind!("cmd-shift-left", "shift-home", SelectLineStart),
+        bind!("cmd-shift-right", "shift-end", SelectLineEnd),
+        bind!("cmd-shift-up", "ctrl-shift-home", SelectDocumentStart),
+        bind!("cmd-shift-down", "ctrl-shift-end", SelectDocumentEnd),
+        bind!("cmd-a", "ctrl-a", SelectAll),
+        bind!("cmd-c", "ctrl-c", CopySelection),
+        bind!("cmd-x", "ctrl-x", CutSelection),
+        bind!("cmd-v", "ctrl-v", PasteClipboard),
+        bind!("cmd-z", "ctrl-z", Undo),
+        bind!("cmd-shift-z", "ctrl-shift-z", Redo),
+        bind!("enter", "enter", Enter),
+        bind!("shift-enter", "shift-enter", InsertNewline),
+        bind!("cmd-enter", "ctrl-enter", SubmitModified),
+        bind!("tab", "tab", Tab),
+        bind!("shift-tab", "shift-tab", TabBackwards),
+        bind!("cmd-b", "ctrl-b", FormatBold),
+        bind!("cmd-i", "ctrl-i", FormatItalic),
+        bind!("cmd-shift-x", "ctrl-shift-x", FormatStrike),
     ];
-    if cfg!(target_os = "macos") {
-        bindings.push(bind(
+    if on_mac {
+        bindings.push(bind!(
             "ctrl-cmd-space",
             "ctrl-cmd-space",
             ShowCharacterPalette,
         ));
     } else {
-        bindings.push(bind("ctrl-y", "ctrl-y", Redo));
+        bindings.push(bind!("ctrl-y", "ctrl-y", Redo));
     }
-    cx.bind_keys(bindings);
+    bindings
+}
+
+/// Every text input that is alive, so the shell can ask whether one is mid-composition or has the
+/// keyboard without knowing which view owns it.
+#[derive(Default)]
+struct LiveInputs(Vec<WeakEntity<TextInput>>);
+
+impl gpui::Global for LiveInputs {}
+
+/// Whether any text input has text in composition (an input method's preedit).
+pub fn any_input_composing(cx: &App) -> bool {
+    cx.try_global::<LiveInputs>().is_some_and(|live| {
+        live.0.iter().any(|weak| {
+            weak.upgrade()
+                .is_some_and(|input| input.read(cx).is_composing())
+        })
+    })
+}
+
+/// Cancels every composition in progress (Escape belongs to the input method then). Returns
+/// whether there was one.
+pub fn cancel_any_composition(window: &mut Window, cx: &mut App) -> bool {
+    let composing: Vec<Entity<TextInput>> = cx
+        .try_global::<LiveInputs>()
+        .map(|live| {
+            live.0
+                .iter()
+                .filter_map(WeakEntity::upgrade)
+                .filter(|input| input.read(cx).is_composing())
+                .collect()
+        })
+        .unwrap_or_default();
+    for input in &composing {
+        input.update(cx, |input, cx| input.cancel_composition(window, cx));
+    }
+    !composing.is_empty()
+}
+
+/// The text input that has the keyboard, if one does.
+pub fn focused_input(window: &Window, cx: &App) -> Option<Entity<TextInput>> {
+    cx.try_global::<LiveInputs>()?
+        .0
+        .iter()
+        .filter_map(WeakEntity::upgrade)
+        .find(|input| input.read(cx).is_focused(window))
 }
 
 /// Marks that the default bindings are registered, so repeated [`bind_keys`] calls do nothing.
@@ -149,6 +227,25 @@ pub enum TextInputEvent {
     /// Tab or Shift+Tab was pressed in a single-line input. Nothing was done with it; move focus
     /// if appropriate.
     Tab { backwards: bool },
+    /// Up was pressed in an empty multiline input that asked for it
+    /// ([`TextInputOptions::report_up_when_empty`]).
+    UpWhenEmpty,
+    /// Files or an image were pasted (and the input asked for them: see
+    /// [`TextInputOptions::paste_attachments`]). Nothing was inserted; the host reads the
+    /// clipboard with [`crate::attachments::classify_clipboard`].
+    PasteAttachments,
+    /// A key that belongs to an open suggestion list ([`TextInput::set_suggestions_open`]). The
+    /// input did nothing with it.
+    Suggestion(SuggestionKey),
+}
+
+/// A key the input hands to an open suggestion list instead of acting on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuggestionKey {
+    Up,
+    Down,
+    /// Enter, or Tab: take the highlighted suggestion.
+    Accept,
 }
 
 /// A text editor view: multiline or single-line, optionally masked, with full IME support.
@@ -163,6 +260,11 @@ pub struct TextInput {
     accessible_label: SharedString,
     pub(crate) single_line: bool,
     pass_through_navigation: bool,
+    formatting_shortcuts: bool,
+    report_up_when_empty: bool,
+    paste_attachments: bool,
+    /// While a host's suggestion list is open, Up, Down, Enter, and Tab go to it.
+    suggestions_open: bool,
     pub(crate) masked: bool,
     pub(crate) max_lines: usize,
     submit_chord: SubmitChord,
@@ -196,6 +298,10 @@ impl Focusable for TextInput {
 
 impl TextInput {
     pub fn new(options: TextInputOptions, cx: &mut Context<Self>) -> Self {
+        let weak = cx.weak_entity();
+        let live = cx.default_global::<LiveInputs>();
+        live.0.retain(|other| other.upgrade().is_some());
+        live.0.push(weak);
         Self {
             focus_handle: cx.focus_handle().tab_stop(true),
             model: EditorModel::new(options.max_bytes, options.single_line),
@@ -203,6 +309,10 @@ impl TextInput {
             accessible_label: options.accessible_label,
             single_line: options.single_line,
             pass_through_navigation: options.pass_through_navigation,
+            formatting_shortcuts: options.formatting_shortcuts,
+            report_up_when_empty: options.report_up_when_empty,
+            paste_attachments: options.paste_attachments,
+            suggestions_open: false,
             masked: options.masked,
             max_lines: options.max_lines.max(1),
             submit_chord: options.submit_chord,
@@ -229,6 +339,83 @@ impl TextInput {
 
     pub fn is_empty(&self) -> bool {
         self.model.is_empty()
+    }
+
+    /// The caret, as a byte offset into [`text`](Self::text) (the end of the selection that was
+    /// extended last).
+    pub fn cursor(&self) -> usize {
+        self.model.cursor()
+    }
+
+    /// The selection as byte offsets into [`text`](Self::text): where it began and the end that
+    /// moves. Equal when it is only a caret.
+    pub fn selection(&self) -> (usize, usize) {
+        let selection = self.model.selection();
+        (selection.anchor, selection.head)
+    }
+
+    /// Puts the selection (or, with equal ends, the caret) at these byte offsets, moved back to
+    /// grapheme boundaries and kept inside the text. Does not emit
+    /// [`TextInputEvent::Changed`]: it is for restoring a position, not an edit.
+    pub fn set_selection(&mut self, anchor: usize, head: usize, cx: &mut Context<Self>) {
+        let len = self.model.len();
+        self.model.select(anchor.min(len), head.min(len));
+        self.after_programmatic_change(cx);
+    }
+
+    /// Drops a selection to a caret at its head, for when something else is selected instead.
+    pub fn collapse_selection(&mut self, cx: &mut Context<Self>) {
+        let (anchor, head) = self.selection();
+        if anchor != head {
+            self.set_selection(head, head, cx);
+        }
+    }
+
+    /// Where the caret was last drawn, in window coordinates, for a host that wants to put
+    /// something beside it. `None` until the input has been painted with its current text (the
+    /// frame after an edit), and while it shows its placeholder.
+    pub fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
+        let layout = self.layout.borrow();
+        let layout = layout.as_ref()?;
+        let area = layout.bounds?;
+        if layout.revision != self.model.revision() || layout.showing_placeholder {
+            return None;
+        }
+        let at = layout.point_for_offset(self.display_offset(self.model.cursor()));
+        Some(Bounds::new(
+            area.origin - self.scroll + at,
+            gpui::size(self.style.caret_width, layout.line_height),
+        ))
+    }
+
+    /// Changes whenever the text does; lets a host cache what it derives from the text.
+    pub fn revision(&self) -> u64 {
+        self.model.revision()
+    }
+
+    /// While open, Up, Down, Enter, and Tab are reported as [`TextInputEvent::Suggestion`] and
+    /// otherwise ignored, so a host can run a suggestion list over the input. Everything else
+    /// keeps working, so typing continues as usual.
+    pub fn set_suggestions_open(&mut self, open: bool) {
+        self.suggestions_open = open;
+    }
+
+    /// Replaces `range` (byte offsets) with `text` as one undo step and puts the caret after it.
+    pub fn replace_range(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.goal_x = None;
+        self.edit(window, cx, |model| model.replace_range(range, text));
+    }
+
+    /// Types `text` at the caret, replacing the selection, as one undo step.
+    pub fn insert_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.goal_x = None;
+        self.edit(window, cx, |model| model.paste(text));
     }
 
     /// Replaces the text without emitting [`TextInputEvent::Changed`], clearing undo history and
@@ -264,6 +451,16 @@ impl TextInput {
 
     pub fn is_enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// Throws away the text in composition, as an input method does when its user cancels (Escape
+    /// during a composition). Returns whether there was any.
+    pub fn cancel_composition(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(range) = self.model.marked_range_utf16() else {
+            return false;
+        };
+        EntityInputHandler::replace_text_in_range(self, Some(range), "", window, cx);
+        true
     }
 
     /// Whether an IME composition is in progress.
@@ -541,7 +738,17 @@ impl TextInput {
     }
 
     fn paste(&mut self, _: &PasteClipboard, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+        let item = cx.read_from_clipboard();
+        if self.paste_attachments
+            && self.enabled
+            && item
+                .as_ref()
+                .is_some_and(|item| crate::attachments::classify_clipboard(item).is_some())
+        {
+            cx.emit(TextInputEvent::PasteAttachments);
+            return;
+        }
+        if let Some(text) = item.and_then(|item| item.text()) {
             self.edit(window, cx, |model| model.paste(&text));
         }
     }
@@ -562,6 +769,10 @@ impl TextInput {
             return;
         }
         if self.commit_composition(window, cx) {
+            return;
+        }
+        if self.suggestions_open {
+            cx.emit(TextInputEvent::Suggestion(SuggestionKey::Accept));
             return;
         }
         if self.single_line || self.submit_chord == SubmitChord::Enter {
@@ -610,6 +821,10 @@ impl TextInput {
     }
 
     fn tab_pressed(&mut self, backwards: bool, cx: &mut Context<Self>) {
+        if self.suggestions_open && !backwards {
+            cx.emit(TextInputEvent::Suggestion(SuggestionKey::Accept));
+            return;
+        }
         if self.single_line {
             cx.emit(TextInputEvent::Tab { backwards });
         } else {
@@ -693,6 +908,24 @@ impl TextInput {
             cx.propagate();
             return;
         }
+        if self.suggestions_open && !extend {
+            let key = if down {
+                SuggestionKey::Down
+            } else {
+                SuggestionKey::Up
+            };
+            cx.emit(TextInputEvent::Suggestion(key));
+            return;
+        }
+        if !down
+            && !extend
+            && self.report_up_when_empty
+            && !self.single_line
+            && self.model.is_empty()
+        {
+            cx.emit(TextInputEvent::UpWhenEmpty);
+            return;
+        }
         if self.single_line {
             let direction = if down {
                 Direction::Forward
@@ -739,6 +972,22 @@ impl TextInput {
                 self.select(window, cx, |model| model.move_to(offset, extend));
             }
         }
+    }
+
+    /// Wraps the selection in a formatting marker pair. Without the option the key is not ours.
+    fn format(
+        &mut self,
+        open: &'static str,
+        close: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.formatting_shortcuts || self.single_line || self.masked {
+            cx.propagate();
+            return;
+        }
+        self.goal_x = None;
+        self.edit(window, cx, |model| model.wrap_selection(open, close));
     }
 
     fn select_all(&mut self, _: &SelectAll, window: &mut Window, cx: &mut Context<Self>) {
@@ -898,6 +1147,9 @@ impl Render for TextInput {
             .py(self.style.padding_y)
             .text_size(self.style.font_size)
             .line_height(self.style.line_height)
+            .on_action(cx.listener(|this, _: &FormatBold, w, cx| this.format("*", "*", w, cx)))
+            .on_action(cx.listener(|this, _: &FormatItalic, w, cx| this.format("_", "_", w, cx)))
+            .on_action(cx.listener(|this, _: &FormatStrike, w, cx| this.format("~", "~", w, cx)))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete_forward))
             .on_action(cx.listener(Self::delete_word_backward))

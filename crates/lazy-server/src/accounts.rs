@@ -1,7 +1,10 @@
 //! Registration, sign-in, and session authentication.
 
+use lazy_domain::workspace::{RegistrationPolicy, WorkspaceSettings, invite_code_is_wellformed};
 use lazy_domain::{UserId, WorkspaceId, WorkspaceRole};
-use lazy_protocol::{ErrorCode, Event, LoginRequest, RegisterRequest, SessionResponse, User};
+use lazy_protocol::{
+    Conversation, ErrorCode, Event, LoginRequest, RegisterRequest, SessionResponse, User,
+};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
@@ -11,6 +14,14 @@ use crate::crypto;
 use crate::db;
 use crate::error::AppError;
 use crate::events::{self, Audience, PendingEvent};
+use crate::groups;
+use crate::webhooks;
+
+/// The one answer for an invitation that cannot be used, whether the code is of the wrong shape,
+/// unknown, revoked, expired or used up: nothing says which, so codes cannot be probed.
+fn invitation_invalid() -> AppError {
+    AppError::new(ErrorCode::InvitationInvalid, "that invitation is not valid")
+}
 
 /// The authenticated caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,16 +40,59 @@ pub async fn register(
         return Err(AppError::forbidden("registration is closed"));
     }
     crypto::check_password_policy(&request.password)?;
+    // A person is mentioned by their username, so words that mean something else in a mention
+    // (`channel`, and `here` and `everyone`, reserved for later) cannot be one.
+    if groups::username_is_reserved(request.username.as_str()) {
+        return Err(AppError::invalid("that username is reserved"));
+    }
+    // The names generated for webhook bots are theirs: a person cannot take one first.
+    if webhooks::is_bot_username(request.username.as_str()) {
+        return Err(AppError::invalid(
+            "that username is reserved for integrations",
+        ));
+    }
     let password_hash = state.passwords.hash(&request.password).await?;
     let user_id = UserId::generate();
 
+    // An invitation code, if one was sent: the hash is what is looked up. A code of the wrong shape
+    // is as invalid as a wrong one, and is refused after the same work (the password is already
+    // hashed), with the same answer.
+    let invite_hash = match request.invite_code.as_ref().map(|code| code.expose()) {
+        None => None,
+        Some(code) if invite_code_is_wellformed(code) => Some(crypto::invite_code_hash(code)),
+        Some(_) => return Err(invitation_invalid()),
+    };
+
     let mut tx = state.pool.begin().await?;
-    let default_workspace: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM workspaces ORDER BY created_at, id LIMIT 1")
+    let workspace_id = match &invite_hash {
+        // The invitation says which workspace.
+        Some(hash) => {
+            let found: Option<Uuid> = sqlx::query_scalar(
+                "SELECT workspace_id FROM workspace_invitations WHERE code_hash = $1",
+            )
+            .bind(&hash[..])
             .fetch_optional(&mut *tx)
             .await?;
-    let Some(workspace_id) = default_workspace.map(WorkspaceId::from_uuid) else {
-        return Err(AppError::forbidden("registration is closed"));
+            WorkspaceId::from_uuid(found.ok_or_else(invitation_invalid)?)
+        }
+        // Otherwise the default workspace, if its policy lets anyone register: the oldest one no
+        // person created (the seeded one), so a workspace made with `PUT /v1/workspaces/{id}` is
+        // never where an open registration lands.
+        None => {
+            let default: Option<(Uuid, sqlx::types::Json<WorkspaceSettings>)> = sqlx::query_as(
+                "SELECT id, settings FROM workspaces WHERE created_by IS NULL \
+                 ORDER BY created_at, id LIMIT 1",
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            let Some((id, settings)) = default else {
+                return Err(AppError::forbidden("registration is closed"));
+            };
+            if settings.0.registration == RegistrationPolicy::InviteOnly {
+                return Err(AppError::forbidden("registration is by invitation"));
+            }
+            WorkspaceId::from_uuid(id)
+        }
     };
     // Registrations take turns. Only other registrations wait on this lock, and it is taken
     // before any other, so it cannot take part in a deadlock; it makes "the first person to
@@ -47,6 +101,31 @@ pub async fn register(
         .bind(workspace_id.to_string())
         .execute(&mut *tx)
         .await?;
+    if let Some(hash) = &invite_hash {
+        // The use is counted by one guarded statement under the invitation's row lock: with
+        // `max_uses` 1, of two registrations at once the second waits, finds it used up, and fails.
+        // Everything below is in this transaction, so a registration that fails afterwards (the
+        // username is taken) gives the use back.
+        let used: Option<Uuid> = sqlx::query_scalar(
+            "UPDATE workspace_invitations SET uses = uses + 1 \
+             WHERE code_hash = $1 AND revoked_at IS NULL AND expires_at > now() \
+               AND (max_uses IS NULL OR uses < max_uses) RETURNING id",
+        )
+        .bind(&hash[..])
+        .fetch_optional(&mut *tx)
+        .await?;
+        used.ok_or_else(invitation_invalid)?;
+    }
+    // Claim the username in the mention namespace it shares with user groups. The lock is taken
+    // before looking, and held to commit, so a group being created with this handle at the same
+    // moment either commits first (and we see it here) or waits for us (and sees the new person).
+    groups::lock_handle(&mut tx, request.username.as_str()).await?;
+    if groups::handle_names_a_group(&mut tx, request.username.as_str()).await? {
+        return Err(AppError::new(
+            ErrorCode::UsernameTaken,
+            "that username is taken",
+        ));
+    }
 
     let inserted = sqlx::query(
         "INSERT INTO users (id, username, display_name, password_hash) VALUES ($1, $2, $3, $4)",
@@ -85,13 +164,35 @@ pub async fn register(
         id: user_id,
         username: request.username,
         display_name: request.display_name,
+        is_bot: false,
+        status: None,
+        deactivated: false,
+        avatar_version: 0,
     };
+    announce_member(&mut tx, workspace_id, user.clone(), default_channel).await?;
+    let token = insert_session(&mut tx, user_id).await?;
+    tx.commit().await?;
+
+    Ok(SessionResponse { token, user })
+}
+
+/// Tells a workspace that someone joined it (`MemberJoined`, to everyone) and, if it has a default
+/// channel, that they are in it (`MemberAdded`, to the channel). Used by registration and by
+/// accepting an invitation, so both announce a new member identically. Call it last in the
+/// transaction that added them.
+pub(crate) async fn announce_member(
+    conn: &mut PgConnection,
+    workspace_id: WorkspaceId,
+    user: User,
+    default_channel: Option<Conversation>,
+) -> Result<(), AppError> {
+    let user_id = user.id;
     let mut announcements = vec![PendingEvent {
         kind: "member_joined",
         conversation_id: None,
         operation_id: None,
         audience: Audience::Workspace,
-        event: Event::MemberJoined { user: user.clone() },
+        event: Event::MemberJoined { user },
     }];
     if let Some(conversation) = default_channel {
         announcements.push(PendingEvent {
@@ -105,34 +206,43 @@ pub async fn register(
             },
         });
     }
-    events::append_all(&mut tx, workspace_id, announcements).await?;
-    let token = insert_session(&mut tx, user_id).await?;
-    tx.commit().await?;
-
-    Ok(SessionResponse { token, user })
+    events::append_all(conn, workspace_id, announcements).await?;
+    Ok(())
 }
 
 /// Checks credentials and starts a session.
 pub async fn login(state: &AppState, request: LoginRequest) -> Result<SessionResponse, AppError> {
-    let row: Option<(Uuid, String, String)> =
-        sqlx::query_as("SELECT id, display_name, password_hash FROM users WHERE username = $1")
-            .bind(request.username.as_str())
-            .fetch_optional(&state.pool)
-            .await?;
+    let row: Option<(Uuid, String, String, bool, i32)> = sqlx::query_as(
+        "SELECT id, display_name, password_hash, is_bot, avatar_version FROM users \
+         WHERE username = $1",
+    )
+    .bind(request.username.as_str())
+    .fetch_optional(&state.pool)
+    .await?;
 
-    let stored_hash = row.as_ref().map(|(_, _, hash)| hash.as_str());
+    // A bot has no password. It is treated exactly as an account that does not exist: the same
+    // work is done against a stand-in hash, and the same error comes back, so signing in as one
+    // cannot be told apart from a wrong password.
+    let row = row.filter(|(_, _, _, is_bot, _)| !is_bot);
+    let stored_hash = row.as_ref().map(|(_, _, hash, _, _)| hash.as_str());
     let verified = state
         .passwords
         .verify(&request.password, stored_hash)
         .await?;
-    let Some((id, display_name, _)) = row.filter(|_| verified) else {
+    let Some((id, display_name, _, _, avatar_version)) = row.filter(|_| verified) else {
         return Err(AppError::new(
             ErrorCode::InvalidCredentials,
             "wrong username or password",
         ));
     };
 
-    let user = db::user_from_db(id, request.username.as_str(), &display_name)?;
+    let user = db::user_from_db(
+        id,
+        request.username.as_str(),
+        &display_name,
+        false,
+        avatar_version,
+    )?;
     let mut conn = state.pool.acquire().await?;
     let token = insert_session(&mut conn, user.id).await?;
     Ok(SessionResponse { token, user })
@@ -179,29 +289,32 @@ pub async fn logout(pool: &PgPool, principal: Principal) -> Result<(), AppError>
 
 /// Loads the public profile of a user.
 pub async fn load_user(pool: &PgPool, user_id: UserId) -> Result<User, AppError> {
-    let row: Option<(String, String)> =
-        sqlx::query_as("SELECT username, display_name FROM users WHERE id = $1")
-            .bind(user_id.as_uuid())
-            .fetch_optional(pool)
-            .await?;
-    let (username, display_name) = row.ok_or_else(AppError::unauthenticated)?;
-    db::user_from_db(user_id.as_uuid(), &username, &display_name)
+    let row: Option<(String, String, bool, i32)> = sqlx::query_as(
+        "SELECT username, display_name, is_bot, avatar_version FROM users WHERE id = $1",
+    )
+    .bind(user_id.as_uuid())
+    .fetch_optional(pool)
+    .await?;
+    let (username, display_name, is_bot, avatar_version) =
+        row.ok_or_else(AppError::unauthenticated)?;
+    db::user_from_db(
+        user_id.as_uuid(),
+        &username,
+        &display_name,
+        is_bot,
+        avatar_version,
+    )
 }
 
-/// The role a user has in a workspace, if any.
+/// The role a user has in a workspace, if they have an active membership of it (a deactivated one
+/// is no membership: see [`crate::access`]).
 pub async fn workspace_role(
     pool: &PgPool,
     workspace_id: WorkspaceId,
     user_id: UserId,
 ) -> Result<Option<WorkspaceRole>, AppError> {
-    let role: Option<String> = sqlx::query_scalar(
-        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
-    )
-    .bind(workspace_id.as_uuid())
-    .bind(user_id.as_uuid())
-    .fetch_optional(pool)
-    .await?;
-    role.as_deref().map(db::role_from_db).transpose()
+    let mut conn = pool.acquire().await?;
+    crate::access::active_role(&mut conn, workspace_id, user_id).await
 }
 
 /// Sessions last 30 days from creation.

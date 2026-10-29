@@ -87,9 +87,9 @@ fn free_port() -> u16 {
 
 #[tokio::test]
 async fn an_acknowledged_message_survives_a_server_process_crash() {
-    // Same default as `scripts/dev-db.sh url`; the dev Postgres must be running.
+    // The test Postgres (`LAZY_PG_INSTANCE=test scripts/dev-db.sh url`) must be running; never the dev one.
     let admin_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://lazy@127.0.0.1:54329/lazy".to_owned());
+        .unwrap_or_else(|_| "postgres://lazy@127.0.0.1:54330/lazy".to_owned());
     let database = format!("lazy_crash_{}", OperationId::generate().as_uuid().simple());
     let mut admin = PgConnection::connect(&admin_url)
         .await
@@ -114,6 +114,7 @@ async fn an_acknowledged_message_survives_a_server_process_crash() {
             username: Username::parse("durable").unwrap(),
             display_name: DisplayName::parse("Durable").unwrap(),
             password: Password::new("correct horse battery"),
+            invite_code: None,
         })
         .send()
         .await
@@ -140,6 +141,9 @@ async fn an_acknowledged_message_survives_a_server_process_crash() {
         .json(&SendMessageRequest {
             operation_id: operation,
             document: MessageDocument::from_plain_text("this must survive").unwrap(),
+            thread_root: None,
+            also_in_channel: false,
+            attachment_ids: Vec::new(),
         })
         .send()
         .await

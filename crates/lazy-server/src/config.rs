@@ -1,6 +1,7 @@
 //! Server configuration.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Argon2id cost parameters for password hashing.
@@ -82,7 +83,7 @@ impl Default for RetentionPolicy {
 }
 
 /// Everything [`crate::run`] needs.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub listen: SocketAddr,
     /// Postgres connection URL. Contains credentials; never log it.
@@ -93,10 +94,47 @@ pub struct Config {
     pub seed: bool,
     /// Allow anyone who can reach the server to register.
     pub open_registration: bool,
+    /// Allow any signed-in person to create workspaces of their own.
+    pub open_workspace_creation: bool,
     pub password_cost: PasswordCost,
     /// Days of event history to keep; `0` keeps everything. See [`RetentionPolicy`].
     pub event_retention_days: u32,
     pub max_db_connections: u32,
+    /// The address webhooks are shown under (`{public_url}/hooks/{id}/{secret}`). Defaults to
+    /// `http://` and the address the server listens on; set it when clients reach the server by
+    /// another name.
+    pub public_url: Option<String>,
+    /// Where attachment files are kept (see [`AttachmentOptions`]).
+    pub attachments_dir: PathBuf,
+    /// The largest attachment, in bytes.
+    pub max_attachment_bytes: u64,
+}
+
+impl std::fmt::Debug for Config {
+    /// Everything but the database URL, which holds credentials: it is shown as its host, port and
+    /// database name only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("listen", &self.listen)
+            .field(
+                "database",
+                &crate::logging::describe_database_url(&self.database_url),
+            )
+            .field("migrate", &self.migrate)
+            .field("seed", &self.seed)
+            .field("open_registration", &self.open_registration)
+            .field("open_workspace_creation", &self.open_workspace_creation)
+            .field("password_cost", &self.password_cost)
+            .field("event_retention_days", &self.event_retention_days)
+            .field("max_db_connections", &self.max_db_connections)
+            .field(
+                "public_url",
+                &self.public_url.as_deref().map(crate::logging::describe_url),
+            )
+            .field("attachments_dir", &self.attachments_dir)
+            .field("max_attachment_bytes", &self.max_attachment_bytes)
+            .finish()
+    }
 }
 
 impl Config {
@@ -108,9 +146,13 @@ impl Config {
             migrate: true,
             seed: true,
             open_registration: true,
+            open_workspace_creation: true,
             password_cost: PasswordCost::DEFAULT,
             event_retention_days: RetentionPolicy::DEFAULT_DAYS,
             max_db_connections: 20,
+            public_url: None,
+            attachments_dir: PathBuf::from("attachments"),
+            max_attachment_bytes: lazy_domain::attachment::MAX_ATTACHMENT_BYTES,
         }
     }
 }
@@ -119,6 +161,8 @@ impl Config {
 #[derive(Debug, Clone, Copy)]
 pub struct ServerOptions {
     pub open_registration: bool,
+    /// Whether a signed-in person may create a workspace (`PUT /v1/workspaces/{id}`).
+    pub open_workspace_creation: bool,
     pub password_cost: PasswordCost,
     pub retention: RetentionPolicy,
 }
@@ -127,8 +171,117 @@ impl Default for ServerOptions {
     fn default() -> Self {
         Self {
             open_registration: true,
+            open_workspace_creation: true,
             password_cost: PasswordCost::DEFAULT,
             retention: RetentionPolicy::default(),
+        }
+    }
+}
+
+/// How fast one incoming webhook may post: a burst of `burst` deliveries, then one more every
+/// `refill_every`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebhookRate {
+    pub burst: u32,
+    pub refill_every: Duration,
+}
+
+impl WebhookRate {
+    pub const DEFAULT: WebhookRate = WebhookRate {
+        burst: 30,
+        refill_every: Duration::from_secs(1),
+    };
+}
+
+impl Default for WebhookRate {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Settings for integrations, kept apart from [`ServerOptions`] so that adding one does not change
+/// the struct other crates construct.
+#[derive(Debug, Clone, Default)]
+pub struct IntegrationOptions {
+    /// See [`Config::public_url`]; `None` means `http://` and the listening address.
+    pub public_url: Option<String>,
+    pub webhook_rate: WebhookRate,
+}
+
+/// Where the bytes of attachments live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttachmentBackend {
+    /// In memory, gone when the server stops. For tests that do not look at the disk.
+    Memory,
+    /// Files under this directory (`{dir}/{first two hex digits of the id}/{id}`, uploads staged in
+    /// `{dir}/tmp`).
+    Directory(PathBuf),
+}
+
+/// Settings for attachments, kept apart from [`ServerOptions`] so that adding one does not change
+/// the struct other crates construct. The defaults are the ones the server runs with, except the
+/// backend, which is [`AttachmentBackend::Memory`].
+#[derive(Debug, Clone)]
+pub struct AttachmentOptions {
+    pub backend: AttachmentBackend,
+    /// The largest file, in bytes.
+    pub max_bytes: u64,
+    /// How long an upload that no message names is kept.
+    pub pending_ttl: Duration,
+    /// How often the cleanup job runs (expired uploads, files of deleted messages).
+    pub cleanup_every: Duration,
+    /// How often the sweep for files that have no row runs.
+    pub sweep_every: Duration,
+    /// How old a file with no row must be before the sweep removes it: an upload in progress has
+    /// a file and no row for a moment.
+    pub sweep_grace: Duration,
+    /// Thumbnails and image headers decoded at once.
+    pub thumbnail_slots: usize,
+    /// Test hook: an upload fails after its files are stored and before its row is written, as a
+    /// crash there would. Never set by the server binary.
+    pub fail_between_file_and_row: bool,
+}
+
+impl Default for AttachmentOptions {
+    fn default() -> Self {
+        Self {
+            backend: AttachmentBackend::Memory,
+            max_bytes: lazy_domain::attachment::MAX_ATTACHMENT_BYTES,
+            pending_ttl: Duration::from_secs(
+                lazy_domain::attachment::PENDING_ATTACHMENT_TTL_HOURS as u64 * 3600,
+            ),
+            cleanup_every: Duration::from_secs(3600),
+            sweep_every: Duration::from_secs(24 * 3600),
+            sweep_grace: Duration::from_secs(3600),
+            thumbnail_slots: 4,
+            fail_between_file_and_row: false,
+        }
+    }
+}
+
+/// How many of the newest matches a relevance search ranks (D19).
+pub const RANK_CANDIDATES: usize = 2000;
+
+/// Settings for search, kept apart from [`ServerOptions`] like [`AttachmentOptions`]. The defaults
+/// are the ones the server runs with.
+#[derive(Debug, Clone)]
+pub struct SearchOptions {
+    /// How long one search may run before it is cancelled and answered `unavailable` (D19: 3 s).
+    pub statement_timeout: Duration,
+    /// How many of the newest matches a relevance search ranks (D19: 2,000); more matches than
+    /// this and the response says `truncated`.
+    pub rank_candidates: usize,
+    /// Test hook: every search sleeps this long (in the database, under its statement timeout)
+    /// before it runs, so a test can make one slow. Never set by the server binary.
+    pub test_delay: Option<Duration>,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            statement_timeout: Duration::from_secs(3),
+            rank_candidates: RANK_CANDIDATES,
+            test_delay: None,
         }
     }
 }

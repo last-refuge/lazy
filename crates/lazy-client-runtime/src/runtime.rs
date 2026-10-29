@@ -21,30 +21,44 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use lazy_client_core::{
-    ActionKind, ActionOutcome, ContentCache, Effect, Input, JournalEntry, RequestError,
-    StartupState,
+    ActionKind, ActionOutcome, ContentCache, CreatedWebhook, Effect, EmojiPrefs, Input,
+    JournalEntry, RequestError, SecretUrl, StartupState, ThreadDraft, ViewState,
 };
 use lazy_domain::{ConversationId, EventSeq, OperationId, WorkspaceId};
 use lazy_protocol::{
-    BootstrapResponse, BrowseChannelsResponse, ConversationResponse, HistoryPage, HistoryQuery,
-    MarkReadRequest, OperationStatus, SendMessageRequest, SendMessageResponse, SessionResponse,
-    SetFavoriteRequest, UserStateResponse, paths,
+    BootstrapResponse, BrowseChannelsResponse, ConversationMembersResponse, ConversationResponse,
+    GroupResponse, HistoryPage, HistoryQuery, InboxPage, InboxReadResponse, MarkReadRequest,
+    MessageResponse, NotificationSettingsResponse, OperationStatus, PeoplePage, PersonResponse,
+    SavedPage, SavedResponse, SendMessageRequest, SendMessageResponse, SessionResponse,
+    SetFavoriteRequest, StatusResponse, UserStateResponse, paths,
 };
+use lazy_protocol::{MarkThreadReadRequest, SetThreadFollowRequest, ThreadStateResponse};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::api::Api;
 use crate::config::{RuntimeConfig, SecureStorageChoice};
+use crate::prefs;
 use crate::realtime;
+use crate::recent_conversations;
+use crate::searches;
 use crate::secure::{
     InsecureFileStorage, KeyringStorage, SecretVault, SecureStorage, StorageError,
 };
 use crate::store::{StateStore, StoreError};
 
+mod transfer;
+use transfer::{FileServices, Transfers};
+
 /// Capacity of the channel carrying inputs to the host. A slow host applies backpressure to the
 /// realtime connection rather than letting the queue grow.
 const INPUT_QUEUE: usize = 4096;
+/// The one read of a kind that is wanted: its number and the means to hang up on it.
+type ReadSlot = Mutex<Option<(u64, CancellationToken)>>;
+
+/// How often the core is told the time when nothing else is happening.
+const CLOCK_EVERY: Duration = Duration::from_secs(30);
 /// How long shutdown waits for tasks before giving up on them.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
@@ -82,6 +96,40 @@ struct Inner {
     tasks: Mutex<JoinSet<()>>,
     subscriptions: Mutex<HashMap<WorkspaceId, Subscription>>,
     persistence: Mutex<Option<Arc<Persistence>>>,
+    prefs: PrefsSaver,
+    /// The outbox and image cache, once the profile's key is known.
+    files: Mutex<Option<Arc<FileServices>>>,
+    /// Uploads, downloads, and copies in flight.
+    transfers: Arc<Mutex<Transfers>>,
+    /// The search being waited for. There is one: a newer search or a cancel stops it.
+    search: ReadSlot,
+    /// The same for the thread inbox.
+    inbox: ReadSlot,
+    /// And for the saved messages, the people directory, a profile, and the channel directory.
+    saved: ReadSlot,
+    people: ReadSlot,
+    profile: ReadSlot,
+    browse: ReadSlot,
+    /// And for the workspace's invitations.
+    invitations: ReadSlot,
+}
+
+/// The emoji preferences waiting to be written. Kept apart from [`Persistence`] because they
+/// need no key: they are saved even where the encrypted state cannot be.
+#[derive(Default)]
+struct PrefsSaver {
+    /// The newest preferences not yet written; a newer one replaces an older.
+    pending: Mutex<Option<EmojiPrefs>>,
+    /// The same for the recent searches.
+    pending_searches: Mutex<Option<Vec<String>>>,
+    /// And for the recently visited conversations.
+    pending_conversations: Mutex<Option<Vec<ConversationId>>>,
+    /// The active workspace (deleted at sign-out) and the device's appearance (kept).
+    pending_active: Mutex<Option<Option<WorkspaceId>>>,
+    pending_appearance: Mutex<Option<lazy_client_core::Appearance>>,
+    dirty: Notify,
+    /// Incremented by sign-out so a write in flight cannot bring the file back.
+    epoch: Arc<std::sync::atomic::AtomicU64>,
 }
 
 struct Subscription {
@@ -131,6 +179,16 @@ impl Runtime {
             tasks: Mutex::new(JoinSet::new()),
             subscriptions: Mutex::new(HashMap::new()),
             persistence: Mutex::new(None),
+            prefs: PrefsSaver::default(),
+            files: Mutex::new(None),
+            transfers: Arc::new(Mutex::new(Transfers::default())),
+            search: Mutex::new(None),
+            inbox: Mutex::new(None),
+            saved: Mutex::new(None),
+            people: Mutex::new(None),
+            profile: Mutex::new(None),
+            browse: Mutex::new(None),
+            invitations: Mutex::new(None),
         });
 
         let startup = inner.clone();
@@ -184,7 +242,7 @@ impl Runtime {
             let drained = tokio::time::timeout(SHUTDOWN_GRACE, async {
                 while let Some(joined) = tasks.join_next().await {
                     if let Err(error) = joined {
-                        tracing::warn!(%error, "a runtime task failed");
+                        tracing::warn!(reason = task_failure(&error), "a runtime task failed");
                     }
                 }
             })
@@ -229,7 +287,7 @@ impl Inner {
         let mut tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
         while let Some(joined) = tasks.try_join_next() {
             if let Err(error) = joined {
-                tracing::error!(%error, "a runtime task failed");
+                tracing::error!(reason = task_failure(&error), "a runtime task failed");
             }
         }
     }
@@ -246,19 +304,182 @@ impl Inner {
             .clone()
     }
 
+    /// Writes the emoji preferences a moment after the last change, and once more on shutdown.
+    async fn run_prefs_saver(self: Arc<Self>) {
+        loop {
+            tokio::select! {
+                () = self.cancel.cancelled() => {
+                    self.save_prefs().await;
+                    return;
+                }
+                () = self.prefs.dirty.notified() => {
+                    tokio::select! {
+                        () = self.cancel.cancelled() => {
+                            self.save_prefs().await;
+                            return;
+                        }
+                        () = tokio::time::sleep(self.config.save_debounce) => self.save_prefs().await,
+                    }
+                }
+            }
+        }
+    }
+
+    /// Tells the core the time every 30 seconds (and with realtime frames, in `realtime.rs`).
+    async fn run_clock(self: Arc<Self>) {
+        loop {
+            tokio::select! {
+                () = self.cancel.cancelled() => return,
+                () = tokio::time::sleep(CLOCK_EVERY) => {
+                    self.emit(Input::Clock(lazy_domain::Timestamp::now())).await;
+                }
+            }
+        }
+    }
+
+    async fn save_prefs(&self) {
+        let saved = self
+            .prefs
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let searches = self
+            .prefs
+            .pending_searches
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let conversations = self
+            .prefs
+            .pending_conversations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let active = self
+            .prefs
+            .pending_active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let appearance = self
+            .prefs
+            .pending_appearance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if saved.is_none()
+            && searches.is_none()
+            && conversations.is_none()
+            && active.is_none()
+            && appearance.is_none()
+        {
+            return;
+        }
+        let epoch = self.prefs.epoch.load(std::sync::atomic::Ordering::SeqCst);
+        let current = self.prefs.epoch.clone();
+        let dir = self.profile_dir.clone();
+        let written = tokio::task::spawn_blocking(move || {
+            // Signing out since this was taken means the files were deleted on purpose.
+            let signed_out = || current.load(std::sync::atomic::Ordering::SeqCst) != epoch;
+            // The device's appearance is not the account's: sign-out leaves it, and so does a
+            // save that was waiting.
+            if let Some(appearance) = appearance
+                && let Err(error) = crate::appearance::save(&dir, appearance)
+            {
+                tracing::warn!(%error, "could not save the appearance");
+            }
+            if signed_out() {
+                return;
+            }
+            if let Some(active) = active
+                && let Err(error) = crate::active_workspace::save(&dir, active)
+            {
+                tracing::warn!(%error, "could not save the active workspace");
+            }
+            // A convenience, not worth an alarm: the next change tries again.
+            if let Some(saved) = saved
+                && let Err(error) = prefs::save(&dir, &saved)
+            {
+                tracing::warn!(%error, "could not save the emoji preferences");
+            }
+            if let Some(searches) = searches
+                && !signed_out()
+                && let Err(error) = searches::save(&dir, &searches)
+            {
+                tracing::warn!(%error, "could not save the recent searches");
+            }
+            if let Some(conversations) = conversations
+                && !signed_out()
+                && let Err(error) = recent_conversations::save(&dir, &conversations)
+            {
+                tracing::warn!(%error, "could not save the recent conversations");
+            }
+        })
+        .await;
+        if let Err(error) = written {
+            tracing::warn!(
+                reason = task_failure(&error),
+                "saving the preferences failed"
+            );
+        }
+    }
+
+    /// Deletes the saved emoji preferences and recent searches (sign-out) and drops any save
+    /// still waiting.
+    async fn forget_prefs(&self) {
+        self.prefs
+            .epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.prefs
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        self.prefs
+            .pending_searches
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        self.prefs
+            .pending_conversations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        self.prefs
+            .pending_active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let dir = self.profile_dir.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            prefs::remove(&dir);
+            searches::remove(&dir);
+            recent_conversations::remove(&dir);
+            crate::active_workspace::remove(&dir);
+        })
+        .await;
+    }
+
     async fn start_up(self: Arc<Self>) {
         let loader = self.clone();
         let loaded = tokio::task::spawn_blocking(move || loader.load_local_state()).await;
-        let (state, store) = match loaded {
+        let (state, store, files) = match loaded {
             Ok(loaded) => loaded,
             Err(error) => {
                 let state = StartupState {
-                    problems: vec![format!("Local state could not be loaded: {error}")],
+                    problems: vec![format!(
+                        "Local state could not be loaded ({}).",
+                        task_failure(&error)
+                    )],
                     ..StartupState::default()
                 };
-                (state, None)
+                (state, None, None)
             }
         };
+        *self.files.lock().unwrap_or_else(|e| e.into_inner()) = files;
+        self.spawn_unguarded(self.clone().run_prefs_saver());
+        self.spawn_unguarded(self.clone().run_clock());
         if let Some(store) = store {
             let persistence = Persistence::start(&self, store);
             *self.persistence.lock().unwrap_or_else(|e| e.into_inner()) = Some(persistence);
@@ -267,8 +488,15 @@ impl Inner {
     }
 
     /// Reads the stored session and opens the encrypted state. Blocking.
-    fn load_local_state(&self) -> (StartupState, Option<StateStore>) {
-        let mut state = StartupState::default();
+    fn load_local_state(&self) -> (StartupState, Option<StateStore>, Option<Arc<FileServices>>) {
+        let mut state = StartupState {
+            emoji_prefs: prefs::load(&self.profile_dir),
+            recent_searches: searches::load(&self.profile_dir),
+            recent_conversations: recent_conversations::load(&self.profile_dir),
+            appearance: crate::appearance::load(&self.profile_dir),
+            active_workspace: crate::active_workspace::load(&self.profile_dir),
+            ..StartupState::default()
+        };
         match self.vault.session_token() {
             Ok(Some(token)) => {
                 self.api.set_token(Some(token));
@@ -277,11 +505,29 @@ impl Inner {
             Ok(None) => {}
             Err(error) => state.problems.push(storage_problem(&error)),
         }
+        let mut files = None;
         let store = match self.vault.state_key() {
             Ok(key) => {
                 let (store, recovered) = StateStore::open(self.profile_dir.clone(), &key);
+                // Copies of files the journal does not name are left over from an interrupted
+                // run. If the journal could not be read, whatever it named is kept.
+                let keep: std::collections::HashSet<_> = recovered
+                    .journal
+                    .iter()
+                    .flat_map(|entry| entry.attachments.iter().map(|file| file.id))
+                    .collect();
+                files = Some(FileServices::open(
+                    &self.profile_dir,
+                    &key,
+                    store.journal_is_trusted().then_some(&keep),
+                    self.inputs.clone(),
+                    self.transfers.clone(),
+                    self.cancel.clone(),
+                ));
                 state.journal = recovered.journal;
                 state.drafts = recovered.drafts;
+                state.thread_drafts = recovered.thread_drafts;
+                state.view = recovered.view;
                 state.cache = recovered.cache;
                 state.problems.extend(recovered.problems);
                 Some(store)
@@ -293,10 +539,12 @@ impl Inner {
                 None
             }
         };
-        (state, store)
+        (state, store, files)
     }
 
     fn execute_one(self: Arc<Self>, effect: Effect) {
+        // The effect's `Debug` keeps names and sizes and drops what was typed.
+        tracing::trace!(?effect, "executing an effect");
         match effect {
             Effect::Register(request) => {
                 let inner = self.clone();
@@ -322,6 +570,13 @@ impl Inner {
                 let token = self.api.token();
                 self.api.set_token(None);
                 self.stop_subscriptions();
+                self.cancel_search();
+                self.cancel_slot(&self.inbox);
+                self.cancel_slot(&self.saved);
+                self.cancel_slot(&self.people);
+                self.cancel_slot(&self.profile);
+                self.cancel_slot(&self.browse);
+                self.cancel_slot(&self.invitations);
                 let inner = self.clone();
                 self.spawn_unguarded(async move {
                     if let Some(token) = token {
@@ -330,9 +585,11 @@ impl Inner {
                             tokio::time::timeout(Duration::from_secs(3), inner.api.logout(&token))
                                 .await;
                     }
+                    inner.forget_files().await;
                     if let Some(persistence) = inner.persistence() {
                         persistence.wipe().await;
                     }
+                    inner.forget_prefs().await;
                     let vault = inner.vault.clone();
                     let deleted = tokio::task::spawn_blocking(move || vault.delete_all()).await;
                     if let Ok(Err(error)) = deleted {
@@ -365,6 +622,190 @@ impl Inner {
                 });
             }
             Effect::Subscribe { workspace, after } => self.subscribe(workspace, after),
+            Effect::Unsubscribe { workspace } => self.unsubscribe(workspace),
+            Effect::CreateWorkspace { workspace, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: the core repeats the (idempotent) request with the same id.
+                    let result = inner
+                        .api
+                        .put::<lazy_protocol::JoinedWorkspace, _>(
+                            &paths::workspace(workspace),
+                            &request,
+                        )
+                        .await
+                        .map(|joined| ActionOutcome::Joined(Box::new(joined.workspace)));
+                    let kind = ActionKind::CreateWorkspace;
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::AcceptInvitation { request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: an invitation's use is counted.
+                    let result = inner
+                        .api
+                        .post::<lazy_protocol::JoinedWorkspace, _>(
+                            paths::ACCEPT_INVITATION_ROUTE,
+                            &request,
+                        )
+                        .await
+                        .map(|joined| ActionOutcome::Joined(Box::new(joined.workspace)));
+                    let kind = ActionKind::AcceptInvitation;
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::UpdateProfile { request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // Idempotent: a lost answer is simply asked again.
+                    let result = inner
+                        .retry_read(|| {
+                            inner.api.patch::<lazy_protocol::ProfileResponse, _>(
+                                paths::ME_ROUTE,
+                                &request,
+                            )
+                        })
+                        .await
+                        .map(|response| ActionOutcome::Profile(response.user));
+                    let kind = ActionKind::UpdateProfile;
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::SetAvatar { source } => self.set_avatar(source),
+            Effect::RemoveAvatar => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let result = inner
+                        .retry_read(|| {
+                            inner
+                                .api
+                                .delete::<lazy_protocol::ProfileResponse>(paths::ME_AVATAR_ROUTE)
+                        })
+                        .await
+                        .map(|response| ActionOutcome::Profile(response.user));
+                    let kind = ActionKind::SetAvatar;
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::FetchAvatar { user, version } => self.fetch_avatar(user, version),
+            Effect::ForgetAvatars { users } => self.forget_avatars(users),
+            Effect::PersistActiveWorkspace(workspace) => {
+                *self
+                    .prefs
+                    .pending_active
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(workspace);
+                self.prefs.dirty.notify_one();
+            }
+            Effect::PersistAppearance(appearance) => {
+                *self
+                    .prefs
+                    .pending_appearance
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(appearance);
+                self.prefs.dirty.notify_one();
+            }
+            Effect::UpdateWorkspace { workspace, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // Idempotent: a lost answer is simply asked again.
+                    let path = paths::workspace(workspace);
+                    let result = inner
+                        .retry_read(|| {
+                            inner
+                                .api
+                                .patch::<lazy_protocol::WorkspaceResponse, _>(&path, &request)
+                        })
+                        .await
+                        .map(|response| ActionOutcome::Workspace(response.workspace));
+                    let kind = ActionKind::UpdateWorkspace;
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::SetMemberRole {
+                workspace,
+                user,
+                request,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // Idempotent: setting the role someone has changes nothing.
+                    let path = paths::person_role(workspace, user);
+                    let role = request.role;
+                    let result = inner
+                        .retry_read(|| inner.api.put::<serde::de::IgnoredAny, _>(&path, &request))
+                        .await
+                        .map(|_| ActionOutcome::Role { user, role });
+                    let kind = ActionKind::SetMemberRole(user);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::SetMemberDeactivated {
+                workspace,
+                user,
+                request,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::person_deactivated(workspace, user);
+                    let deactivated = request.deactivated;
+                    let result = inner
+                        .retry_read(|| inner.api.put::<serde::de::IgnoredAny, _>(&path, &request))
+                        .await
+                        .map(|_| ActionOutcome::Deactivated { user, deactivated });
+                    let kind = ActionKind::SetMemberDeactivated(user);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::LoadInvitations {
+                workspace,
+                generation,
+            } => {
+                let inner = self.clone();
+                self.single_read(
+                    |inner| &inner.invitations,
+                    generation,
+                    async move {
+                        let path = paths::invitations(workspace);
+                        inner
+                            .retry_read(|| inner.api.get::<lazy_protocol::InvitationList>(&path))
+                            .await
+                    },
+                    move |result| Input::InvitationsLoaded { generation, result },
+                );
+            }
+            Effect::CancelInvitations => self.cancel_slot(&self.invitations),
+            Effect::CreateInvitation { workspace, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: creating carries no operation id, so repeating it could make a
+                    // second invitation. The core resolves an unknown outcome by listing them.
+                    let result = inner
+                        .api
+                        .post::<lazy_protocol::CreatedInvitation, _>(
+                            &paths::invitations(workspace),
+                            &request,
+                        )
+                        .await
+                        .map(ActionOutcome::InvitationCreated);
+                    let kind = ActionKind::CreateInvitation;
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::RevokeInvitation { invitation } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // Revoking is idempotent, so a lost answer is simply asked again.
+                    let path = paths::invitation(invitation);
+                    let result = inner
+                        .retry_read(|| inner.api.delete::<lazy_protocol::InvitationResponse>(&path))
+                        .await
+                        .map(|response| ActionOutcome::Invitation(response.invitation));
+                    let kind = ActionKind::RevokeInvitation(invitation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
             Effect::FetchHistory {
                 conversation,
                 before,
@@ -387,6 +828,63 @@ impl Inner {
                         .await;
                 });
             }
+            Effect::FetchReplies {
+                root,
+                before,
+                limit,
+                generation,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let query = HistoryQuery { before, limit };
+                    let path = paths::replies(root);
+                    let result = inner
+                        .retry_read(|| inner.api.get_query::<HistoryPage, _>(&path, &query))
+                        .await;
+                    inner
+                        .emit(Input::RepliesLoaded {
+                            root,
+                            generation,
+                            result,
+                        })
+                        .await;
+                });
+            }
+            Effect::SetThreadFollow { root, following } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: the core repeats an unknown outcome itself, since the request
+                    // sets a state and repeating it is harmless.
+                    let path = paths::thread_action(root, "follow");
+                    let result = inner
+                        .api
+                        .put::<ThreadStateResponse, _>(&path, &SetThreadFollowRequest { following })
+                        .await;
+                    inner.emit(Input::ThreadFollowResult { root, result }).await;
+                });
+            }
+            Effect::MarkThreadRead { root, up_to } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::thread_action(root, "read");
+                    let result = inner
+                        .api
+                        .post::<ThreadStateResponse, _>(&path, &MarkThreadReadRequest { up_to })
+                        .await;
+                    inner
+                        .emit(Input::ThreadReadResult {
+                            root,
+                            up_to,
+                            result,
+                        })
+                        .await;
+                });
+            }
+            Effect::PersistThreadDrafts(drafts) => {
+                if let Some(persistence) = self.persistence() {
+                    persistence.queue_thread_drafts(drafts);
+                }
+            }
             Effect::PersistSubmission(entry) => {
                 let operation = entry.operation_id;
                 match self.persistence() {
@@ -406,12 +904,18 @@ impl Inner {
                 operation,
                 conversation,
                 document,
+                thread_root,
+                also_in_channel,
+                attachments,
             } => {
                 let inner = self.clone();
                 self.spawn(async move {
                     let request = SendMessageRequest {
                         operation_id: operation,
                         document,
+                        thread_root,
+                        also_in_channel,
+                        attachment_ids: attachments,
                     };
                     // Exactly one attempt: a failure here is reconciled by the core, which asks
                     // the server whether the operation committed.
@@ -420,6 +924,398 @@ impl Inner {
                         .post::<SendMessageResponse, _>(&paths::messages(conversation), &request)
                         .await;
                     inner.emit(Input::SendResult { operation, result }).await;
+                });
+            }
+            Effect::EditMessage { message, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let operation = request.operation_id;
+                    // Exactly one attempt, like a send: the core reconciles an unknown outcome
+                    // by asking the server about the operation.
+                    let result = inner
+                        .api
+                        .patch::<MessageResponse, _>(&paths::message(message), &request)
+                        .await;
+                    inner.emit(Input::EditResult { operation, result }).await;
+                });
+            }
+            Effect::CreateGroup { workspace, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt only: an unknown outcome is reconciled by the core, never
+                    // repeated here.
+                    let operation = request.operation_id;
+                    let result = inner
+                        .api
+                        .post::<GroupResponse, _>(&paths::groups(workspace), &request)
+                        .await;
+                    inner
+                        .emit(Input::GroupCommandResult { operation, result })
+                        .await;
+                });
+            }
+            Effect::CreateWebhook {
+                conversation,
+                request,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: creating carries no operation id, so repeating it could make a
+                    // second webhook. The core resolves an unknown outcome by listing them.
+                    let result = inner
+                        .api
+                        .post::<lazy_protocol::CreatedWebhook, _>(
+                            &paths::webhooks(conversation),
+                            &request,
+                        )
+                        .await
+                        .map(|created| {
+                            // The address is shown once and goes into a wrapper that no debug
+                            // output can print.
+                            ActionOutcome::WebhookCreated(CreatedWebhook {
+                                webhook: created.webhook,
+                                url: SecretUrl::new(created.url),
+                            })
+                        });
+                    let kind = ActionKind::CreateWebhook(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::DeleteWebhook { webhook } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // Deleting is idempotent, so a lost answer is simply asked again.
+                    let path = paths::webhook(webhook);
+                    let result = inner
+                        .retry_read(|| inner.api.delete_unit(&path))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::DeleteWebhook(webhook);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::UploadEmoji {
+                workspace,
+                emoji,
+                name,
+                source,
+            } => self.upload_emoji(workspace, emoji, name, source),
+            Effect::RenameEmoji { emoji, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: a rename to a name someone else has taken meanwhile must not
+                    // be answered as if it had worked.
+                    let result = inner
+                        .api
+                        .patch::<lazy_protocol::CustomEmojiResponse, _>(
+                            &paths::emoji(emoji),
+                            &request,
+                        )
+                        .await
+                        .map(|response| ActionOutcome::CustomEmoji(response.emoji));
+                    let kind = ActionKind::RenameCustomEmoji(emoji);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::DeleteEmoji { emoji } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // Deleting is idempotent, so a lost answer is simply asked again.
+                    let path = paths::emoji(emoji);
+                    let result = inner
+                        .retry_read(|| inner.api.delete_unit(&path))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::DeleteCustomEmoji(emoji);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::FetchEmojiImage { emoji } => self.fetch_emoji_image(emoji),
+            Effect::ForgetEmojiImages { emojis } => self.forget_emoji_images(emojis),
+            Effect::LoadWebhooks { conversation } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::webhooks(conversation);
+                    let result = inner
+                        .retry_read(|| inner.api.get::<lazy_protocol::WebhooksResponse>(&path))
+                        .await
+                        .map(|response| ActionOutcome::Webhooks(response.webhooks));
+                    let kind = ActionKind::LoadWebhooks(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::PersistView(view) => {
+                if let Some(persistence) = self.persistence() {
+                    persistence.queue_view(view);
+                }
+            }
+            Effect::UpdateGroup { group, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let result = inner
+                        .api
+                        .patch::<GroupResponse, _>(&paths::group(group), &request)
+                        .await
+                        .map(|r| ActionOutcome::Group(r.group));
+                    let kind = ActionKind::UpdateGroup(group);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::DeleteGroup { group } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // Deleting is idempotent, so a lost answer is simply asked again. Any 2xx
+                    // status counts.
+                    let path = paths::group(group);
+                    let result = inner
+                        .retry_read(|| inner.api.delete_unit(&path))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::DeleteGroup(group);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::FetchMembers {
+                conversation,
+                generation,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::conversation_action(conversation, "members");
+                    let result = inner
+                        .retry_read(|| inner.api.get::<ConversationMembersResponse>(&path))
+                        .await;
+                    inner
+                        .emit(Input::MembersFetched {
+                            conversation,
+                            generation,
+                            result,
+                        })
+                        .await;
+                });
+            }
+            Effect::SetReaction { message, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: the core repeats an unknown outcome itself, since the request
+                    // sets a state and repeating it is harmless.
+                    let emoji = request.emoji;
+                    let result = inner
+                        .api
+                        .put::<MessageResponse, _>(&paths::reactions(message), &request)
+                        .await;
+                    inner
+                        .emit(Input::ReactionResult {
+                            message,
+                            emoji,
+                            result,
+                        })
+                        .await;
+                });
+            }
+            Effect::PersistEmojiPrefs(prefs) => {
+                *self.prefs.pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(prefs);
+                self.prefs.dirty.notify_one();
+            }
+            Effect::PersistRecentSearches(queries) => {
+                *self
+                    .prefs
+                    .pending_searches
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(queries);
+                self.prefs.dirty.notify_one();
+            }
+            Effect::Search {
+                workspace,
+                generation,
+                params,
+            } => self.search(workspace, generation, params),
+            Effect::CancelSearch => self.cancel_search(),
+            Effect::SetNotificationSettings {
+                workspace,
+                settings,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::notification_settings(workspace);
+                    let result = inner
+                        .api
+                        .put::<NotificationSettingsResponse, _>(&path, &settings)
+                        .await;
+                    inner
+                        .emit(Input::NotificationSettingsResult { workspace, result })
+                        .await;
+                });
+            }
+            Effect::SetConversationNotificationPrefs {
+                conversation,
+                request,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::conversation_notification_prefs(conversation);
+                    let result = inner
+                        .api
+                        .put::<lazy_protocol::ConversationNotificationPrefsResponse, _>(
+                            &path, &request,
+                        )
+                        .await;
+                    inner
+                        .emit(Input::ConversationPrefsResult {
+                            conversation,
+                            result,
+                        })
+                        .await;
+                });
+            }
+            Effect::SetStatus { workspace, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::status(workspace);
+                    let result = inner.api.put::<StatusResponse, _>(&path, &request).await;
+                    inner.emit(Input::StatusResult { workspace, result }).await;
+                });
+            }
+            Effect::LoadInbox {
+                workspace,
+                generation,
+                query,
+            } => self.load_inbox(workspace, generation, query),
+            Effect::CancelInbox => self.cancel_slot(&self.inbox),
+            Effect::SetMessageSaved { message, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::message_saved(message);
+                    let result = inner.api.put::<SavedResponse, _>(&path, &request).await;
+                    inner
+                        .emit(Input::MessageSavedResult {
+                            message_id: message,
+                            result,
+                        })
+                        .await;
+                });
+            }
+            Effect::LoadSaved {
+                workspace,
+                generation,
+                query,
+            } => {
+                let inner = self.clone();
+                self.single_read(
+                    |inner| &inner.saved,
+                    generation,
+                    async move {
+                        let path = paths::saved(workspace);
+                        inner
+                            .retry_read(|| inner.api.get_query::<SavedPage, _>(&path, &query))
+                            .await
+                    },
+                    move |result| Input::SavedLoaded { generation, result },
+                );
+            }
+            Effect::CancelSaved => self.cancel_slot(&self.saved),
+            Effect::LoadPeople {
+                workspace,
+                generation,
+                query,
+            } => {
+                let inner = self.clone();
+                self.single_read(
+                    |inner| &inner.people,
+                    generation,
+                    async move {
+                        let path = paths::people(workspace);
+                        inner
+                            .retry_read(|| inner.api.get_query::<PeoplePage, _>(&path, &query))
+                            .await
+                    },
+                    move |result| Input::PeopleLoaded { generation, result },
+                );
+            }
+            Effect::CancelPeople => self.cancel_slot(&self.people),
+            Effect::LoadProfile {
+                workspace,
+                generation,
+                user,
+            } => {
+                let inner = self.clone();
+                self.single_read(
+                    |inner| &inner.profile,
+                    generation,
+                    async move {
+                        let path = paths::person(workspace, user);
+                        inner
+                            .retry_read(|| inner.api.get::<PersonResponse>(&path))
+                            .await
+                    },
+                    move |result| Input::ProfileLoaded { generation, result },
+                );
+            }
+            Effect::CancelProfile => self.cancel_slot(&self.profile),
+            Effect::LoadBrowse {
+                workspace,
+                generation,
+                query,
+            } => {
+                let inner = self.clone();
+                self.single_read(
+                    |inner| &inner.browse,
+                    generation,
+                    async move {
+                        let path = paths::browse_channels(workspace);
+                        inner
+                            .retry_read(|| {
+                                inner
+                                    .api
+                                    .get_query::<BrowseChannelsResponse, _>(&path, &query)
+                            })
+                            .await
+                    },
+                    move |result| Input::BrowseLoaded { generation, result },
+                );
+            }
+            Effect::CancelBrowse => self.cancel_slot(&self.browse),
+            Effect::PersistRecentConversations(ids) => {
+                *self
+                    .prefs
+                    .pending_conversations
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(ids);
+                self.prefs.dirty.notify_one();
+            }
+            Effect::MarkInboxRead { workspace } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::inbox_read(workspace);
+                    let result = inner.api.post_empty::<InboxReadResponse>(&path).await;
+                    inner.emit(Input::InboxReadResult { result }).await;
+                });
+            }
+            // Shown by the platform part of the host; nothing to run here.
+            Effect::Notify(_)
+            | Effect::ClearNotifications { .. }
+            | Effect::RetractNotification { .. }
+            | Effect::SetBadge(_) => {}
+            Effect::FetchMessage { message } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::message(message);
+                    let result = inner
+                        .retry_read(|| inner.api.get::<MessageResponse>(&path))
+                        .await;
+                    inner.emit(Input::MessageFetched { message, result }).await;
+                });
+            }
+            Effect::DeleteMessage { message } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // Deleting is idempotent (a repeat returns the tombstone), so a lost
+                    // answer is simply asked again.
+                    let path = paths::message(message);
+                    let result = inner
+                        .retry_read(|| inner.api.delete::<MessageResponse>(&path))
+                        .await;
+                    inner.emit(Input::DeleteResult { message, result }).await;
                 });
             }
             Effect::QueryOperationStatus { operation } => {
@@ -473,18 +1369,6 @@ impl Inner {
                     inner
                         .emit(Input::ConversationCommandResult { operation, result })
                         .await;
-                });
-            }
-            Effect::BrowseChannels { workspace } => {
-                let inner = self.clone();
-                self.spawn(async move {
-                    let path = paths::browse_channels(workspace);
-                    let result = inner
-                        .retry_read(|| inner.api.get::<BrowseChannelsResponse>(&path))
-                        .await
-                        .map(|response| ActionOutcome::Browse(response.channels));
-                    let kind = ActionKind::Browse;
-                    inner.emit(Input::ActionResult { kind, result }).await;
                 });
             }
             Effect::JoinChannel { conversation } => {
@@ -628,10 +1512,33 @@ impl Inner {
                 }
             }
             Effect::DiscardCache => {
+                tracing::info!("discarding the saved message cache");
                 if let Some(persistence) = self.persistence() {
                     persistence.discard_cache();
                 }
             }
+            Effect::StageFile {
+                attachment,
+                generation,
+                source,
+            } => self.stage_file(attachment, generation, source),
+            Effect::UploadFile {
+                attachment,
+                conversation,
+                generation,
+                name,
+                media_type,
+                size: _,
+            } => self.upload_file(attachment, conversation, generation, name, media_type),
+            Effect::CancelUpload { attachment } => self.cancel_upload(attachment),
+            Effect::ReleaseFiles { attachments } => self.release_files(attachments),
+            Effect::DownloadAttachment {
+                attachment,
+                destination,
+            } => self.download_attachment(attachment, destination),
+            Effect::CancelDownload { attachment } => self.cancel_download(attachment),
+            Effect::FetchImage { attachment, full } => self.fetch_image(attachment, full),
+            Effect::ForgetAttachments { attachments } => self.forget_attachments(attachments),
         }
     }
 
@@ -650,9 +1557,13 @@ impl Inner {
                     );
                     self.emit(Input::StorageProblem(message)).await;
                 }
+                tracing::info!(user = %session.user.id, "signed in");
                 self.emit(Input::Authenticated { user: session.user }).await;
             }
-            Err(error) => self.emit(Input::AuthFailed(error)).await,
+            Err(error) => {
+                tracing::info!(reason = error.code(), "sign-in failed");
+                self.emit(Input::AuthFailed(error)).await;
+            }
         }
     }
 
@@ -669,11 +1580,110 @@ impl Inner {
             match call().await {
                 Err(RequestError::Unknown(_)) if attempt < attempts => {
                     let delay = self.config.reconnect.delay(attempt, jitter());
+                    tracing::debug!(
+                        attempt,
+                        attempts,
+                        "repeating a read after an unknown outcome"
+                    );
                     tokio::time::sleep(delay).await;
                     attempt += 1;
                 }
                 other => return other,
             }
+        }
+    }
+
+    /// Asks the server for a page of search results. A search already waiting for an answer is
+    /// stopped first: nobody wants it, and it emits nothing.
+    fn search(
+        self: &Arc<Self>,
+        workspace: WorkspaceId,
+        generation: u64,
+        params: lazy_protocol::SearchParams,
+    ) {
+        let inner = self.clone();
+        self.single_read(
+            |inner| &inner.search,
+            generation,
+            async move {
+                let path = paths::search(workspace);
+                inner
+                    .retry_read(|| {
+                        inner
+                            .api
+                            .search::<lazy_protocol::SearchResponse, _>(&path, &params)
+                    })
+                    .await
+            },
+            move |result| Input::SearchResult { generation, result },
+        );
+    }
+
+    /// Runs a read of which one is wanted at a time: it replaces the one waiting in `slot`, which
+    /// is hung up on, and reports nothing if it is itself replaced or cancelled before it ends.
+    fn single_read<T: Send + 'static>(
+        self: &Arc<Self>,
+        slot: fn(&Inner) -> &ReadSlot,
+        generation: u64,
+        call: impl Future<Output = Result<T, RequestError>> + Send + 'static,
+        report: impl FnOnce(Result<T, RequestError>) -> Input + Send + 'static,
+    ) {
+        let cancel = self.cancel.child_token();
+        let previous = slot(self)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace((generation, cancel.clone()));
+        if let Some((_, previous)) = previous {
+            previous.cancel();
+        }
+        let inner = self.clone();
+        self.spawn(async move {
+            let result = tokio::select! {
+                () = cancel.cancelled() => return,
+                result = call => result,
+            };
+            {
+                // Only the request still current reports; the slot is free for the next.
+                let mut slot = slot(&inner).lock().unwrap_or_else(|e| e.into_inner());
+                if cancel.is_cancelled() || slot.as_ref().is_none_or(|(g, _)| *g != generation) {
+                    return;
+                }
+                *slot = None;
+            }
+            inner.emit(report(result)).await;
+        });
+    }
+
+    /// Asks the server for a page of the thread inbox.
+    fn load_inbox(
+        self: &Arc<Self>,
+        workspace: WorkspaceId,
+        generation: u64,
+        query: lazy_protocol::InboxQuery,
+    ) {
+        let inner = self.clone();
+        self.single_read(
+            |inner| &inner.inbox,
+            generation,
+            async move {
+                let path = paths::inbox(workspace);
+                inner
+                    .retry_read(|| inner.api.get_query::<InboxPage, _>(&path, &query))
+                    .await
+            },
+            move |result| Input::InboxLoaded { generation, result },
+        );
+    }
+
+    /// Stops the search and the inbox page being waited for, if any, without reporting them.
+    fn cancel_search(&self) {
+        self.cancel_slot(&self.search);
+    }
+
+    fn cancel_slot(&self, slot: &ReadSlot) {
+        let previous = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some((_, cancel)) = previous {
+            cancel.cancel();
         }
     }
 
@@ -705,6 +1715,18 @@ impl Inner {
         self.spawn_unguarded(realtime::run(context, workspace, after, receiver, cancel));
     }
 
+    /// Stops reading a workspace the person may not read any more.
+    fn unsubscribe(&self, workspace: WorkspaceId) {
+        let removed = self
+            .subscriptions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&workspace);
+        if let Some(subscription) = removed {
+            subscription.cancel.cancel();
+        }
+    }
+
     fn stop_subscriptions(&self) {
         let mut subscriptions = self.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         for (_, subscription) in subscriptions.drain() {
@@ -718,6 +1740,16 @@ fn jitter() -> u32 {
     match getrandom::fill(&mut bytes) {
         Ok(()) => u32::from_le_bytes(bytes),
         Err(_) => u32::MAX / 2,
+    }
+}
+
+/// Why a task did not finish, in a word. A [`tokio::task::JoinError`]'s own text repeats the
+/// panic message, which can be anything the panicking code was holding.
+fn task_failure(error: &tokio::task::JoinError) -> &'static str {
+    if error.is_panic() {
+        "panicked"
+    } else {
+        "cancelled"
     }
 }
 
@@ -778,6 +1810,8 @@ enum JournalCommand {
 #[derive(Default)]
 struct PendingSaves {
     drafts: Option<Vec<(ConversationId, String)>>,
+    thread_drafts: Option<Vec<ThreadDraft>>,
+    view: Option<ViewState>,
     cache: Option<ContentCache>,
 }
 
@@ -834,6 +1868,19 @@ impl Persistence {
         self.send(JournalCommand::Settle(operation));
     }
 
+    fn queue_view(&self, view: ViewState) {
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).view = Some(view);
+        self.dirty.notify_one();
+    }
+
+    fn queue_thread_drafts(&self, drafts: Vec<ThreadDraft>) {
+        self.pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .thread_drafts = Some(drafts);
+        self.dirty.notify_one();
+    }
+
     fn queue_drafts(&self, drafts: Vec<(ConversationId, String)>) {
         self.pending
             .lock()
@@ -879,7 +1926,7 @@ impl Persistence {
                         },
                         Err(error) => Input::SubmissionPersistFailed {
                             operation,
-                            message: format!("storage task failed: {error}"),
+                            message: format!("storage task failed ({})", task_failure(&error)),
                         },
                     };
                     let _ = self.inputs.send(input).await;
@@ -932,11 +1979,16 @@ impl Persistence {
 
     async fn flush_pending(self: &Arc<Self>) {
         let epoch = self.epoch.load(std::sync::atomic::Ordering::SeqCst);
-        let (drafts, cache) = {
+        let (drafts, thread_drafts, view, cache) = {
             let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-            (pending.drafts.take(), pending.cache.take())
+            (
+                pending.drafts.take(),
+                pending.thread_drafts.take(),
+                pending.view.take(),
+                pending.cache.take(),
+            )
         };
-        if drafts.is_none() && cache.is_none() {
+        if drafts.is_none() && thread_drafts.is_none() && view.is_none() && cache.is_none() {
             return;
         }
         let this = self.clone();
@@ -948,6 +2000,12 @@ impl Persistence {
             }
             if let Some(drafts) = drafts {
                 store.save_drafts(&drafts)?;
+            }
+            if let Some(thread_drafts) = thread_drafts {
+                store.save_thread_drafts(&thread_drafts)?;
+            }
+            if let Some(view) = view {
+                store.save_view(&view)?;
             }
             if let Some(cache) = cache {
                 store.save_cache(cache)?;
@@ -985,7 +2043,14 @@ pub fn inspect_state(profile_dir: &Path, key: &[u8; 32]) -> StartupState {
         session_restored: false,
         journal: recovered.journal,
         drafts: recovered.drafts,
+        thread_drafts: recovered.thread_drafts,
+        view: recovered.view,
         cache: recovered.cache,
+        emoji_prefs: prefs::load(profile_dir),
+        recent_searches: searches::load(profile_dir),
+        recent_conversations: recent_conversations::load(profile_dir),
+        appearance: crate::appearance::load(profile_dir),
+        active_workspace: crate::active_workspace::load(profile_dir),
         problems: recovered.problems,
     }
 }

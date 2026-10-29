@@ -36,7 +36,7 @@ struct TempDatabase {
 impl TempDatabase {
     async fn create() -> TempDatabase {
         let url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://lazy@127.0.0.1:54329/lazy".to_owned());
+            .unwrap_or_else(|_| "postgres://lazy@127.0.0.1:54330/lazy".to_owned());
         let admin = PgPool::connect(&url)
             .await
             .expect("connect to Postgres (scripts/dev-db.sh start)");
@@ -210,8 +210,9 @@ impl GuiClient {
         });
         // Sign-in order is: username, password, Sign in, "New here? Create an account".
         self.keys("tab tab tab enter");
-        // Create-account order is: username, display name, password, button, link. Back to the top.
-        self.keys("shift-tab shift-tab shift-tab shift-tab");
+        // Create-account order is: username, display name, password, invitation code, button, link.
+        // Back to the top.
+        self.keys("shift-tab shift-tab shift-tab shift-tab shift-tab");
         self.type_text(username);
         self.key("tab");
         self.type_text(display_name);
@@ -228,11 +229,20 @@ impl GuiClient {
     }
 
     fn screenshot(&mut self, dir: &Path) {
+        self.screenshot_as(dir, "");
+    }
+
+    fn screenshot_as(&mut self, dir: &Path, label: &str) {
         std::fs::create_dir_all(dir).expect("create screenshot directory");
         self.settle();
+        let suffix = if label.is_empty() {
+            String::new()
+        } else {
+            format!("-{label}")
+        };
         match self.cx.capture_screenshot(self.window.into()) {
             Ok(image) => image
-                .save(dir.join(format!("gui-{}.png", self.name)))
+                .save(dir.join(format!("gui-{}{suffix}.png", self.name)))
                 .expect("write png"),
             Err(error) => eprintln!("{}: could not capture a screenshot: {error:#}", self.name),
         }
@@ -317,6 +327,309 @@ fn two_gui_clients_exchange_messages_through_a_real_server() {
     if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
         alice.screenshot(&dir);
         bob.screenshot(&dir);
+    }
+
+    alice.stop();
+    bob.stop();
+    rt.block_on(async {
+        server.shutdown().await.unwrap();
+        database.drop().await;
+    });
+}
+
+/// Formatting, editing, and deleting through the real views: everything is a key press, and the
+/// other window sees each change arrive.
+#[test]
+fn two_gui_clients_format_edit_and_delete_through_the_real_views() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let database = rt.block_on(TempDatabase::create());
+    let server = rt.block_on(async { testing::spawn_test_server(database.pool.clone()).await });
+    let dir = tempfile::tempdir().unwrap();
+
+    let mut alice = GuiClient::start("alice", &server.base_url, &dir.path().join("alice"));
+    let mut bob = GuiClient::start("bob", &server.base_url, &dir.path().join("bob"));
+    alice.register_with_the_keyboard("alice", "Alice Nguyen");
+    bob.register_with_the_keyboard("bob", "Bob Okafor");
+
+    // Typed formatting arrives as a structured document in the other window.
+    alice.type_text("*hello* world");
+    alice.key("enter");
+    bob.wait_until("the formatted message", |core| {
+        core.selected_conversation().is_some_and(|c| {
+            core.timeline(c).iter().any(|i| {
+                i.document.plain_text() == "hello world"
+                    && matches!(
+                        &i.document.blocks()[0],
+                        lazy_domain::Block::Paragraph { inlines } if inlines.iter().any(|inline| matches!(
+                            inline,
+                            lazy_domain::Inline::Text { text, marks } if text == "hello" && marks.bold
+                        ))
+                    )
+            })
+        })
+    });
+    alice.wait_until("the message confirmed", |core| {
+        core.selected_conversation()
+            .is_some_and(|c| core.timeline(c).iter().all(|r| r.is_confirmed()))
+    });
+
+    // Up in the empty composer edits the latest message, starting from its source text. Select
+    // all, type the replacement, and Enter saves.
+    alice.key("up");
+    alice.keys("ctrl-a");
+    alice.type_text("*hello* there");
+    alice.key("enter");
+    for client in [&mut alice, &mut bob] {
+        client.wait_until("the edit on both screens", |core| {
+            core.selected_conversation().is_some_and(|c| {
+                core.timeline(c)
+                    .iter()
+                    .any(|i| i.document.plain_text() == "hello there" && i.is_edited())
+            })
+        });
+    }
+
+    // Bob reacts from the keyboard: the timeline, the actions menu (Add reaction is first), the
+    // picker's search field, a word, Enter for the first result. Alice sees the chip.
+    bob.keys("shift-tab enter enter");
+    bob.type_text("rocket");
+    bob.key("enter");
+    for client in [&mut alice, &mut bob] {
+        client.wait_until("the rocket reaction on both screens", |core| {
+            core.selected_conversation().is_some_and(|c| {
+                core.timeline(c)
+                    .iter()
+                    .any(|i| i.reactions.len() == 1 && i.reactions[0].emoji.to_string() == "🚀")
+            })
+        });
+    }
+
+    if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
+        alice.screenshot_as(&dir, "reacted");
+        bob.screenshot_as(&dir, "reacted");
+    }
+
+    // After an Up-arrow edit the keyboard is back in the composer. The keyboard route to Delete:
+    // Shift+Tab to the timeline, Enter for the actions menu (Add reaction, one toggle for the
+    // rocket, Reply in thread, Edit, Delete, ...), down to Delete, Enter; the dialog starts on
+    // Cancel, so Tab then Enter confirms.
+    let shots = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from);
+    alice.keys("shift-tab enter down down down down");
+    if let Some(dir) = &shots {
+        alice.screenshot_as(dir, "menu");
+    }
+    alice.keys("enter");
+    if let Some(dir) = &shots {
+        alice.screenshot_as(dir, "dialog");
+    }
+    alice.keys("tab enter");
+    for client in [&mut alice, &mut bob] {
+        client.wait_until("the deletion on both screens", |core| {
+            core.selected_conversation()
+                .is_some_and(|c| core.timeline(c).is_empty())
+        });
+    }
+
+    if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
+        alice.screenshot(&dir);
+        bob.screenshot(&dir);
+    }
+
+    alice.stop();
+    bob.stop();
+    rt.block_on(async {
+        server.shutdown().await.unwrap();
+        database.drop().await;
+    });
+}
+
+/// Mentions through the real views: Alice types the start of a name, accepts the suggestion with
+/// the keyboard, and sends; Bob's window shows a message whose mention is of him.
+#[test]
+fn two_gui_clients_mention_through_the_autocomplete() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let database = rt.block_on(TempDatabase::create());
+    let server = rt.block_on(async { testing::spawn_test_server(database.pool.clone()).await });
+    let dir = tempfile::tempdir().unwrap();
+
+    let mut alice = GuiClient::start("alice", &server.base_url, &dir.path().join("alice"));
+    let mut bob = GuiClient::start("bob", &server.base_url, &dir.path().join("bob"));
+    alice.register_with_the_keyboard("alice", "Alice Nguyen");
+    bob.register_with_the_keyboard("bob", "Bob Okafor");
+    // Alice's client has to know who is in the channel before it can suggest anyone.
+    alice.wait_until("the member list", |core| {
+        core.selected_conversation()
+            .and_then(|c| core.conversation_members(c))
+            .is_some_and(|members| members.len() == 2)
+    });
+
+    alice.type_text("hey @bo");
+    alice.key("enter");
+    alice.type_text("look at this");
+    alice.key("enter");
+    let bob_id = bob.read(|core| core.me().unwrap().id);
+    bob.wait_until("the mention", move |core| {
+        core.selected_conversation().is_some_and(|c| {
+            core.timeline(c).iter().any(|i| {
+                i.document.plain_text() == "hey @bob look at this"
+                    && i.document.mentions() == [lazy_domain::MentionTarget::User { id: bob_id }]
+            })
+        })
+    });
+    alice.wait_until("the message confirmed", |core| {
+        core.selected_conversation()
+            .is_some_and(|c| core.timeline(c).iter().all(|r| r.is_confirmed()))
+    });
+
+    if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
+        alice.screenshot_as(&dir, "mention");
+        bob.screenshot_as(&dir, "mention");
+    }
+
+    alice.stop();
+    bob.stop();
+    rt.block_on(async {
+        server.shutdown().await.unwrap();
+        database.drop().await;
+    });
+}
+
+/// Threads through the real views: Bob opens a thread from the actions menu, replies from the
+/// pane's composer, and Alice's window shows the summary under her message; she opens the pane
+/// from the keyboard and sees the reply.
+#[test]
+fn two_gui_clients_hold_a_thread_through_the_real_views() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let database = rt.block_on(TempDatabase::create());
+    let server = rt.block_on(async { testing::spawn_test_server(database.pool.clone()).await });
+    let dir = tempfile::tempdir().unwrap();
+
+    let mut alice = GuiClient::start("alice", &server.base_url, &dir.path().join("alice"));
+    let mut bob = GuiClient::start("bob", &server.base_url, &dir.path().join("bob"));
+    alice.register_with_the_keyboard("alice", "Alice Nguyen");
+    bob.register_with_the_keyboard("bob", "Bob Okafor");
+
+    alice.type_text("shall we ship on friday");
+    alice.key("enter");
+    bob.wait_until("Alice's message", |core| {
+        core.selected_conversation().is_some_and(|c| {
+            core.timeline(c)
+                .iter()
+                .any(|i| i.document.plain_text() == "shall we ship on friday" && i.is_confirmed())
+        })
+    });
+
+    // Bob: Shift+Tab to the timeline, Enter for the menu (Add reaction, Reply in thread, ...),
+    // down to Reply in thread, Enter. Focus moves to the pane's reply box.
+    bob.keys("shift-tab enter down enter");
+    bob.wait_until("the thread pane", |core| core.open_thread().is_some());
+    bob.type_text("friday works for me");
+    bob.key("enter");
+
+    // Alice's channel shows the root with its summary, not the reply itself.
+    alice.wait_until("the summary under her message", |core| {
+        core.selected_conversation().is_some_and(|c| {
+            core.timeline(c).iter().any(|i| {
+                i.document.plain_text() == "shall we ship on friday"
+                    && i.thread.as_ref().is_some_and(|t| t.reply_count == 1)
+            }) && core.timeline(c).len() == 1
+        })
+    });
+
+    // Alice opens it from the keyboard: the cursor is on the message, Down reaches the summary
+    // line, Enter opens the pane.
+    alice.keys("shift-tab down enter");
+    alice.wait_until("her thread pane with the reply", |core| {
+        core.open_thread().is_some_and(|t| {
+            core.thread(t.root).is_some_and(|v| {
+                v.replies
+                    .iter()
+                    .any(|r| r.document.plain_text() == "friday works for me")
+            })
+        })
+    });
+
+    if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
+        alice.screenshot_as(&dir, "thread");
+        bob.screenshot_as(&dir, "thread");
+    }
+
+    alice.stop();
+    bob.stop();
+    rt.block_on(async {
+        server.shutdown().await.unwrap();
+        database.drop().await;
+    });
+}
+
+/// Search through the real views: Ctrl+F, a word, Enter, and the arrow keys; Enter opens the hit
+/// and the conversation shows the message highlighted (see the screenshot).
+#[test]
+fn a_gui_client_searches_and_opens_a_result_with_the_keyboard() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let database = rt.block_on(TempDatabase::create());
+    let server = rt.block_on(async { testing::spawn_test_server(database.pool.clone()).await });
+    let dir = tempfile::tempdir().unwrap();
+
+    let mut alice = GuiClient::start("alice", &server.base_url, &dir.path().join("alice"));
+    let mut bob = GuiClient::start("bob", &server.base_url, &dir.path().join("bob"));
+    alice.register_with_the_keyboard("alice", "Alice Nguyen");
+    bob.register_with_the_keyboard("bob", "Bob Okafor");
+    for text in [
+        "the deploy to staging failed again",
+        "lunch is at noon",
+        "who owns the deploy runbook",
+    ] {
+        alice.type_text(text);
+        alice.key("enter");
+    }
+    bob.wait_until("the three messages", |core| {
+        core.selected_conversation()
+            .is_some_and(|c| core.timeline(c).len() == 3)
+    });
+
+    // Ctrl+F from the composer, a word, Enter to search now.
+    bob.key("ctrl-f");
+    bob.type_text("deploy");
+    bob.key("enter");
+    bob.wait_until("the results", |core| {
+        core.search().is_some_and(|v| {
+            matches!(v.status, lazy_client_core::SearchStatus::Ready) && v.hits.len() == 2
+        })
+    });
+    if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
+        bob.screenshot_as(&dir, "search");
+    }
+
+    // Down to the first result, Enter opens it: the conversation is shown with the jump target.
+    bob.keys("down enter");
+    if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
+        bob.screenshot_as(&dir, "search-after-enter");
+    }
+    // The view scrolls to the message, highlights it, and closes the search; the jump target is
+    // consumed as soon as it has been used, so what is observable is that search is closed.
+    bob.wait_until("the search to close on the opened message", |core| {
+        core.search().is_none()
+    });
+    assert!(bob.read(|core| core.selected_conversation().is_some()));
+    if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
+        bob.screenshot_as(&dir, "search-opened");
     }
 
     alice.stop();

@@ -258,6 +258,7 @@ impl Client {
             username: username.to_owned(),
             display_name: format!("User {username}"),
             password: PASSWORD.to_owned(),
+            invite_code: String::new(),
         });
         self.wait_until_ready().await;
     }

@@ -23,10 +23,17 @@
 //!   history it fetches after [`Event::MemberAdded`] or [`Event::ConversationCreated`] covers
 //!   them.
 
-use lazy_domain::{ConversationId, EventSeq, OperationId, Timestamp, UserId, WorkspaceId};
+use lazy_domain::notification::{ConversationNotificationPrefs, NotificationSettings, UserStatus};
+use lazy_domain::{
+    ConversationId, DisplayName, EventSeq, GroupId, MessageId, OperationId, Timestamp, UserId,
+    WorkspaceId, WorkspaceRole,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::{Conversation, ConversationUserState, ErrorCode, Message, User};
+use crate::{
+    Conversation, ConversationUserState, CustomEmoji, ErrorCode, Mentions, Message,
+    ReactionSummary, ThreadSummary, ThreadUserState, User, UserGroup, Workspace,
+};
 
 /// Something that happened in a workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +44,91 @@ pub enum Event {
         message: Message,
         /// The operation that created it, so its sender can reconcile an optimistic message.
         operation_id: Option<OperationId>,
+    },
+    /// A message was edited. `message` is the new revision; `seq` is still where it was created.
+    /// Delivered to the conversation's members, like the original.
+    MessageEdited {
+        message: Message,
+        /// The operation that made the edit, so the editor can reconcile.
+        operation_id: Option<OperationId>,
+        /// Who the message notified before this edit, so a client can correct its mention counts
+        /// without holding the earlier version.
+        #[serde(default, skip_serializing_if = "Mentions::is_empty")]
+        previous_mentions: Mentions,
+    },
+    /// The reactions on a message changed. `reactions` is the complete new list (not a change to
+    /// apply), and this event's position is its `reactions_as_of`: a client applies it only if
+    /// that is newer than what it holds. Delivered to the conversation's members.
+    ReactionsChanged {
+        conversation_id: ConversationId,
+        message_id: MessageId,
+        reactions: Vec<ReactionSummary>,
+    },
+    /// A message was deleted. `message` is the tombstone: same id, author and position, the
+    /// placeholder document, `deleted` set, and a higher revision. Clients remove it from view
+    /// and, if it counted as unread, stop counting it.
+    MessageDeleted {
+        message: Message,
+        /// Who the message notified before it was deleted (the tombstone notifies nobody).
+        #[serde(default, skip_serializing_if = "Mentions::is_empty")]
+        had_mentions: Mentions,
+    },
+    /// The replies under a root changed (one was added or deleted). `summary` is the complete new
+    /// summary, or `None` when no replies remain; its `as_of` is this event's position, and a
+    /// client applies it only if that is newer than what it holds. Delivered to the
+    /// conversation's members.
+    ThreadChanged {
+        conversation_id: ConversationId,
+        root_id: MessageId,
+        summary: Option<ThreadSummary>,
+    },
+    /// The recipient's own follow flag, read position, or counts for a thread changed, possibly
+    /// on another device. Delivered only to that person.
+    ThreadStateChanged { state: ThreadUserState },
+    /// The recipient's own notification settings changed, possibly on another device. Delivered
+    /// only to that person.
+    NotificationSettingsChanged { settings: NotificationSettings },
+    /// The recipient's own preference for one conversation changed (`level` `None` and not muted
+    /// means it was reset). Delivered only to that person.
+    ConversationNotificationPrefsChanged {
+        prefs: ConversationNotificationPrefs,
+    },
+    /// Someone set or cleared their status. Delivered to everyone in the workspace. An expiring
+    /// status is not announced again when it expires: clients compare `expires_at` with the time.
+    UserStatusChanged {
+        user_id: UserId,
+        status: Option<UserStatus>,
+    },
+    /// The recipient saved a message, or removed it from their saved messages, possibly on another
+    /// device. Delivered only to that person. Saving something already saved announces nothing.
+    SavedChanged { message_id: MessageId, saved: bool },
+    /// A custom emoji was created, renamed, or deleted (`deleted` set). Delivered to everyone in
+    /// the workspace, so pickers and autocomplete stay current.
+    EmojiChanged { emoji: CustomEmoji },
+    /// A user group was created or changed (its handle, name, or members). Delivered to everyone
+    /// in the workspace, so autocomplete stays current.
+    GroupChanged { group: UserGroup },
+    /// A user group was deleted. Messages that mentioned it keep the handle they were written
+    /// with.
+    GroupDeleted { group_id: GroupId },
+    /// The workspace's name or settings changed. Delivered to everyone in the workspace.
+    WorkspaceUpdated { workspace: Workspace },
+    /// Someone's role changed. Delivered to everyone in the workspace (the person included, whose
+    /// own role this is).
+    MemberRoleChanged {
+        user_id: UserId,
+        role: WorkspaceRole,
+    },
+    /// Someone's membership was deactivated or reactivated. Delivered to everyone in the workspace
+    /// except the person deactivated, whose connections to it end; a reactivated person learns
+    /// from their next bootstrap.
+    MemberDeactivated { user_id: UserId, deactivated: bool },
+    /// Someone changed their display name or avatar. Delivered to every workspace the person
+    /// belongs to, once in each log. (Their status and deactivation have their own events.)
+    UserProfileChanged {
+        user_id: UserId,
+        display_name: DisplayName,
+        avatar_version: u32,
     },
     /// Someone joined the workspace.
     MemberJoined { user: User },
@@ -97,6 +189,9 @@ pub enum SnapshotReason {
 }
 
 /// Frames sent by the server.
+// A frame is built, serialized or parsed, handled, and dropped; none is kept in bulk, so the size
+// of the event variant next to the small control frames costs nothing worth boxing it for.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerFrame {
@@ -135,6 +230,15 @@ mod tests {
             created_at: Timestamp::now(),
             revision: 1,
             seq: EventSeq::new(3).unwrap(),
+            edited_at: None,
+            deleted: false,
+            thread_root: None,
+            in_channel: false,
+            thread: None,
+            attachments: Vec::new(),
+            mentions: Mentions::default(),
+            reactions: Vec::new(),
+            reactions_as_of: EventSeq::ZERO,
         }
     }
 
@@ -168,12 +272,221 @@ mod tests {
     }
 
     #[test]
+    fn message_lifecycle_events_roundtrip() {
+        let mut message = sample_message();
+        message.revision = 2;
+        message.edited_at = Some(Timestamp::now());
+        let edited = Event::MessageEdited {
+            message: message.clone(),
+            operation_id: Some(OperationId::generate()),
+            previous_mentions: Mentions {
+                users: vec![UserId::generate()],
+                channel: true,
+            },
+        };
+        message.revision = 3;
+        message.deleted = true;
+        let deleted = Event::MessageDeleted {
+            message,
+            had_mentions: Mentions::default(),
+        };
+        for event in [edited, deleted] {
+            let json = serde_json::to_string(&event).unwrap();
+            assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
+        }
+        let json = serde_json::to_value(&Event::MessageDeleted {
+            message: sample_message(),
+            had_mentions: Mentions::default(),
+        })
+        .unwrap();
+        assert_eq!(json["type"], "message_deleted");
+    }
+
+    #[test]
+    fn reaction_events_roundtrip() {
+        let event = Event::ReactionsChanged {
+            conversation_id: ConversationId::generate(),
+            message_id: MessageId::generate(),
+            reactions: vec![ReactionSummary {
+                emoji: lazy_domain::ReactionEmoji::parse("🎉").unwrap(),
+                users: vec![UserId::generate(), UserId::generate()],
+            }],
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""type":"reactions_changed""#));
+        assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
+        // Removing the last reaction is an empty list, not a missing field.
+        let cleared = Event::ReactionsChanged {
+            conversation_id: ConversationId::generate(),
+            message_id: MessageId::generate(),
+            reactions: Vec::new(),
+        };
+        let json = serde_json::to_string(&cleared).unwrap();
+        assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), cleared);
+    }
+
+    #[test]
+    fn thread_events_roundtrip() {
+        let conversation_id = ConversationId::generate();
+        let root_id = MessageId::generate();
+        let summary = ThreadSummary {
+            reply_count: 2,
+            last_reply_seq: EventSeq::new(9).unwrap(),
+            last_reply_at: Timestamp::now(),
+            recent_repliers: vec![UserId::generate()],
+            as_of: EventSeq::new(9).unwrap(),
+        };
+        let state = ThreadUserState {
+            root_id,
+            conversation_id,
+            following: true,
+            last_read: EventSeq::new(5).unwrap(),
+            unread_count: 2,
+            mention_count: 1,
+        };
+        for event in [
+            Event::ThreadChanged {
+                conversation_id,
+                root_id,
+                summary: Some(summary),
+            },
+            Event::ThreadChanged {
+                conversation_id,
+                root_id,
+                summary: None,
+            },
+            Event::ThreadStateChanged { state },
+        ] {
+            let json = serde_json::to_string(&event).unwrap();
+            assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
+        }
+    }
+
+    #[test]
+    fn notification_and_status_events_roundtrip() {
+        use lazy_domain::notification::NotifyLevel;
+        let conversation_id = ConversationId::generate();
+        for event in [
+            Event::NotificationSettingsChanged {
+                settings: NotificationSettings::default(),
+            },
+            Event::ConversationNotificationPrefsChanged {
+                prefs: ConversationNotificationPrefs {
+                    conversation_id,
+                    level: Some(NotifyLevel::All),
+                    muted: false,
+                },
+            },
+            Event::UserStatusChanged {
+                user_id: UserId::generate(),
+                status: Some(UserStatus::new("Out today", None, None).unwrap()),
+            },
+            Event::UserStatusChanged {
+                user_id: UserId::generate(),
+                status: None,
+            },
+        ] {
+            let json = serde_json::to_string(&event).unwrap();
+            assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
+        }
+    }
+
+    #[test]
+    fn administration_events_roundtrip() {
+        for event in [
+            Event::WorkspaceUpdated {
+                workspace: Workspace {
+                    id: WorkspaceId::generate(),
+                    name: "Acme".to_owned(),
+                    settings: Default::default(),
+                },
+            },
+            Event::MemberRoleChanged {
+                user_id: UserId::generate(),
+                role: WorkspaceRole::Admin,
+            },
+            Event::MemberDeactivated {
+                user_id: UserId::generate(),
+                deactivated: true,
+            },
+        ] {
+            let json = serde_json::to_string(&event).unwrap();
+            assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
+        }
+    }
+
+    #[test]
+    fn profile_changes_roundtrip() {
+        let event = Event::UserProfileChanged {
+            user_id: UserId::generate(),
+            display_name: DisplayName::parse("Alice N.").unwrap(),
+            avatar_version: 4,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""type":"user_profile_changed""#));
+        assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
+    }
+
+    #[test]
+    fn saved_changed_roundtrips() {
+        for saved in [true, false] {
+            let event = Event::SavedChanged {
+                message_id: MessageId::generate(),
+                saved,
+            };
+            let json = serde_json::to_string(&event).unwrap();
+            assert!(json.contains(r#""type":"saved_changed""#));
+            assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
+        }
+    }
+
+    #[test]
+    fn emoji_events_roundtrip() {
+        let emoji = CustomEmoji {
+            id: lazy_domain::EmojiId::generate(),
+            workspace_id: WorkspaceId::generate(),
+            name: "party_parrot".to_owned(),
+            created_by: UserId::generate(),
+            created_at: Timestamp::now(),
+            deleted: false,
+        };
+        let event = Event::EmojiChanged { emoji };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""type":"emoji_changed""#));
+        assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
+    }
+
+    #[test]
+    fn group_events_roundtrip() {
+        let group = UserGroup {
+            id: GroupId::generate(),
+            workspace_id: WorkspaceId::generate(),
+            handle: lazy_domain::GroupHandle::parse("design-team").unwrap(),
+            name: lazy_domain::DisplayName::parse("Design team").unwrap(),
+            members: vec![UserId::generate(), UserId::generate()],
+        };
+        for event in [
+            Event::GroupChanged {
+                group: group.clone(),
+            },
+            Event::GroupDeleted { group_id: group.id },
+        ] {
+            let json = serde_json::to_string(&event).unwrap();
+            assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
+        }
+    }
+
+    #[test]
     fn member_joined_roundtrips() {
         let event = Event::MemberJoined {
             user: User {
                 id: UserId::generate(),
                 username: Username::parse("zoe").unwrap(),
                 display_name: DisplayName::parse("Zoë").unwrap(),
+                is_bot: false,
+                status: None,
+                deactivated: false,
+                avatar_version: 0,
             },
         };
         let json = serde_json::to_string(&event).unwrap();

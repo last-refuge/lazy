@@ -26,6 +26,9 @@ pub enum AppEvent {
 pub struct AppModel {
     core: ClientCore,
     sink: Rc<dyn EffectSink>,
+    /// The width the person last dragged the thread pane to, kept for the session. A wish, not
+    /// the drawn width: see [`crate::thread_layout::pane_width`].
+    thread_pane_width: f32,
 }
 
 impl EventEmitter<AppEvent> for AppModel {}
@@ -35,6 +38,24 @@ impl AppModel {
         Self {
             core: ClientCore::new(),
             sink,
+            thread_pane_width: crate::thread_layout::DEFAULT_PANE_WIDTH,
+        }
+    }
+
+    /// The thread pane width the person wants, before it is fitted to the window.
+    pub fn thread_pane_width(&self) -> f32 {
+        self.thread_pane_width
+    }
+
+    /// Remembers the thread pane width for the rest of the session.
+    pub fn set_thread_pane_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        let width = width.clamp(
+            crate::thread_layout::MIN_PANE_WIDTH,
+            crate::thread_layout::MAX_PANE_WIDTH,
+        );
+        if (width - self.thread_pane_width).abs() > f32::EPSILON {
+            self.thread_pane_width = width;
+            cx.notify();
         }
     }
 
@@ -45,9 +66,20 @@ impl AppModel {
 
     /// Applies an input from a person or the runtime.
     pub fn dispatch(&mut self, input: Input, cx: &mut Context<Self>) {
+        // Starting restores the saved choices without announcing them as a change.
+        let started = matches!(input, Input::Started(_));
         let output = self.core.handle(input);
         if !output.effects.is_empty() {
             self.sink.execute(output.effects);
+        }
+        // How this device looks and moves is the core's to keep and the screen's to show.
+        if started
+            || output
+                .changes
+                .iter()
+                .any(|change| matches!(change, Change::AppearanceChanged))
+        {
+            crate::theme::apply_appearance(cx, self.core.appearance());
         }
         if !output.changes.is_empty() {
             cx.emit(AppEvent::Changed(output.changes));

@@ -63,6 +63,34 @@ uuid_id!(
     Uuid::now_v7()
 );
 uuid_id!(
+    /// A user group: a named set of people that a message can mention together.
+    GroupId,
+    Uuid::now_v7()
+);
+uuid_id!(
+    /// A custom emoji of a workspace. Chosen by the uploading client, so a retried upload is the
+    /// same upload.
+    EmojiId,
+    Uuid::now_v7()
+);
+uuid_id!(
+    /// A file uploaded to be attached to a message. Chosen by the uploading client, so a retried
+    /// upload is the same upload.
+    AttachmentId,
+    Uuid::now_v7()
+);
+uuid_id!(
+    /// An incoming webhook: an address that posts into one channel as a bot.
+    WebhookId,
+    Uuid::now_v7()
+);
+uuid_id!(
+    /// An invitation to join a workspace. Assigned by the server; it names the invitation, and the
+    /// separate code is what a person types.
+    InvitationId,
+    Uuid::now_v7()
+);
+uuid_id!(
     /// A message. Assigned by the server when the message is committed.
     MessageId,
     Uuid::now_v7()
@@ -94,6 +122,17 @@ impl EventSeq {
     /// Returns the raw value, for storage and comparisons.
     pub const fn get(self) -> i64 {
         self.0
+    }
+
+    /// Whether this is [`EventSeq::ZERO`]; lets serialization skip a position that was never set.
+    pub fn is_zero(&self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl Default for EventSeq {
+    fn default() -> Self {
+        Self::ZERO
     }
 }
 

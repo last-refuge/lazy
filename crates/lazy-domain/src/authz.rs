@@ -13,6 +13,39 @@ pub enum WorkspaceRole {
     Owner,
 }
 
+impl WorkspaceRole {
+    /// Creating, changing, and deleting user groups: admins and owners.
+    pub fn can_manage_groups(self) -> bool {
+        matches!(self, Self::Admin | Self::Owner)
+    }
+
+    /// Adding, renaming, and deleting custom emoji: admins and owners.
+    pub fn can_manage_emoji(self) -> bool {
+        matches!(self, Self::Admin | Self::Owner)
+    }
+
+    /// Inviting people, changing the workspace's name and settings, and managing members (see
+    /// [`crate::workspace`] for who may act on whom): admins and owners.
+    pub fn can_manage_workspace(self) -> bool {
+        matches!(self, Self::Admin | Self::Owner)
+    }
+
+    /// Creating and deleting integrations, such as incoming webhooks: admins and owners.
+    pub fn can_manage_integrations(self) -> bool {
+        matches!(self, Self::Admin | Self::Owner)
+    }
+}
+
+/// Most incoming webhooks one conversation can have.
+pub const MAX_WEBHOOKS_PER_CONVERSATION: usize = 10;
+/// Largest body an incoming webhook accepts, in bytes.
+pub const MAX_WEBHOOK_BODY_BYTES: usize = 65_536;
+
+/// Most user groups in one workspace.
+pub const MAX_GROUPS_PER_WORKSPACE: usize = 100;
+/// Most people in one user group.
+pub const MAX_GROUP_MEMBERS: usize = 200;
+
 /// Who can find and read a channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,6 +96,16 @@ mod tests {
             visibility: vis,
             archived,
         }
+    }
+
+    #[test]
+    fn only_admins_and_owners_manage_groups_and_integrations() {
+        assert!(!WorkspaceRole::Member.can_manage_groups());
+        assert!(WorkspaceRole::Admin.can_manage_groups());
+        assert!(WorkspaceRole::Owner.can_manage_groups());
+        assert!(!WorkspaceRole::Member.can_manage_integrations());
+        assert!(WorkspaceRole::Admin.can_manage_integrations());
+        assert!(WorkspaceRole::Owner.can_manage_integrations());
     }
 
     #[test]

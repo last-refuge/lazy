@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+emojis.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 time.workspace = true

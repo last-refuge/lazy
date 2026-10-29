@@ -77,8 +77,10 @@ pub(crate) async fn run(
         {
             return;
         }
+        tracing::debug!(%workspace, attempt, "opening the realtime connection");
         let ended = match connect(&ctx.api).await {
             Ok(socket) => {
+                tracing::info!(%workspace, attempt, cursor = progress.cursor.get(), "realtime connection open");
                 if !emit(&ctx, Input::Socket(SocketEvent::Opened { workspace })).await {
                     return;
                 }
@@ -103,6 +105,7 @@ pub(crate) async fn run(
         match ended {
             Ended::Stop => return,
             Ended::Unauthorized => {
+                tracing::info!(%workspace, "the server no longer accepts the session");
                 emit(&ctx, Input::SessionExpired).await;
                 return;
             }
@@ -184,6 +187,8 @@ async fn serve(
     if let Err(error) = send_subscribe(&mut sink, workspace, progress.cursor).await {
         return Ended::Closed(error);
     }
+    // The core has no clock: it is told the time before a batch of frames.
+    let mut last_clock: Option<std::time::Instant> = None;
     loop {
         tokio::select! {
             biased;
@@ -209,7 +214,12 @@ async fn serve(
                     let frame = match serde_json::from_str::<ServerFrame>(text.as_str()) {
                         Ok(frame) => frame,
                         Err(error) => {
-                            tracing::warn!(%error, "ignoring a realtime frame that could not be parsed");
+                            // The frame is not quoted: it can be a message.
+                            tracing::warn!(
+                                reason = %crate::api::describe_json(&error),
+                                bytes = text.len(),
+                                "ignoring a realtime frame that could not be parsed"
+                            );
                             continue;
                         }
                     };
@@ -220,13 +230,21 @@ async fn serve(
                         ServerFrame::CaughtUp { workspace_id, seq } if *workspace_id == workspace => {
                             progress.cursor = progress.cursor.max(*seq);
                             progress.caught_up = true;
+                            tracing::debug!(%workspace, seq = seq.get(), "caught up with the server");
                         }
                         ServerFrame::SnapshotRequired { workspace_id, .. }
                             if *workspace_id == workspace =>
                         {
+                            tracing::info!(%workspace, "the server needs a fresh snapshot");
                             progress.stale = true;
                         }
                         _ => {}
+                    }
+                    if last_clock.is_none_or(|at| at.elapsed() >= CLOCK_EVERY) {
+                        last_clock = Some(std::time::Instant::now());
+                        if !emit(ctx, Input::Clock(lazy_domain::Timestamp::now())).await {
+                            return Ended::Stop;
+                        }
                     }
                     if !emit(ctx, Input::Frame(frame)).await {
                         return Ended::Stop;
@@ -258,6 +276,9 @@ where
 }
 
 /// Delivers an input to the host. `false` means nobody is listening and the task should end.
+/// How long the time told to the core before one frame serves the frames after it.
+const CLOCK_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
 async fn emit(ctx: &Context, input: Input) -> bool {
     ctx.inputs.send(input).await.is_ok()
 }

@@ -36,6 +36,12 @@ secret_string!(
     /// A bearer token identifying a signed-in session. `Debug` never prints it.
     SessionToken
 );
+secret_string!(
+    /// The code that lets someone join a workspace (see `lazy_domain::workspace`). It is shown
+    /// once, when the invitation is created, and the server keeps only a hash. `Debug` never
+    /// prints it.
+    InviteCode
+);
 
 #[cfg(test)]
 mod tests {
@@ -48,5 +54,6 @@ mod tests {
             "Password(<redacted>)"
         );
         assert!(!format!("{:?}", SessionToken::new("abc123")).contains("abc123"));
+        assert!(!format!("{:?}", InviteCode::new("abc123")).contains("abc123"));
     }
 }

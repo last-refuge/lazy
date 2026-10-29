@@ -586,14 +586,25 @@ fn browsing_lists_public_channels_and_tracks_whether_they_are_joined() {
             joined: false,
         },
     ];
-    driver.send(Input::BrowseChannels);
-    let out = driver.send(Input::ActionResult {
-        kind: ActionKind::Browse,
-        result: Ok(lazy_client_core::ActionOutcome::Browse(listing)),
+    let out = driver.send(Input::BrowseChannels);
+    let generation = out
+        .effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::LoadBrowse { generation, .. } => Some(*generation),
+            _ => None,
+        })
+        .expect("the directory is asked for");
+    let out = driver.send(Input::BrowseLoaded {
+        generation,
+        result: Ok(lazy_protocol::BrowseChannelsResponse {
+            channels: listing,
+            has_more: false,
+        }),
     });
     assert!(out.changes.contains(&Change::BrowseChanged));
-    assert_eq!(driver.core.browse_results().len(), 2);
-    assert!(driver.core.can_join(&driver.core.browse_results()[1]));
+    assert_eq!(driver.core.browse().channels.len(), 2);
+    assert!(driver.core.can_join(&driver.core.browse().channels[1]));
 
     // Joining elsewhere (another device) flips the entry.
     driver.send(f.world.event_at(
@@ -603,8 +614,8 @@ fn browsing_lists_public_channels_and_tracks_whether_they_are_joined() {
             user_id: f.world.me.id,
         },
     ));
-    assert!(driver.core.browse_results()[1].joined);
-    assert!(!driver.core.can_join(&driver.core.browse_results()[1]));
+    assert!(driver.core.browse().channels[1].joined);
+    assert!(!driver.core.can_join(&driver.core.browse().channels[1]));
 
     // And being removed flips it back.
     driver.send(f.world.event_at(
@@ -614,5 +625,5 @@ fn browsing_lists_public_channels_and_tracks_whether_they_are_joined() {
             user_id: f.world.me.id,
         },
     ));
-    assert!(!driver.core.browse_results()[1].joined);
+    assert!(!driver.core.browse().channels[1].joined);
 }
