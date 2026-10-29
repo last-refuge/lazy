@@ -12,11 +12,16 @@ gh workflow run release -f version=0.5.0 -f publish=true
 you to read and publish. Without it the files are only the workflow run's artifacts. The server has
 its own workflow, `server` (`DEPLOY.md`).
 
-**Status.** The Linux files were built here and their contents checked (a `.deb` assembled with `ar`
-and `tar`, the tarball and its `install.sh` run into a temporary prefix). The macOS and Windows
-builds, the Windows installer, and the workflow itself have **never run**: the first run is their
-first test, and it may need a fix or two. The client has never been compiled for macOS or Windows
-before this, so expect the first run to find platform problems in the code, not only in the scripts.
+**Status.** Release 0.5.0 (2026-10-29) was built by this workflow on GitHub for all three platforms,
+and it took three runs. Checked: the Linux `.deb` installs on a clean Ubuntu 22.04 inside the job and
+every library resolves (`ldd`); the downloaded files were inspected (the `.deb`'s control file and
+contents, the Windows zip and the installer's executable type, the disk image's partition table) and
+their checksums match `SHA256SUMS`. The first macOS run built both architectures but failed making
+the disk image (`hdiutil create -srcfolder`: "No space left on device" with 43 GB free), so the image
+is now made at an explicit size (an empty image, mounted, filled, compressed). **Never checked:**
+the macOS app and the Windows installer on a real machine (that they start, show the icon, and what
+Gatekeeper and SmartScreen say), and the Linux package outside CI. Treat the first install on each
+system as their test and fix this page.
 
 ## What you get
 
