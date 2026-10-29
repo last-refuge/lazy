@@ -1,8 +1,7 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="branding/logos/horizontal/lazy-logo-paper.svg">
-    <img src="branding/logos/horizontal/lazy-logo-forest.svg" alt="Lazy" width="200">
-  </picture>
+  <!-- The fragments make GitHub pick by its own theme setting, not the browser's. -->
+  <img src="branding/logos/horizontal/lazy-logo-forest.svg#gh-light-mode-only" alt="Lazy" width="200">
+  <img src="branding/logos/horizontal/lazy-logo-paper.svg#gh-dark-mode-only" alt="Lazy" width="200">
 </p>
 
 # Lazy
