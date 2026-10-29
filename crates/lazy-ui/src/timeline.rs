@@ -3142,7 +3142,9 @@ impl TimelineView {
     fn empty_state(
         &self,
         which: &'static str,
+        heading: Option<&'static str>,
         text: impl Into<SharedString>,
+        mascot: Option<gpui::AnyElement>,
         theme: &Theme,
     ) -> gpui::AnyElement {
         let prefix = match self.mode {
@@ -3153,12 +3155,27 @@ impl TimelineView {
             .debug_selector(move || format!("{prefix}timeline-{which}"))
             .size_full()
             .flex()
+            .flex_col()
             .items_center()
             .justify_center()
+            .gap_2()
             .px_8()
-            .text_size(theme.type_scale.body)
-            .text_color(theme.colors.text_muted)
-            .child(text.into())
+            .text_center()
+            .children(mascot)
+            .children(heading.map(|heading| {
+                crate::fonts::heading(
+                    div()
+                        .text_size(theme.type_scale.title)
+                        .text_color(theme.colors.text)
+                        .child(heading),
+                )
+            }))
+            .child(
+                div()
+                    .text_size(theme.type_scale.body)
+                    .text_color(theme.colors.text_muted)
+                    .child(text.into()),
+            )
             .into_any_element()
     }
 }
@@ -3236,18 +3253,26 @@ impl Render for TimelineView {
                     core.conversation(id).map(|conversation| {
                         let title = core.conversation_title(id);
                         match conversation.kind {
-                            ConversationKind::Channel if conversation.archived => format!(
-                                "This is the beginning of #{title}. It is archived, so it is read-only."
+                            ConversationKind::Channel if conversation.archived => (
+                                None,
+                                format!(
+                                    "This is the beginning of #{title}. It is archived, so it is read-only."
+                                ),
                             ),
-                            ConversationKind::Channel => {
-                                format!("This is the beginning of #{title}. Say hello!")
-                            }
-                            ConversationKind::Direct => {
-                                format!("This is the start of your conversation with {title}. Say hello!")
-                            }
-                            ConversationKind::Group => {
-                                format!("This is the start of your group conversation with {title}. Say hello!")
-                            }
+                            ConversationKind::Channel => (
+                                Some("Start the conversation."),
+                                "Send the first message in this channel.".to_owned(),
+                            ),
+                            ConversationKind::Direct => (
+                                Some("Say hello."),
+                                format!("This is the start of your conversation with {title}."),
+                            ),
+                            ConversationKind::Group => (
+                                Some("Say hello."),
+                                format!(
+                                    "This is the start of your group conversation with {title}."
+                                ),
+                            ),
                         }
                     })
                 }
@@ -3258,9 +3283,15 @@ impl Render for TimelineView {
 
         let Some(scope) = scope else {
             return match self.mode {
-                Mode::Conversation => {
-                    self.empty_state("none-selected", "Pick a conversation to start.", &theme)
-                }
+                Mode::Conversation => self.empty_state(
+                    "none-selected",
+                    Some("A good place to start."),
+                    "Pick a conversation from the sidebar, or find your people and say hello.",
+                    // Moss welcomes the person here: this is not the message list.
+                    crate::brand::moss(cx, crate::brand::Moss::Welcome, 128.)
+                        .map(IntoElement::into_any_element),
+                    &theme,
+                ),
                 // No thread is open: the pane is not showing, so there is nothing to draw.
                 Mode::Thread => div().into_any_element(),
             };
@@ -3270,17 +3301,19 @@ impl Render for TimelineView {
                 Mode::Conversation => "Loading messages…",
                 Mode::Thread => "Loading the thread…",
             };
-            let (which, text) = match status {
+            let (which, heading, text) = match status {
                 Some(HistoryStatus::Failed { message }) => {
                     return self.failed_state(scope, &message, &theme);
                 }
-                Some(HistoryStatus::Ready { .. }) => (
-                    "empty",
-                    empty_text.unwrap_or_else(|| "Say hello!".to_owned()),
-                ),
-                _ => ("loading", loading.to_owned()),
+                Some(HistoryStatus::Ready { .. }) => {
+                    let (heading, text) = empty_text
+                        .unwrap_or_else(|| (Some("Say hello."), "Send the first message.".to_owned()));
+                    ("empty", heading, text)
+                }
+                _ => ("loading", None, loading.to_owned()),
             };
-            return self.empty_state(which, text, &theme);
+            // Never Moss here: this is the place of the message list.
+            return self.empty_state(which, heading, text, None, &theme);
         }
 
         let state = self.list_state(scope, cx);

@@ -193,11 +193,14 @@ pub fn search_error_text(error: &lazy_domain::search::SearchError) -> String {
     sentence(&capitalized)
 }
 
+/// The heading over a search that found nothing.
+pub const SEARCH_NO_RESULTS_TITLE: &str = "No messages found.";
+
 /// What a search with no results says, naming the filters that were in it (`from:alice`) so the
 /// person knows what to remove.
 pub fn search_no_results(typed: &str, filters: &[String]) -> String {
     let mut text = format!(
-        "No results for “{}”. Try fewer words, check spelling, or remove a filter.",
+        "Nothing matched “{}”. Try another word or change your filters.",
         typed.trim()
     );
     if !filters.is_empty() {
@@ -256,8 +259,15 @@ pub fn status_too_long(max: usize) -> String {
     format!("A status can be at most {max} characters.")
 }
 
+/// The line under the app's name on the sign-in screen.
+pub const BRAND_SUPPORT: &str = "A little less noise. A lot more human.";
+
+/// The heading of the empty thread inbox, whether the person follows no threads or has read them
+/// all.
+pub const INBOX_CAUGHT_UP: &str = "You're all caught up.";
+
 /// What the thread inbox says when the person follows no threads.
-pub const INBOX_EMPTY: &str = "You're not following any threads yet. You follow a thread when you reply to it, start it and someone replies, or are mentioned in it.";
+pub const INBOX_EMPTY: &str = "Replies to threads you follow will appear here. You follow a thread when you reply to it, start it and someone replies, or are mentioned in it.";
 
 /// What it says with "Unread" chosen and nothing is unread.
 pub const INBOX_NO_UNREAD: &str = "No unread threads.";
@@ -364,9 +374,12 @@ pub fn quick_hint() -> &'static str {
     }
 }
 
-/// What the saved list says when nothing is saved.
+/// The heading of the saved list when nothing is saved.
+pub const SAVED_EMPTY_TITLE: &str = "Nothing saved yet.";
+
+/// What it says under that heading.
 pub const SAVED_EMPTY: &str =
-    "Nothing saved yet. Choose \u{201c}Save for later\u{201d} on a message to keep it here.";
+    "Choose \u{201c}Save for later\u{201d} on a message to keep it here.";
 
 /// The headline over a first page of saved messages that failed.
 pub const SAVED_FAILED_TITLE: &str = "The saved messages didn't load";
@@ -493,8 +506,25 @@ pub const AVATAR_FORMATS: &str = "PNG, JPEG, WebP or GIF, up to 5 MB. It is crop
 pub const MOTION_NOTE: &str = "Reduced motion stops every animation. Lazy can't read the system's own setting yet, so \u{201c}System\u{201d} keeps animations on.";
 
 /// The register form's optional field, and what it says when the code was refused.
-pub const INVITE_CODE_LABEL: &str = "Invitation code (optional)";
+pub const INVITE_CODE_LABEL: &str = "Invitation or setup code (optional)";
 pub const INVITE_CODE_PLACEHOLDER: &str = "Paste the code you were given";
+/// Under the field: when a code is needed.
+pub const INVITE_CODE_HINT: &str =
+    "Needed on an invitation-only server, and for the first account on a new one.";
+
+/// The "Server" row of the sign-in, unreachable, and no-access screens.
+pub const SERVER_PLACEHOLDER: &str = "https://chat.example.com";
+pub const SERVER_CHECKING: &str = "Checking…";
+pub const SERVER_CONNECTED: &str = "Connected";
+pub const SERVER_UNREACHABLE: &str = "Can't reach this server.";
+pub const SERVER_NEEDS_NEWER: &str = "This server needs a newer Lazy.";
+pub const SERVER_NEEDS_OLDER: &str = "This server needs an older Lazy.";
+pub const SERVER_WAIT_SIGN_IN: &str = "Wait until sign-in has finished.";
+pub const SERVER_SIGN_OUT_FIRST: &str = "Sign out to choose another server.";
+pub const SERVER_REMOVES_SESSION: &str =
+    "Moving to another server removes this server's saved sign-in from this device.";
+pub const SERVER_LOCKED: &str =
+    "Set by LAZY_SERVER_URL, so it can't be changed here. Unset it to choose a server in the app.";
 
 /// What the screen of a person who lost access says.
 pub fn no_access_title(workspace: &str) -> String {
@@ -629,7 +659,7 @@ mod tests {
     fn no_results_says_what_to_try_and_names_the_filters() {
         assert_eq!(
             search_no_results(" deploy ", &[]),
-            "No results for “deploy”. Try fewer words, check spelling, or remove a filter."
+            "Nothing matched “deploy”. Try another word or change your filters."
         );
         let with = search_no_results(
             "deploy from:alice in:ops",

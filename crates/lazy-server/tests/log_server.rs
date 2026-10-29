@@ -75,6 +75,8 @@ async fn startup_logs_the_configuration_and_no_credential(
         connect_options.get_port(),
     );
     let mut config = Config::new("127.0.0.1:0".parse::<SocketAddr>().unwrap(), url);
+    config.setup_code = Some(lazy_server::SetupCode::new("SECRETSETUPCODE-startup-1").unwrap());
+    config.seed_registration = lazy_domain::workspace::RegistrationPolicy::InviteOnly;
     config.public_url =
         Some("https://svc:SECRETPUBLICPW@chat.example.com:8443/SECRETPREFIX?k=SECRETQ".to_owned());
     let scratch = tempfile::tempdir().unwrap();
@@ -82,6 +84,7 @@ async fn startup_logs_the_configuration_and_no_credential(
 
     // What `Debug` shows of the configuration is the same safe account.
     let shown = format!("{config:?}");
+    assert!(!shown.contains("SECRETSETUPCODE"), "{shown}");
     assert!(
         !shown.contains("SECRETDBPASSWORD") && !shown.contains("SECRETPUBLICPW"),
         "{shown}"
@@ -99,9 +102,22 @@ async fn startup_logs_the_configuration_and_no_credential(
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 
+    // The workspace the server seeded has the policy it was asked for.
+    let check = PgPoolOptions::new()
+        .connect_with(connect_options.clone())
+        .await
+        .unwrap();
+    let settings: serde_json::Value = sqlx::query_scalar("SELECT settings FROM workspaces")
+        .fetch_one(&check)
+        .await
+        .unwrap();
+    assert_eq!(settings["registration"], "invite_only");
+    check.close().await;
+
     let logs = logs();
     for secret in [
         "SECRETDBPASSWORD",
+        "SECRETSETUPCODE",
         "SECRETPUBLICPW",
         "SECRETPREFIX",
         "SECRETQ",
@@ -127,6 +143,15 @@ async fn startup_logs_the_configuration_and_no_credential(
     assert!(
         starting.contains("open_registration=true") && starting.contains("protocol_version="),
         "{starting}"
+    );
+    assert!(
+        starting.contains("setup_code_set=true")
+            && starting.contains("seed_registration=\"invite_only\""),
+        "{starting}"
+    );
+    assert!(
+        logs.contains("waiting for the first account: registration needs the setup code"),
+        "the server says what the first visitor will find"
     );
     let ready = logs
         .lines()

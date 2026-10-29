@@ -301,6 +301,10 @@ Goal: dogfood users can do normal work without developer assistance.
 - [ ] 3.8 Dogfooding
   - [X] Structured logging with no credentials or message content
   - [X] Dogfood guide (`llm-docs/DOGFOOD.md`) and issue template (`.github/ISSUE_TEMPLATE/dogfood.md`)
+  - [ ] Server container, Docker Compose, and Coolify deployment (written: Dockerfile, compose files, smoke test, `llm-docs/DEPLOY.md`; the smoke test passed against a locally started server, but the image build, the compose stack, and Coolify have never run)
+  - [ ] Client installers for Linux, macOS, and Windows from the manual `release` workflow (written: `.deb`, tarball, `.dmg`, Windows installer and zip, `llm-docs/RELEASE.md`; the Linux packages were assembled and inspected here, the macOS and Windows builds and the workflow have never run)
+  - [ ] Choose the server in the app, so installed clients need no environment variable (written, not compiled or tested)
+  - [ ] Apply the Soft Signal brand to the client and the packages (written, not compiled or rendered: `llm-docs/DECISIONS.md` D26)
   - [ ] Onboard dogfood users
   - [ ] Track and triage issues from real use
 - [ ] 3.9 Phase gate

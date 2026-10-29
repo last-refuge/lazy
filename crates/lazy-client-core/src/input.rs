@@ -716,6 +716,32 @@ pub enum Input {
         generation: u64,
         result: Result<InvitationList, RequestError>,
     },
+
+    // ----- Choosing the server -----
+    /// Use the server at this address (what the person typed). Only while signed out (or when a
+    /// stored session could not be loaded): otherwise ignored with a notice, as it is when the
+    /// environment locked the address (`ClientCore::server().locked()`). The address is
+    /// normalised (`normalize_server_url`); one that cannot be an address leaves the server in
+    /// use alone and says why in `server().check`. Otherwise it is checked; the first answer
+    /// that is a compatible Lazy server saves it and moves to it (`server().url`), with the
+    /// state of that server as of a first run; any other leaves it as `server().trying`.
+    SetServerUrl(String),
+    /// Ask the address on screen (`server().trying`, else `server().url`) again. Harmless to
+    /// repeat while that is already being asked. If the server in use answers while a stored
+    /// session waits (`SessionPhase::Unreachable`), the load is tried again.
+    CheckServer,
+    /// The runtime asked an address (`Effect::CheckServer`): the protocol version it speaks, or
+    /// a short phrase for why nothing usable answered.
+    ServerChecked {
+        generation: u64,
+        result: Result<u32, String>,
+    },
+    /// The runtime saved the address and moved to it (`Effect::UseServer`), with what it loaded
+    /// for that server as `Started` carries it; or could not, for the phrase given.
+    ServerSwitched {
+        generation: u64,
+        result: Result<Box<StartupState>, String>,
+    },
 }
 
 /// Lifecycle of one workspace's realtime connection.

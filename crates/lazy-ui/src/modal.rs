@@ -18,8 +18,8 @@
 //! pre-edit text), so a dialog must not dismiss then: check [`ModalTrap::dismiss_allowed`].
 
 use gpui::{
-    AnyElement, App, Div, FocusHandle, FontWeight, InteractiveElement, KeyBinding, MouseButton,
-    ParentElement, SharedString, Styled, Window, actions, div, prelude::*, px,
+    AnyElement, App, Div, FocusHandle, InteractiveElement, KeyBinding, MouseButton, ParentElement,
+    SharedString, Styled, Window, actions, div, prelude::*, px,
 };
 
 use crate::theme::Theme;
@@ -196,13 +196,12 @@ pub fn dialog_overlay(
                         .px_5()
                         .pt_4()
                         .pb_2()
-                        .child(
+                        .child(crate::fonts::heading(
                             div()
                                 .text_size(theme.type_scale.title)
-                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(colors.text)
                                 .child(title.into()),
-                        )
+                        ))
                         .child(
                             div()
                                 .id("dialog-close")

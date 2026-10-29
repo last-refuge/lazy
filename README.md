@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="branding/logos/horizontal/lazy-logo-paper.svg">
+    <img src="branding/logos/horizontal/lazy-logo-forest.svg" alt="Lazy" width="200">
+  </picture>
+</p>
+
 # Lazy
 
 A native, Slack-familiar workplace chat application written in Rust: a GPUI desktop client, an Axum and Postgres server, and a shared client core meant to be reused by future phone clients.
@@ -37,6 +44,15 @@ scripts/run-client.sh bob
 In each window choose **Create account**, register a different name, and open `#general`. Messages sent in one window appear in the other. The first account to register becomes the workspace owner.
 
 Profiles live in `.dev/profiles/<name>`. Delete a profile directory to start fresh, and run `scripts/dev-db.sh reset` to wipe the dev database. If your machine has no Secret Service keyring, set `LAZY_INSECURE_STORAGE=1` to keep the session in plain files inside the profile (development only).
+
+## Install and deploy
+
+For real use rather than development: the server runs as a container with its Postgres (Docker
+Compose on any machine, or Coolify), and the client installs from a package for Linux (`.deb` or
+tarball), macOS (`.dmg`), or Windows (installer or zip), chosen from the sign-in screen's **Server**
+row. `llm-docs/DEPLOY.md` covers the server (including the setup code that stops a stranger from
+becoming the owner), `llm-docs/RELEASE.md` the client packages and how to build them (a manual GitHub
+workflow, `release`), and `llm-docs/DOGFOOD.md` how to start using it with a few people.
 
 ## What to try, and what to look for
 

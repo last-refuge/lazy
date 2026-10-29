@@ -1,0 +1,52 @@
+# Lazy on Coolify: New Resource, Public/Private Repository, Build Pack "Docker Compose", base
+# directory "/", compose file "/deploy/coolify/docker-compose.yaml". Coolify fills in the domain, the
+# TLS certificate, the database password, and the setup code (the SERVICE_* names below); open the
+# resource's Environment Variables to read the setup code, and see llm-docs/DEPLOY.md for the rest.
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lazy
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+      POSTGRES_DB: lazy
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lazy -d lazy"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  lazy:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Gives the service a domain (editable in Coolify) routed to port 8080, with HTTPS and WebSockets.
+      - SERVICE_URL_LAZY_8080
+      - DATABASE_URL=postgres://lazy:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/lazy
+      - LAZY_PUBLIC_URL=${SERVICE_URL_LAZY}
+      - LAZY_SETUP_CODE=${SERVICE_PASSWORD_SETUPCODE}
+      - LAZY_SEED_REGISTRATION=${LAZY_SEED_REGISTRATION:-invite_only}
+      - LAZY_OPEN_WORKSPACE_CREATION=${LAZY_OPEN_WORKSPACE_CREATION:-true}
+      - LAZY_EVENT_RETENTION_DAYS=${LAZY_EVENT_RETENTION_DAYS:-30}
+      - LAZY_MAX_ATTACHMENT_BYTES=${LAZY_MAX_ATTACHMENT_BYTES:-26214400}
+      - LAZY_LOG=${LAZY_LOG:-info,sqlx=warn}
+      - LAZY_LOG_FORMAT=${LAZY_LOG_FORMAT:-text}
+    volumes:
+      - attachments:/data/attachments
+    healthcheck:
+      test: ["CMD", "lazy-server", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  pgdata:
+  attachments:

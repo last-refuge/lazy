@@ -472,4 +472,17 @@ pub enum Effect {
     },
     /// The attention count changed (the launcher badge, the window title). Platform only.
     SetBadge(u32),
+    /// Ask a server (`GET /healthz`, a short timeout, no redirect to another host) which protocol
+    /// it speaks. Answered by `ServerChecked`, echoing `generation`.
+    CheckServer {
+        url: String,
+        generation: u64,
+    },
+    /// Move to this server, which passed the check: save the address, delete the local state and
+    /// the secrets of the server left, point requests and realtime connections at the new one,
+    /// and load what that server's profile holds. Answered by `ServerSwitched`.
+    UseServer {
+        url: String,
+        generation: u64,
+    },
 }

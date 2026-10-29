@@ -127,6 +127,18 @@ impl<T> Debug for ResReq<'_, T> {
     }
 }
 
+/// A result whose success is only named and whose failure is a phrase (shown as its length).
+pub(crate) struct ResText<'a, T>(pub &'a Result<T, String>, pub &'static str);
+
+impl<T> Debug for ResText<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Ok(_) => write!(f, "Ok(<{}>)", self.1),
+            Err(why) => write!(f, "Err(<{} chars>)", why.chars().count()),
+        }
+    }
+}
+
 pub(crate) struct ResXfer<'a, T>(pub &'a Result<T, TransferError>, pub &'static str);
 
 impl<T> Debug for ResXfer<'_, T> {
@@ -227,6 +239,7 @@ impl Debug for crate::model::StartupState {
             .field("appearance", &self.appearance)
             .field("active_workspace", &self.active_workspace)
             .field("problems", &Count("texts", self.problems.len()))
+            .field("server", &Named("ServerInfo"))
             .finish()
     }
 }

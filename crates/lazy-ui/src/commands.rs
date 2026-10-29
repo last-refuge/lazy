@@ -136,7 +136,7 @@ const REGISTRY: &[Command] = &[
         "Command palette…",
         Some("secondary-shift-p"),
     ),
-    command(C::Search, G::Go, "Search…", Some("secondary-f")),
+    command(C::Search, G::Go, "Search messages", Some("secondary-f")),
     command(C::Threads, G::Go, "Threads", Some("secondary-shift-t")),
     command(C::Saved, G::Go, "Saved messages", Some("secondary-shift-s")),
     command(C::People, G::Go, "People", Some("secondary-shift-e")),

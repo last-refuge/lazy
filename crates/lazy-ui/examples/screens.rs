@@ -1616,6 +1616,44 @@ fn diagnostics_setup(
     }
 }
 
+/// The runtime's answer to the latest check of a server's address.
+fn answer_server(
+    cx: &mut HeadlessAppContext,
+    model: &Entity<AppModel>,
+    rec: &Recorder,
+    result: Result<u32, String>,
+) {
+    let generation = rec
+        .0
+        .borrow()
+        .iter()
+        .rev()
+        .find_map(|effect| match effect {
+            Effect::CheckServer { generation, .. } => Some(*generation),
+            _ => None,
+        })
+        .expect("the server row asked what the server is");
+    dispatch(cx, model, Input::ServerChecked { generation, result });
+}
+
+/// A stored session whose server did not answer: the unreachable screen.
+fn unreachable_session(cx: &mut HeadlessAppContext, model: &Entity<AppModel>, rec: &Recorder) {
+    dispatch(
+        cx,
+        model,
+        Input::Started(StartupState {
+            session_restored: true,
+            ..Default::default()
+        }),
+    );
+    dispatch(
+        cx,
+        model,
+        Input::BootstrapFailed(RequestError::Unknown("timed out".into())),
+    );
+    let _ = rec;
+}
+
 // ---- Slice 3F: workspace administration ----
 
 fn minutes(count: i64) -> Timestamp {
@@ -3144,7 +3182,7 @@ fn theme_switch_scene(out: &std::path::Path) {
     use gpui::Keystroke;
 
     let mut cx = HeadlessAppContext::with_platform(
-        Arc::new(gpui_wgpu::CosmicTextSystem::new("IBM Plex Sans")),
+        Arc::new(gpui_wgpu::CosmicTextSystem::new("DM Sans")),
         Arc::new(()),
         gpui_platform::current_headless_renderer,
     );
@@ -3660,7 +3698,7 @@ fn gallery_scene(
     height: f32,
 ) {
     let mut cx = HeadlessAppContext::with_platform(
-        Arc::new(gpui_wgpu::CosmicTextSystem::new("IBM Plex Sans")),
+        Arc::new(gpui_wgpu::CosmicTextSystem::new("DM Sans")),
         Arc::new(()),
         gpui_platform::current_headless_renderer,
     );
@@ -8831,6 +8869,318 @@ fn main() {
                 open_dialog(cx, win, ShellDialog::Diagnostics);
             },
         },
+        // ---- The server row (dogfood packaging) ----
+        Scene {
+            name: "srv-01-signin-connected-light",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, _, cx, rec, win| {
+                dispatch(cx, model, Input::Started(StartupState::default()));
+                draw(cx, win);
+                answer_server(cx, model, rec, Ok(lazy_protocol::PROTOCOL_VERSION));
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "srv-02-signin-changing-dark",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, _, cx, rec, win| {
+                dispatch(cx, model, Input::Started(StartupState::default()));
+                draw(cx, win);
+                answer_server(cx, model, rec, Ok(lazy_protocol::PROTOCOL_VERSION));
+                // Username, password, Sign in, Create an account, then Change….
+                press(cx, win, "tab tab tab tab enter");
+            },
+        },
+        Scene {
+            name: "srv-03-signin-checking-light",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, _, cx, rec, win| {
+                dispatch(cx, model, Input::Started(StartupState::default()));
+                draw(cx, win);
+                answer_server(cx, model, rec, Ok(lazy_protocol::PROTOCOL_VERSION));
+                press(cx, win, "tab tab tab tab enter ctrl-a backspace");
+                type_text(cx, win, "chat.example.com");
+                press(cx, win, "enter");
+            },
+        },
+        Scene {
+            name: "srv-04-signin-unreachable-dark",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, _, cx, rec, win| {
+                dispatch(cx, model, Input::Started(StartupState::default()));
+                draw(cx, win);
+                answer_server(cx, model, rec, Ok(lazy_protocol::PROTOCOL_VERSION));
+                press(cx, win, "tab tab tab tab enter ctrl-a backspace");
+                type_text(cx, win, "chat.example.com");
+                press(cx, win, "enter");
+                answer_server(cx, model, rec, Err("timed out".into()));
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "srv-05-signin-incompatible-light",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, _, cx, rec, win| {
+                dispatch(cx, model, Input::Started(StartupState::default()));
+                draw(cx, win);
+                answer_server(cx, model, rec, Ok(lazy_protocol::PROTOCOL_VERSION + 1));
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "srv-06-signin-locked-dark",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, _, cx, rec, win| {
+                dispatch(
+                    cx,
+                    model,
+                    Input::Started(StartupState {
+                        server: lazy_client_core::ServerInfo {
+                            url: "http://127.0.0.1:8080".into(),
+                            source: lazy_client_core::ServerSource::Environment,
+                            trying: None,
+                            check: lazy_client_core::ServerCheck::Unchecked,
+                        },
+                        ..Default::default()
+                    }),
+                );
+                draw(cx, win);
+                answer_server(cx, model, rec, Err("connection failed".into()));
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "srv-07-register-hint-light",
+            width: 1100.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, _, cx, rec, win| {
+                dispatch(cx, model, Input::Started(StartupState::default()));
+                draw(cx, win);
+                answer_server(cx, model, rec, Ok(lazy_protocol::PROTOCOL_VERSION));
+                press(cx, win, "tab tab tab enter");
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "srv-08-unreachable-light",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, _, cx, rec, win| {
+                unreachable_session(cx, model, rec);
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "srv-09-unreachable-changing-dark",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, _, cx, rec, win| {
+                unreachable_session(cx, model, rec);
+                draw(cx, win);
+                press(cx, win, "tab enter");
+            },
+        },
+        Scene {
+            name: "srv-10-no-access-light",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                dispatch(
+                    cx,
+                    model,
+                    Input::Started(StartupState {
+                        session_restored: true,
+                        ..Default::default()
+                    }),
+                );
+                let mut bootstrap = cast.bootstrap();
+                bootstrap.workspaces.clear();
+                dispatch(cx, model, Input::BootstrapLoaded(Box::new(bootstrap)));
+                let _ = rec;
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "srv-11-register-checking-narrow-light",
+            width: 640.0,
+            height: 480.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, _, cx, rec, win| {
+                dispatch(cx, model, Input::Started(StartupState::default()));
+                draw(cx, win);
+                press(cx, win, "tab tab tab enter");
+                let _ = rec;
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "srv-12-signin-changing-narrow-light",
+            width: 640.0,
+            height: 480.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, _, cx, rec, win| {
+                dispatch(cx, model, Input::Started(StartupState::default()));
+                draw(cx, win);
+                answer_server(cx, model, rec, Err("timed out".into()));
+                press(cx, win, "tab tab tab tab enter");
+            },
+        },
+        Scene {
+            name: "srv-13-unreachable-narrow-dark",
+            width: 640.0,
+            height: 480.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, _, cx, rec, win| {
+                unreachable_session(cx, model, rec);
+                draw(cx, win);
+                press(cx, win, "tab enter");
+            },
+        },
+        // ---- The brand (Soft Signal 1.0.0): logo, Moss, palette, fonts ----
+        Scene {
+            name: "brand-01-signin-light",
+            width: 1100.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, _, cx, rec, win| {
+                dispatch(cx, model, Input::Started(StartupState::default()));
+                draw(cx, win);
+                answer_server(cx, model, rec, Ok(lazy_protocol::PROTOCOL_VERSION));
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "brand-02-signin-dark",
+            width: 1100.0,
+            height: 800.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, _, cx, rec, win| {
+                dispatch(cx, model, Input::Started(StartupState::default()));
+                draw(cx, win);
+                answer_server(cx, model, rec, Ok(lazy_protocol::PROTOCOL_VERSION));
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "brand-03-register-light",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, _, cx, rec, win| {
+                dispatch(cx, model, Input::Started(StartupState::default()));
+                draw(cx, win);
+                answer_server(cx, model, rec, Ok(lazy_protocol::PROTOCOL_VERSION));
+                press(cx, win, "tab tab tab enter");
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "brand-04-welcome-moss-light",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, _, win| {
+                dispatch(
+                    cx,
+                    model,
+                    Input::Started(StartupState {
+                        session_restored: true,
+                        ..Default::default()
+                    }),
+                );
+                let mut bootstrap = cast.bootstrap();
+                bootstrap.workspaces[0].conversations.clear();
+                bootstrap.workspaces[0].user_state.clear();
+                dispatch(cx, model, Input::BootstrapLoaded(Box::new(bootstrap)));
+                dispatch(cx, model, Input::Clock(Timestamp::now()));
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "brand-05-inbox-caught-up-moss-dark",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                inbox_scene(cx, model, rec, win, vec![], false);
+            },
+        },
+        Scene {
+            name: "brand-06-saved-empty-moss-light",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                saved_scene(
+                    cx,
+                    model,
+                    rec,
+                    win,
+                    Ok(lazy_protocol::SavedPage {
+                        items: Vec::new(),
+                        has_more: false,
+                    }),
+                );
+            },
+        },
+        Scene {
+            name: "brand-07-main-light",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, _win| {
+                cast.more_workspaces.set(true);
+                reach_chat(cx, model, cast, rec, true);
+            },
+        },
+        Scene {
+            name: "brand-08-main-dark",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, _win| {
+                cast.more_workspaces.set(true);
+                reach_chat(cx, model, cast, rec, true);
+            },
+        },
+        Scene {
+            name: "brand-09-add-workspace-moss-light",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                open_dialog(cx, win, ShellDialog::AddWorkspace);
+            },
+        },
+        Scene {
+            name: "brand-10-unreachable-dark",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, _, cx, rec, win| {
+                unreachable_session(cx, model, rec);
+                draw(cx, win);
+            },
+        },
     ];
 
     for scene in scenes {
@@ -8841,7 +9191,7 @@ fn main() {
             continue;
         }
         let mut cx = HeadlessAppContext::with_platform(
-            Arc::new(gpui_wgpu::CosmicTextSystem::new("IBM Plex Sans")),
+            Arc::new(gpui_wgpu::CosmicTextSystem::new("DM Sans")),
             Arc::new(()),
             gpui_platform::current_headless_renderer,
         );

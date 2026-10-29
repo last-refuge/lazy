@@ -6,16 +6,20 @@ use std::time::Duration;
 
 use crate::secure::SecureStorage;
 
-/// Server used when `LAZY_SERVER_URL` is not set.
-pub const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8080";
+/// Server used when neither `LAZY_SERVER_URL` nor the person has chosen one.
+pub const DEFAULT_SERVER_URL: &str = lazy_client_core::DEFAULT_SERVER_URL;
 
 /// The server base URL from `LAZY_SERVER_URL`, or [`DEFAULT_SERVER_URL`].
 pub fn default_server_url() -> String {
+    environment_server_url().unwrap_or_else(|| DEFAULT_SERVER_URL.to_owned())
+}
+
+/// `LAZY_SERVER_URL`, if it is set to something.
+fn environment_server_url() -> Option<String> {
     std::env::var("LAZY_SERVER_URL")
         .ok()
         .map(|url| url.trim().to_owned())
         .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| DEFAULT_SERVER_URL.to_owned())
 }
 
 /// Where the session token and the file-encryption key are kept.
@@ -67,6 +71,11 @@ impl BackoffPolicy {
 pub struct RuntimeConfig {
     /// Base URL of the Lazy server. Defaults from `LAZY_SERVER_URL`.
     pub server_url: String,
+    /// `server_url` was set explicitly (by the environment, or by whoever started the runtime):
+    /// it wins over a server the person chose in the application, and the application cannot
+    /// change it. When `false`, a saved choice (`server.json` in the profile) wins over
+    /// `server_url`, which is then only the default.
+    pub server_locked: bool,
     /// Directory for encrypted local state. `None` uses `LAZY_PROFILE_DIR`, then the platform's
     /// per-user data directory. Use a distinct directory per account or test client.
     pub profile_dir: Option<PathBuf>,
@@ -87,6 +96,7 @@ impl RuntimeConfig {
     pub fn new(server_url: impl Into<String>) -> Self {
         Self {
             server_url: server_url.into(),
+            server_locked: true,
             ..Self::default()
         }
     }
@@ -95,8 +105,10 @@ impl RuntimeConfig {
     /// `LAZY_INSECURE_STORAGE=1` (explicit opt-in to [`SecureStorageChoice::InsecureFile`]).
     pub fn from_env() -> Self {
         let insecure = std::env::var("LAZY_INSECURE_STORAGE").is_ok_and(|v| v == "1");
+        let environment = environment_server_url();
         Self {
-            server_url: default_server_url(),
+            server_locked: environment.is_some(),
+            server_url: environment.unwrap_or_else(|| DEFAULT_SERVER_URL.to_owned()),
             profile_dir: None,
             secure_storage: if insecure {
                 SecureStorageChoice::InsecureFile

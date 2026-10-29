@@ -42,10 +42,12 @@ impl TextInputStyle {
 impl Default for TextInputStyle {
     fn default() -> Self {
         Self {
-            text_color: rgb(0x2b2622).into(),
-            placeholder_color: rgb(0x6f665d).into(),
-            selection_color: rgba(0x2f6fed40).into(),
-            caret_color: rgb(0x2b2622).into(),
+            // The brand's light palette (Forest text, muted placeholder, Sage selection), for an
+            // input that is not themed.
+            text_color: rgb(0x183f35).into(),
+            placeholder_color: rgb(0x50655a).into(),
+            selection_color: rgba(0xa9c3a0ff).into(),
+            caret_color: rgb(0x183f35).into(),
             font_size: px(15.),
             line_height: px(22.),
             padding_x: px(0.),

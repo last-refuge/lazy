@@ -12,6 +12,24 @@ use crate::model::{ConnectionState, RequestError, SessionPhase};
 
 use super::ClientCore;
 
+/// Where the server's address came from and what the last check found, in fixed words.
+fn server_text(server: &crate::server::ServerInfo) -> String {
+    use crate::server::{ServerCheck, ServerSource};
+    let source = match server.source {
+        ServerSource::Default => "default",
+        ServerSource::Saved => "saved",
+        ServerSource::Environment => "environment",
+    };
+    let check = match &server.check {
+        ServerCheck::Unchecked => "unchecked",
+        ServerCheck::Checking => "checking",
+        ServerCheck::Reachable { .. } => "reachable",
+        ServerCheck::Incompatible { .. } => "incompatible",
+        ServerCheck::Unreachable(_) => "unreachable",
+    };
+    format!("{source}, {check}")
+}
+
 /// A short word for a connection state.
 pub(super) fn connection_text(state: ConnectionState) -> String {
     match state {
@@ -56,6 +74,7 @@ impl ClientCore {
             protocol_version: PROTOCOL_VERSION,
             phase: phase.to_owned(),
             connection: connection_text(self.connection),
+            server: server_text(&self.server),
             workspaces,
             conversations,
             unsettled_operations: self.unsettled_operations(),

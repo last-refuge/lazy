@@ -1,14 +1,14 @@
 //! The window's root: chooses what to show for the current session phase.
 
 use gpui::{
-    AnyElement, Context, Entity, FocusHandle, FontWeight, IntoElement, Render, Window, div,
-    prelude::*, px,
+    AnyElement, Context, Entity, FocusHandle, IntoElement, Render, Window, div, prelude::*, px,
 };
 use lazy_client_core::{Input, SessionPhase};
 
 use crate::app_model::AppModel;
 use crate::fonts;
 use crate::form::{self, ButtonKind};
+use crate::server_row::ServerRow;
 use crate::shell::ShellView;
 use crate::sign_in::SignInView;
 use crate::theme::Theme;
@@ -26,6 +26,8 @@ pub struct RootView {
     check_focus: FocusHandle,
     sign_out_focus: FocusHandle,
     sign_out_focused: bool,
+    /// The server row of the unreachable and no-access screens (D25).
+    server_row: Entity<ServerRow>,
 }
 
 impl RootView {
@@ -34,6 +36,7 @@ impl RootView {
         let appearance = model.read(cx).core().appearance();
         crate::theme::apply_appearance(cx, appearance);
         let sign_in = cx.new(|cx| SignInView::new(model.clone(), window, cx));
+        let server_row = cx.new(|cx| ServerRow::new(model.clone(), window, cx));
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
         Self {
             model,
@@ -44,6 +47,18 @@ impl RootView {
             check_focus: cx.focus_handle().tab_stop(true),
             sign_out_focus: cx.focus_handle().tab_stop(true),
             sign_out_focused: false,
+            server_row,
+        }
+    }
+
+    /// The "Server" row of the screen showing it: the form's, the unreachable screen's, or the
+    /// no-access screen's. For tests.
+    pub fn server_row(&self, cx: &gpui::App) -> Entity<ServerRow> {
+        match self.model.read(cx).core().phase() {
+            SessionPhase::SignedOut { .. } | SessionPhase::SigningIn => {
+                self.sign_in.read(cx).server_row().clone()
+            }
+            _ => self.server_row.clone(),
         }
     }
 
@@ -52,7 +67,14 @@ impl RootView {
         self.shell.as_ref()
     }
 
-    fn splash(theme: &Theme, headline: &str, detail: Option<String>) -> gpui::Div {
+    /// A screen that is one message: the logo, a heading (in the brand's heading face), and a line
+    /// under it. Moss is not here: these are loading, outage, and access screens.
+    fn splash(
+        theme: &Theme,
+        logo: Option<gpui::Stateful<gpui::Div>>,
+        headline: &str,
+        detail: Option<String>,
+    ) -> gpui::Div {
         div()
             .size_full()
             .bg(theme.colors.surface)
@@ -61,13 +83,13 @@ impl RootView {
             .items_center()
             .justify_center()
             .gap_2()
-            .child(
+            .children(logo.map(|logo| div().pb_4().child(logo)))
+            .child(crate::fonts::heading(
                 div()
                     .text_size(theme.type_scale.heading)
-                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.colors.text)
                     .child(headline.to_owned()),
-            )
+            ))
             .children(detail.map(|detail| {
                 div()
                     .max_w(px(420.))
@@ -105,7 +127,12 @@ impl RootView {
                 crate::states::NO_WORKSPACE_DETAIL,
             ),
         };
-        Self::splash(theme, &title, Some(detail.to_owned()))
+        Self::splash(
+            theme,
+            crate::brand::logo(cx, 160.),
+            &title,
+            Some(detail.to_owned()),
+        )
             .id("no-access")
             .debug_selector(|| "no-access".into())
             // Tab moves between the two buttons, as it does on the sign-in form.
@@ -158,7 +185,13 @@ impl RootView {
                         },
                     )),
             )
+            .child(self.server_section())
             .into_any_element()
+    }
+
+    /// The "Server" row under the buttons of the unreachable and no-access screens.
+    fn server_section(&self) -> gpui::Div {
+        div().mt_6().w(px(360.)).child(self.server_row.clone())
     }
 
     fn unreachable_screen(
@@ -174,7 +207,24 @@ impl RootView {
             window.focus(&self.retry_focus, cx);
         }
         let this = cx.entity().downgrade();
-        Self::splash(theme, "Can't reach the server", Some(message))
+        Self::splash(
+            theme,
+            crate::brand::logo(cx, 160.),
+            "Can't reach the server",
+            Some(message),
+        )
+            // Tab moves between "Try again" and the server row, as it does on the sign-in form.
+            .key_context(crate::keyboard::SHELL_CONTEXT)
+            .on_action(
+                cx.listener(|_, _: &crate::keyboard::FocusNextControl, window, cx| {
+                    window.focus_next(cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|_, _: &crate::keyboard::FocusPrevControl, window, cx| {
+                    window.focus_prev(cx)
+                }),
+            )
             .child(div().mt_3().child(form::button(
                 theme,
                 "retry-load",
@@ -190,6 +240,7 @@ impl RootView {
                     .ok();
                 },
             )))
+            .child(self.server_section())
             .into_any_element()
     }
 }
@@ -221,7 +272,13 @@ impl Render for RootView {
 
         let content = match phase {
             SessionPhase::Loading => {
-                Self::splash(&theme, "Lazy", Some("Loading…".into())).into_any_element()
+                Self::splash(
+                    &theme,
+                    crate::brand::logo(cx, 160.),
+                    "Lazy",
+                    Some("Loading…".into()),
+                )
+                .into_any_element()
             }
             SessionPhase::SignedOut { .. } | SessionPhase::SigningIn => {
                 self.sign_in.clone().into_any_element()

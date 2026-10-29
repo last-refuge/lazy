@@ -109,6 +109,29 @@ fn typed_inputs(world: &World, conversation: ConversationId) -> Vec<(&'static st
             },
         ),
         ("RunSearch", Input::RunSearch),
+        (
+            "SetServerUrl",
+            Input::SetServerUrl(format!(
+                "https://{}:{}@host.example",
+                typed("user"),
+                typed("pw")
+            )),
+        ),
+        ("CheckServer", Input::CheckServer),
+        (
+            "ServerChecked",
+            Input::ServerChecked {
+                generation: 1,
+                result: Err(typed("why")),
+            },
+        ),
+        (
+            "ServerSwitched",
+            Input::ServerSwitched {
+                generation: 1,
+                result: Err(typed("why")),
+            },
+        ),
         ("SetStatus", Input::SetStatus(Some(status))),
         ("SetPeopleQuery", Input::SetPeopleQuery(typed("people"))),
         (
@@ -371,6 +394,77 @@ fn a_loaded_conversation_prints_no_message_text() {
         assert_quiet("a content cache", &format!("{cache:?}"));
     }
     assert_quiet("the diagnostics", &driver.core.diagnostics().report());
+}
+
+#[test]
+fn the_server_choice_prints_no_address_and_nothing_typed_into_it() {
+    let mut driver = Driver::new();
+    driver.send(Input::Started(StartupState::default()));
+    // An address that is accepted holds the words; it is asked, and no print of it shows them.
+    let address = format!("{}.example.com", typed("chat"));
+    let typed_input = Input::SetServerUrl(address);
+    assert_quiet("a typed address", &format!("{typed_input:?}"));
+    let out = driver.send(typed_input);
+    let asked: Vec<_> = out
+        .effects
+        .iter()
+        .filter(|effect| matches!(effect, Effect::CheckServer { .. }))
+        .collect();
+    assert_eq!(asked.len(), 1, "the address was asked about");
+    for effect in &out.effects {
+        assert_quiet("the check", &format!("{effect:?}"));
+    }
+    assert_quiet("the output", &format!("{out:?}"));
+    assert!(
+        format!("{:?}", asked[0]).contains("<redacted"),
+        "{:?}",
+        asked[0]
+    );
+    // The core's own view of it is readable by the screen but not by a log of the core's inputs.
+    assert!(
+        driver
+            .core
+            .server()
+            .trying
+            .as_deref()
+            .is_some_and(|url| url.contains("quokka"))
+    );
+    assert_quiet("the diagnostics", &driver.core.diagnostics().report());
+    // The same for the effect that moves, and for the state the move carries.
+    let Effect::CheckServer { generation, .. } = asked[0] else {
+        unreachable!()
+    };
+    let out = driver.send(Input::ServerChecked {
+        generation: *generation,
+        result: Ok(lazy_protocol::PROTOCOL_VERSION),
+    });
+    assert!(
+        out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::UseServer { .. }))
+    );
+    for effect in &out.effects {
+        assert_quiet("the move", &format!("{effect:?}"));
+    }
+    let switched = Input::ServerSwitched {
+        generation: *generation,
+        result: Ok(Box::new(StartupState {
+            server: lazy_client_core::ServerInfo {
+                url: format!("https://{}.example.com", typed("chat")),
+                ..Default::default()
+            },
+            ..Default::default()
+        })),
+    };
+    assert_quiet("the switched input", &format!("{switched:?}"));
+    let started = Input::Started(StartupState {
+        server: lazy_client_core::ServerInfo {
+            url: format!("https://{}.example.com", typed("chat")),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    assert_quiet("the started input", &format!("{started:?}"));
 }
 
 #[test]

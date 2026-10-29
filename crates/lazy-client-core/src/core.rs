@@ -21,8 +21,9 @@ use crate::input::{Input, SocketEvent};
 use crate::model::{
     ActionKind, ActionState, ConnectionState, Delivery, EditState, EmojiPrefs, HistoryStatus,
     ItemKey, JournalEntry, JournalKind, JumpTarget, RequestError, RetryKind, SessionPhase,
-    TimelineItem, UNKNOWN_MEMBER_NAME, WorkspaceInfo,
+    StartupState, TimelineItem, UNKNOWN_MEMBER_NAME, WorkspaceInfo,
 };
+use crate::server::ServerInfo;
 use crate::timeline::{DeletedRoot, Timeline};
 use threads::Home;
 
@@ -41,6 +42,7 @@ mod permalink;
 mod reactions;
 mod readstate;
 mod search;
+mod server;
 mod switcher;
 mod threads;
 mod view;
@@ -270,6 +272,10 @@ pub struct ClientCore {
     appearance: crate::workspaces::Appearance,
     /// The last few errors, by category and code only (see `diagnostics`).
     recent_errors: diagnostics::RecentErrors,
+    /// The server in use, and what is known about it (slice: dogfood packaging).
+    server: ServerInfo,
+    server_job: Option<server::ServerJob>,
+    server_generation: u64,
     /// A bootstrap has been applied in this run, so the person's notification settings are the
     /// server's (the cache does not hold them).
     settings_known: bool,
@@ -295,6 +301,9 @@ impl Default for ClientCore {
         Self::new()
     }
 }
+
+/// Said when a person signs in while an address they typed has not been checked and moved to.
+const SERVER_UNSETTLED: &str = "Check the server address first.";
 
 impl ClientCore {
     /// A core waiting for the runtime's `Input::Started`.
@@ -376,6 +385,9 @@ impl ClientCore {
             admin: admin::Administration::default(),
             appearance: crate::workspaces::Appearance::default(),
             recent_errors: diagnostics::RecentErrors::new(),
+            server: ServerInfo::default(),
+            server_job: None,
+            server_generation: 0,
             settings_known: false,
             active: None,
             scope: None,
@@ -533,6 +545,14 @@ impl ClientCore {
             } => self.register(&username, &display_name, password, &invite_code, &mut out),
             Input::SignIn { username, password } => self.sign_in(&username, password, &mut out),
             Input::SignOut => self.sign_out(&mut out),
+            Input::SetServerUrl(text) => self.set_server_url(&text, &mut out),
+            Input::CheckServer => self.check_server(&mut out),
+            Input::ServerChecked { generation, result } => {
+                self.server_checked(generation, result, &mut out)
+            }
+            Input::ServerSwitched { generation, result } => {
+                self.server_switched(generation, result, &mut out)
+            }
             Input::RetryLoad => {
                 if matches!(self.phase, SessionPhase::Unreachable { .. }) {
                     self.set_phase(SessionPhase::Loading, &mut out);
@@ -745,46 +765,7 @@ impl ClientCore {
                 result,
             } => self.mark_read_result(conversation, up_to, result, &mut out),
 
-            Input::Started(state) => {
-                self.drafts = state.drafts;
-                self.thread_selections = state
-                    .thread_drafts
-                    .iter()
-                    .filter_map(|draft| Some((draft.root, draft.selection?)))
-                    .collect();
-                self.thread_drafts = state
-                    .thread_drafts
-                    .into_iter()
-                    .map(|draft| (draft.root, (draft.conversation, draft.text)))
-                    .collect();
-                self.restore_view(state.view);
-                self.emoji_prefs = state.emoji_prefs.sanitized();
-                self.appearance = state.appearance;
-                self.preferred_active = state.active_workspace;
-                self.restore_recent_searches(state.recent_searches);
-                self.restore_recent_conversations(state.recent_conversations);
-                self.recompute_shown_prefs();
-                self.recovered_journal = state.journal;
-                if !state.problems.is_empty() {
-                    self.note_error("storage", "startup_problem");
-                    self.set_notice(Some(state.problems.join(" ")), &mut out);
-                }
-                let cache = state
-                    .cache
-                    .map(ContentCache::bounded)
-                    .filter(|cache| !cache.workspaces.is_empty());
-                self.cache_owner = cache.as_ref().map(|cache| cache.user.id);
-                match (state.session_restored, cache) {
-                    (true, Some(cache)) => self.restore_from_cache(cache, &mut out),
-                    (true, None) => {
-                        self.set_phase(SessionPhase::Loading, &mut out);
-                        self.request_bootstrap(&mut out);
-                    }
-                    (false, _) => {
-                        self.set_phase(SessionPhase::SignedOut { last_error: None }, &mut out)
-                    }
-                }
-            }
+            Input::Started(state) => self.start_from(state, &mut out),
             Input::Authenticated { user } => self.authenticated(user, &mut out),
             Input::AuthFailed(error) => {
                 self.note_request_error("auth", &error);
@@ -966,6 +947,9 @@ impl ClientCore {
         if !matches!(self.phase, SessionPhase::SignedOut { .. }) {
             return;
         }
+        if self.server.trying.is_some() {
+            return self.reject_sign_in(SERVER_UNSETTLED.into(), out);
+        }
         self.admin.set_registering(true);
         let username = match Username::parse(username) {
             Ok(username) => username,
@@ -996,6 +980,9 @@ impl ClientCore {
     fn sign_in(&mut self, username: &str, password: String, out: &mut Output) {
         if !matches!(self.phase, SessionPhase::SignedOut { .. }) {
             return;
+        }
+        if self.server.trying.is_some() {
+            return self.reject_sign_in(SERVER_UNSETTLED.into(), out);
         }
         self.admin.set_registering(false);
         let username = match Username::parse(username) {
@@ -1046,7 +1033,58 @@ impl ClientCore {
         self.request_bootstrap(out);
     }
 
+    /// Takes what the runtime loaded (at start, and again after the server was changed) and
+    /// leaves the signed-in or signed-out phase it implies.
+    fn start_from(&mut self, state: StartupState, out: &mut Output) {
+        self.server = state.server.clone();
+        out.changes.push(Change::ServerChanged);
+        self.drafts = state.drafts;
+        self.thread_selections = state
+            .thread_drafts
+            .iter()
+            .filter_map(|draft| Some((draft.root, draft.selection?)))
+            .collect();
+        self.thread_drafts = state
+            .thread_drafts
+            .into_iter()
+            .map(|draft| (draft.root, (draft.conversation, draft.text)))
+            .collect();
+        self.restore_view(state.view);
+        self.emoji_prefs = state.emoji_prefs.sanitized();
+        self.appearance = state.appearance;
+        self.preferred_active = state.active_workspace;
+        self.restore_recent_searches(state.recent_searches);
+        self.restore_recent_conversations(state.recent_conversations);
+        self.recompute_shown_prefs();
+        self.recovered_journal = state.journal;
+        if !state.problems.is_empty() {
+            self.note_error("storage", "startup_problem");
+            self.set_notice(Some(state.problems.join(" ")), out);
+        }
+        let cache = state
+            .cache
+            .map(ContentCache::bounded)
+            .filter(|cache| !cache.workspaces.is_empty());
+        self.cache_owner = cache.as_ref().map(|cache| cache.user.id);
+        match (state.session_restored, cache) {
+            (true, Some(cache)) => self.restore_from_cache(cache, out),
+            (true, None) => {
+                self.set_phase(SessionPhase::Loading, out);
+                self.request_bootstrap(out);
+            }
+            (false, _) => self.set_phase(SessionPhase::SignedOut { last_error: None }, out),
+        }
+    }
+
     fn sign_out(&mut self, out: &mut Output) {
+        self.reset_local(out);
+        self.set_phase(SessionPhase::SignedOut { last_error: None }, out);
+        out.effects.push(Effect::SignOut);
+    }
+
+    /// Forgets everything that belongs to the person and the server: what was loaded, the
+    /// drafts, the unsent messages, and the emoji preferences.
+    fn reset_local(&mut self, out: &mut Output) {
         self.clear_session_data(out);
         self.drafts.clear();
         self.thread_drafts.clear();
@@ -1059,8 +1097,6 @@ impl ClientCore {
             out.changes.push(Change::EmojiPrefsChanged);
         }
         self.cache_owner = None;
-        self.set_phase(SessionPhase::SignedOut { last_error: None }, out);
-        out.effects.push(Effect::SignOut);
     }
 
     /// Drops everything learned from the server for the current person.

@@ -25,7 +25,7 @@ use lazy_protocol::{Conversation, SavedItem};
 
 use crate::app_model::{AppEvent, AppModel};
 use crate::form::{self, ButtonKind};
-use crate::inbox_view::{excerpt, note_block};
+use crate::inbox_view::{excerpt, note_block, note_block_with};
 use crate::states;
 use crate::theme::Theme;
 use crate::time_fmt::{ago_label, to_zoned};
@@ -544,10 +544,12 @@ impl SavedMessagesView {
                 states::sentence(reason),
                 can_retry.then(|| retry_button(self, states::TRY_AGAIN)),
             ),
-            (LoadStatus::Ready, 0) => note_block(
+            (LoadStatus::Ready, 0) => note_block_with(
                 theme,
                 "saved-empty",
-                None,
+                crate::brand::moss(cx, crate::brand::Moss::CaughtUp, 120.)
+                    .map(IntoElement::into_any_element),
+                Some(states::SAVED_EMPTY_TITLE),
                 states::SAVED_EMPTY.to_owned(),
                 None,
             ),

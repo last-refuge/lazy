@@ -23,6 +23,35 @@ fn invitation_invalid() -> AppError {
     AppError::new(ErrorCode::InvitationInvalid, "that invitation is not valid")
 }
 
+/// What a registration is told while the server waits for its first account and the setup code was
+/// missing or wrong (the same answer, so the message does not say which).
+pub const SETUP_CODE_REQUIRED: &str =
+    "this server needs its setup code to create the first account";
+
+/// Takes the registration lock of a workspace, held until the transaction ends.
+async fn lock_registration(
+    conn: &mut PgConnection,
+    workspace_id: WorkspaceId,
+) -> Result<(), AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(workspace_id.to_string())
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+async fn workspace_has_no_members(
+    conn: &mut PgConnection,
+    workspace_id: WorkspaceId,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar(
+        "SELECT NOT EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = $1)",
+    )
+    .bind(workspace_id.as_uuid())
+    .fetch_one(conn)
+    .await?)
+}
+
 /// The authenticated caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Principal {
@@ -54,19 +83,54 @@ pub async fn register(
     let password_hash = state.passwords.hash(&request.password).await?;
     let user_id = UserId::generate();
 
+    let mut tx = state.pool.begin().await?;
+    let candidate = request.invite_code.as_ref().map(|code| code.expose());
+
+    // The workspace a registration without an invitation joins: the oldest one no person created
+    // (the seeded one), so a workspace made with `PUT /v1/workspaces/{id}` is never where an open
+    // registration lands.
+    let default: Option<(Uuid, sqlx::types::Json<WorkspaceSettings>)> = sqlx::query_as(
+        "SELECT id, settings FROM workspaces WHERE created_by IS NULL \
+         ORDER BY created_at, id LIMIT 1",
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    // The setup state: a server with a setup code, whose default workspace has no members. The
+    // first account there needs the code (given as the invitation code), and nothing else gets in.
+    // Members are never removed, so once there is one this stays false for good, and the check
+    // costs nothing but a lookup; while there is none, the registration lock is taken *before*
+    // looking again, so of two first registrations with the right code the second finds a member
+    // and goes through the ordinary path (where the code is only an invitation code, and wrong).
+    let mut in_setup = false;
+    if let (Some(setup_code), Some((default_id, _))) = (&state.integrations.setup_code, &default) {
+        let default_id = WorkspaceId::from_uuid(*default_id);
+        if workspace_has_no_members(&mut tx, default_id).await? {
+            lock_registration(&mut tx, default_id).await?;
+            if workspace_has_no_members(&mut tx, default_id).await? {
+                // One answer for a missing code and a wrong one.
+                if !candidate.is_some_and(|code| setup_code.matches(code)) {
+                    return Err(AppError::forbidden(SETUP_CODE_REQUIRED));
+                }
+                in_setup = true;
+            }
+        }
+    }
+
     // An invitation code, if one was sent: the hash is what is looked up. A code of the wrong shape
     // is as invalid as a wrong one, and is refused after the same work (the password is already
-    // hashed), with the same answer.
-    let invite_hash = match request.invite_code.as_ref().map(|code| code.expose()) {
+    // hashed), with the same answer. (Not in the setup state: there the code is the setup code.)
+    let invite_hash = match candidate {
+        _ if in_setup => None,
         None => None,
         Some(code) if invite_code_is_wellformed(code) => Some(crypto::invite_code_hash(code)),
         Some(_) => return Err(invitation_invalid()),
     };
 
-    let mut tx = state.pool.begin().await?;
-    let workspace_id = match &invite_hash {
+    let workspace_id = match (&invite_hash, &default) {
+        (None, Some((id, _))) if in_setup => WorkspaceId::from_uuid(*id),
         // The invitation says which workspace.
-        Some(hash) => {
+        (Some(hash), _) => {
             let found: Option<Uuid> = sqlx::query_scalar(
                 "SELECT workspace_id FROM workspace_invitations WHERE code_hash = $1",
             )
@@ -75,32 +139,28 @@ pub async fn register(
             .await?;
             WorkspaceId::from_uuid(found.ok_or_else(invitation_invalid)?)
         }
-        // Otherwise the default workspace, if its policy lets anyone register: the oldest one no
-        // person created (the seeded one), so a workspace made with `PUT /v1/workspaces/{id}` is
-        // never where an open registration lands.
-        None => {
-            let default: Option<(Uuid, sqlx::types::Json<WorkspaceSettings>)> = sqlx::query_as(
-                "SELECT id, settings FROM workspaces WHERE created_by IS NULL \
-                 ORDER BY created_at, id LIMIT 1",
-            )
-            .fetch_optional(&mut *tx)
-            .await?;
-            let Some((id, settings)) = default else {
-                return Err(AppError::forbidden("registration is closed"));
-            };
-            if settings.0.registration == RegistrationPolicy::InviteOnly {
+        // Otherwise the default workspace, if its policy lets anyone register.
+        (None, Some((id, settings))) => {
+            let id = WorkspaceId::from_uuid(*id);
+            // Under the registration lock, so that "has no members" cannot change while it is
+            // being decided.
+            lock_registration(&mut tx, id).await?;
+            // An invite-only workspace with no members (a server seeded that way) lets the first
+            // person in, who becomes its owner: nobody could have invited them. A server that is
+            // reachable by strangers should set a setup code, which this does not replace.
+            if settings.0.registration == RegistrationPolicy::InviteOnly
+                && !workspace_has_no_members(&mut tx, id).await?
+            {
                 return Err(AppError::forbidden("registration is by invitation"));
             }
-            WorkspaceId::from_uuid(id)
+            id
         }
+        (None, None) => return Err(AppError::forbidden("registration is closed")),
     };
     // Registrations take turns. Only other registrations wait on this lock, and it is taken
     // before any other, so it cannot take part in a deadlock; it makes "the first person to
     // register owns the workspace" hold even when two arrive together.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(workspace_id.to_string())
-        .execute(&mut *tx)
-        .await?;
+    lock_registration(&mut tx, workspace_id).await?;
     if let Some(hash) = &invite_hash {
         // The use is counted by one guarded statement under the invitation's row lock: with
         // `max_uses` 1, of two registrations at once the second waits, finds it used up, and fails.

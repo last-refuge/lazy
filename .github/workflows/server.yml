@@ -1,0 +1,88 @@
+name: server
+
+# Manual only, like ci. Builds the server image, starts it with the compose file and a fresh
+# database, and checks it from outside (deploy/smoke-test.sh), including that its data survives a
+# restart. With push=true it then publishes the image to ghcr.io/<owner>/<repo>/server.
+#   gh workflow run server -f push=true -f tag=0.1.0-dogfood.1
+on:
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push the image to ghcr.io after it passes"
+        type: boolean
+        default: false
+      tag:
+        description: "Image tag to push (also tagged latest)"
+        type: string
+        default: "latest"
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Check the Coolify compose file is valid
+        run: |
+          SERVICE_PASSWORD_POSTGRES=x SERVICE_PASSWORD_SETUPCODE=y SERVICE_URL_LAZY=https://lazy.example.com \
+            docker compose -f deploy/coolify/docker-compose.yaml config --quiet
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: lazy-server:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start it with the compose file
+        run: |
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"
+            echo "LAZY_SETUP_CODE=$(openssl rand -hex 16)"
+            echo "LAZY_PUBLIC_URL=http://localhost:8080"
+          } > .env
+          docker compose up -d --no-build --wait --wait-timeout 180
+
+      - name: Check it from outside
+        run: |
+          set -a; . ./.env; set +a
+          deploy/smoke-test.sh http://localhost:8080 "$LAZY_SETUP_CODE"
+
+      - name: Its data survives a restart of the container and of the whole stack
+        run: |
+          set -a; . ./.env; set +a
+          docker compose restart lazy
+          docker compose up -d --no-build --wait --wait-timeout 180
+          deploy/smoke-test.sh http://localhost:8080 "$LAZY_SETUP_CODE" --after-restart
+          docker compose down          # keeps the volumes
+          docker compose up -d --no-build --wait --wait-timeout 180
+          deploy/smoke-test.sh http://localhost:8080 "$LAZY_SETUP_CODE" --after-restart
+
+      - name: Logs, if something failed
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Log in to ghcr.io
+        if: ${{ inputs.push }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        if: ${{ inputs.push }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/server:${{ inputs.tag }}
+            ghcr.io/${{ github.repository }}/server:latest
+          cache-from: type=gha

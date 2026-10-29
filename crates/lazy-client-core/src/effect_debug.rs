@@ -526,6 +526,16 @@ impl fmt::Debug for Effect {
                 .field("message", message)
                 .finish(),
             Effect::SetBadge(v0) => f.debug_tuple("SetBadge").field(v0).finish(),
+            Effect::CheckServer { url, generation } => f
+                .debug_struct("CheckServer")
+                .field("url", &Text(url))
+                .field("generation", generation)
+                .finish(),
+            Effect::UseServer { url, generation } => f
+                .debug_struct("UseServer")
+                .field("url", &Text(url))
+                .field("generation", generation)
+                .finish(),
         }
     }
 }

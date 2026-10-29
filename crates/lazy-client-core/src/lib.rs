@@ -23,6 +23,7 @@ mod model;
 mod notify;
 mod redact;
 mod search;
+mod server;
 mod timeline;
 mod workspaces;
 
@@ -61,6 +62,10 @@ pub use notify::{
     MAX_NOTIFICATION_BODY,
 };
 pub use search::{MAX_RECENT_SEARCHES, SEARCH_PAGE, SearchStatus, SearchView};
+pub use server::{
+    DEFAULT_SERVER_URL, MAX_SERVER_URL_CHARS, ServerCheck, ServerInfo, ServerSource,
+    ServerUrlError, normalize_server_url,
+};
 pub use workspaces::{
     Appearance, MAX_HELD_AVATAR_BYTES, MAX_HELD_AVATARS, MAX_QUEUED_AVATAR_FETCHES, MotionChoice,
     RailItem, ThemeChoice,

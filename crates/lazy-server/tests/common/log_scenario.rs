@@ -178,7 +178,16 @@ pub async fn run(
         .unwrap();
     LOGS.lock().unwrap().clear();
 
-    let app = App::start(pool).await;
+    // A server with a setup code: the first account needs it, and it is never logged.
+    let setup_code = "setup-SECRETSETUPCODE-0123456789".to_owned();
+    let app = App::start_with_integrations(
+        pool,
+        lazy_server::IntegrationOptions {
+            setup_code: Some(lazy_server::SetupCode::new(setup_code.clone()).unwrap()),
+            ..lazy_server::IntegrationOptions::default()
+        },
+    )
+    .await;
     let mut secrets: Vec<String> = Vec::new();
     let mut secret = |text: &str| {
         secrets.push(text.to_owned());
@@ -186,11 +195,29 @@ pub async fn run(
     };
 
     // --- Accounts, sign-in, invitations -------------------------------------------------------
+    secret(&setup_code);
+    let wrong_setup = secret("wrongsetup-SECRETWRONGSETUP-9876543");
+    let early = named_registration(
+        &app,
+        "stranger",
+        "Stranger",
+        "hunter2-Zq8vSECRETPWONE",
+        Some(&wrong_setup),
+    )
+    .await;
+    assert_eq!(early.status().as_u16(), 403);
     let alice_password = secret("hunter2-Zq8vSECRETPWONE");
     let alice_name = secret("Ysolde Quillfeather");
     let alice_username = secret("unamekestrel42");
     let alice = account_of(
-        named_registration(&app, &alice_username, &alice_name, &alice_password, None).await,
+        named_registration(
+            &app,
+            &alice_username,
+            &alice_name,
+            &alice_password,
+            Some(&setup_code),
+        )
+        .await,
     )
     .await;
     secret(&alice.token);
@@ -811,6 +838,12 @@ pub async fn run(
         requests
             .iter()
             .any(|l| l.error_code.as_deref() == Some("unauthenticated"))
+    );
+    assert!(
+        requests.iter().any(|l| l.route == paths::REGISTER
+            && l.status == 403
+            && l.error_code.as_deref() == Some("forbidden")),
+        "the refused first registration is logged by its code"
     );
     assert!(
         requests

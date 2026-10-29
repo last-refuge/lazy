@@ -664,6 +664,7 @@ impl Server {
 
 fn config(url: &str, profile: &TempDir, storage: Arc<dyn SecureStorage>) -> RuntimeConfig {
     RuntimeConfig {
+        server_locked: true,
         server_url: url.to_owned(),
         profile_dir: Some(profile.path().to_owned()),
         secure_storage: SecureStorageChoice::Custom(storage),

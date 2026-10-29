@@ -163,6 +163,8 @@ pub enum Change {
     AvatarChanged {
         user: UserId,
     },
+    /// `ClientCore::server()` changed: the address in use, the one being tried, or a check.
+    ServerChanged,
 }
 
 /// Result of [`crate::ClientCore::handle`].

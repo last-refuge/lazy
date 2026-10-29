@@ -30,8 +30,8 @@ use lazy_client_core::{
     EditState, Effect, FileBytes, FileSource, ImageData, ImageState, InboxStatus, Input,
     JournalEntry, JournalKind, LoadStatus, LocalFile, MAX_CONCURRENT_IMAGE_FETCHES,
     MAX_CONCURRENT_UPLOADS, MAX_RECENT_CONVERSATIONS, MAX_RECENT_SEARCHES, Output,
-    QUICK_SWITCHER_LIMIT, QuickSwitcherTarget, RequestError, SearchStatus, SocketEvent, StagedFile,
-    StartupState, TimelineItem, TransferError, ViewState,
+    QUICK_SWITCHER_LIMIT, QuickSwitcherTarget, RequestError, SearchStatus, SessionPhase,
+    SocketEvent, StagedFile, StartupState, TimelineItem, TransferError, ViewState,
 };
 use lazy_domain::notification::{
     ConversationNotificationPrefs, IncomingMessage, NotificationSettings, NotifyLevel, UserStatus,
@@ -144,6 +144,9 @@ enum Outcome {
 
 #[derive(Debug, Clone, Copy)]
 enum Action {
+    /// The person (or a late answer) touches the server choice. While anyone is signed in, or
+    /// signing in, it must do nothing at all.
+    ServerPoke(usize),
     OtherPosts(bool),
     UserSends(bool),
     Resolve(usize, Outcome),
@@ -370,6 +373,7 @@ fn action() -> impl Strategy<Value = Action> {
         4 => (any::<bool>(), any::<bool>()).prop_map(|(c, b)| Action::Bottom(c, b)),
         1 => any::<bool>().prop_map(Action::OtherDeviceReads),
         2 => any::<usize>().prop_map(Action::Restart),
+        2 => any::<usize>().prop_map(Action::ServerPoke),
         3 => any::<usize>().prop_map(Action::OtherEdits),
         2 => any::<usize>().prop_map(Action::ServerDeletes),
         8 => any::<usize>().prop_map(Action::UserEdits),
@@ -4866,8 +4870,52 @@ impl Sim {
         }
     }
 
+    /// Everything that can be done to the server choice, while the session is not one where it
+    /// may be changed: nothing is asked, nothing moves, and nothing but a notice shows.
+    fn server_poke(&mut self, pick: usize) {
+        if matches!(
+            self.driver.core.phase(),
+            SessionPhase::SignedOut { .. } | SessionPhase::Unreachable { .. }
+        ) {
+            return;
+        }
+        let server = self.driver.core.server().clone();
+        let notice = self.driver.core.notice().map(str::to_owned);
+        let generation = (pick / 6 % 5) as u64;
+        let input = match pick % 6 {
+            0 => Input::SetServerUrl("chat.example.com".into()),
+            1 => Input::CheckServer,
+            2 => Input::ServerChecked {
+                generation,
+                result: Ok(lazy_protocol::PROTOCOL_VERSION),
+            },
+            3 => Input::ServerSwitched {
+                generation,
+                result: Ok(Box::default()),
+            },
+            4 => Input::SetServerUrl("not an address".into()),
+            _ => Input::SetServerUrl(server.url.clone()),
+        };
+        let out = self.driver.send(input);
+        assert!(
+            out.effects.is_empty(),
+            "the server choice asked for something while signed in: {:?}\n{}",
+            out.effects,
+            self.trace.join("\n")
+        );
+        assert_eq!(
+            self.driver.core.server(),
+            &server,
+            "the server changed under a session"
+        );
+        if notice.is_none() && self.driver.core.notice().is_some() {
+            self.driver.send(Input::DismissNotice);
+        }
+    }
+
     fn step(&mut self, action: Action) {
         match action {
+            Action::ServerPoke(pick) => self.server_poke(pick),
             Action::OtherPosts(flag) => {
                 let conversation = self.conversation(flag);
                 let at = BASE_HEAD + 1 + self.log.len() as i64;
@@ -7198,7 +7246,7 @@ fn leading_number(text: &str) -> Option<usize> {
 /// the journal, 5 thread reads answered, 6 answers to uploads that were cancelled, 6 notifications
 /// retracted, and 6 restarts with recent searches; each is asserted to be at least 1.
 const DEFAULT_CASES: u32 = 1500;
-const DEFAULT_SEED: [u8; 32] = *b"lazy-simulation-default-seed-v49";
+const DEFAULT_SEED: [u8; 32] = *b"lazy-simulation-default-seed-v50";
 
 /// How often the random runs exercised the paths this test exists for.
 static RESTARTS_WITH_CACHED_MESSAGES: AtomicUsize = AtomicUsize::new(0);

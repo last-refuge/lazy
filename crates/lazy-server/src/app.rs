@@ -9,6 +9,8 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use lazy_domain::workspace::{RegistrationPolicy, WorkspaceSettings};
+
 use crate::attachments::Attachments;
 use crate::config::{
     AttachmentBackend, AttachmentOptions, Config, IntegrationOptions, RetentionPolicy,
@@ -44,6 +46,8 @@ pub struct Integrations {
     /// Where webhook addresses start, without a trailing slash.
     pub public_url: String,
     pub limiter: WebhookLimiter,
+    /// See [`crate::SetupCode`].
+    pub setup_code: Option<crate::config::SetupCode>,
 }
 
 /// Connects to Postgres, optionally migrates and seeds, and serves until `shutdown` completes.
@@ -69,6 +73,11 @@ pub async fn run(
         max_db_connections = config.max_db_connections,
         max_attachment_bytes = config.max_attachment_bytes,
         public_url = config.public_url.as_deref().map(logging::describe_url),
+        seed_registration = match config.seed_registration {
+            RegistrationPolicy::Open => "open",
+            RegistrationPolicy::InviteOnly => "invite_only",
+        },
+        setup_code_set = config.setup_code.is_some(),
         "starting"
     );
     let pool = db::connect(&config.database_url, config.max_db_connections).await?;
@@ -84,13 +93,30 @@ pub async fn run(
             .flatten();
     tracing::info!(migration_version, "database ready");
     if config.seed
-        && let Some(seeded) = db::seed_default_workspace(&pool).await?
+        && let Some(seeded) = db::seed_default_workspace_with(
+            &pool,
+            WorkspaceSettings {
+                registration: config.seed_registration,
+                ..WorkspaceSettings::default()
+            },
+        )
+        .await?
     {
         tracing::info!(
             workspace_id = %seeded.workspace_id,
             general_id = %seeded.general_id,
             "created the default workspace"
         );
+    }
+    // Say what the first visitor will find (the text is fixed; no code is ever shown).
+    if db::default_workspace_is_empty(&pool).await? == Some(true) {
+        if config.setup_code.is_some() {
+            tracing::info!("waiting for the first account: registration needs the setup code");
+        } else {
+            tracing::warn!(
+                "no setup code is set: the first person to register will own the workspace"
+            );
+        }
     }
     let listener = TcpListener::bind(config.listen)
         .await
@@ -105,6 +131,7 @@ pub async fn run(
     };
     let integrations = IntegrationOptions {
         public_url: config.public_url,
+        setup_code: config.setup_code,
         ..IntegrationOptions::default()
     };
     let attachments = AttachmentOptions {
@@ -218,6 +245,7 @@ pub async fn serve_all(
         integrations: Arc::new(Integrations {
             public_url,
             limiter: WebhookLimiter::new(integrations.webhook_rate),
+            setup_code: integrations.setup_code,
         }),
         attachments: Arc::clone(&attachments),
         search,

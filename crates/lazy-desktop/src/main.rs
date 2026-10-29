@@ -4,7 +4,12 @@
 //! creates the UI's [`AppModel`] around it, pumps the runtime's inputs into the model on the
 //! foreground executor, and opens the window where it was last. Everything else lives in
 //! `lazy-ui`, `lazy-client-core`, and `lazy-client-runtime`.
+//!
+//! A Windows release has no console window, so what would go to the terminal also goes to the log
+//! file: a start that fails leaves its reason in `logs/lazy.log`.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
 
@@ -17,29 +22,61 @@ use lazy_ui::dialogs::{DesktopInfo, set_desktop_info};
 use lazy_ui::root_view::RootView;
 use lazy_ui::theme;
 
+/// Where the profile will be, as the runtime will choose it: what `LAZY_PROFILE_DIR` or the
+/// configuration says, else the platform's per-user data folder. Known before the runtime starts so
+/// that a start that fails can still be logged.
+fn expected_profile_dir(config: &RuntimeConfig) -> Option<PathBuf> {
+    config
+        .profile_dir
+        .clone()
+        .or_else(|| std::env::var_os("LAZY_PROFILE_DIR").map(PathBuf::from))
+        .or_else(|| {
+            directories::ProjectDirs::from("app", "lazy", "Lazy")
+                .map(|dirs| dirs.data_local_dir().to_owned())
+        })
+}
+
 fn main() -> ExitCode {
-    // The terminal now; the file in the profile folder as soon as the runtime says where that is.
+    // The terminal now; the file in the profile folder as soon as it is known.
     let log = logging::init();
 
     let config = RuntimeConfig::from_env();
+    let mut log_dir = expected_profile_dir(&config).map(|dir| logging::log_dir(&dir));
+    if let Some(dir) = &log_dir
+        && let Err(error) = log.attach(dir)
+    {
+        eprintln!(
+            "Lazy: could not open its log file in {}: {error}",
+            dir.display()
+        );
+        log_dir = None;
+    }
     tracing::info!(server = %config.server_url, "starting Lazy");
     let server_url = config.server_url.clone();
     let (runtime, inputs) = match Runtime::start(config) {
         Ok(started) => started,
         Err(error) => {
+            tracing::error!(%error, "Lazy could not start");
             eprintln!("Lazy could not start: {error}");
             return ExitCode::FAILURE;
         }
     };
     let runtime = Rc::new(runtime);
     let profile_dir = runtime.profile_dir().to_path_buf();
-    let log_dir = logging::log_dir(&profile_dir);
-    if let Err(error) = log.attach(&log_dir) {
-        eprintln!(
-            "Lazy: could not open its log file in {}: {error}",
-            log_dir.display()
-        );
-    }
+    let log_dir = match log_dir {
+        Some(dir) => dir,
+        None => {
+            // The profile was not where it was expected to be: the log goes where it really is.
+            let dir = logging::log_dir(&profile_dir);
+            if let Err(error) = log.attach(&dir) {
+                eprintln!(
+                    "Lazy: could not open its log file in {}: {error}",
+                    dir.display()
+                );
+            }
+            dir
+        }
+    };
     tracing::info!(profile = %profile_dir.display(), logs = %log_dir.display(), "using profile");
     let saved_window = window_state::load(&profile_dir);
     let info = DesktopInfo::new(
@@ -79,6 +116,9 @@ fn main() -> ExitCode {
                     px(window_state::MIN_SIZE.1),
                 )),
                 app_id: Some("lazy".into()),
+                // GPUI takes a window icon on X11 only; the other platforms use the desktop
+                // entry, the executable's resources, or the bundle.
+                icon: lazy_ui::brand::app_icon(),
                 ..Default::default()
             },
             move |window, cx| {
@@ -97,6 +137,7 @@ fn main() -> ExitCode {
             // A notification's click raises this window; the count becomes its title.
             Ok(window) => desktop.attach(window.into(), cx),
             Err(error) => {
+                tracing::error!(%error, "Lazy could not open its window");
                 eprintln!("Lazy could not open its window: {error}");
                 cx.quit();
                 return;

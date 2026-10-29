@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a124f52602e10fc83cd0385a4bb7630af18a3dc9d62d9d0282bd6ca4318a6087 # shrinks to typed = "localhost:443"
+cc d80b6bd2f542d147e0cbadd8b8bbcd24e40de19a2b51e869f3e909cec8f3f639 # shrinks to typed = "bob@chat.example.com"
+cc 957cf0c15703eaae2cfdf3ec97ef493c16531ed45493f35a407c7b39370cb731 # shrinks to typed = "chat.example.com?"
+cc 3af16538b2b3be679aaeb9a5846cccda937064cdde51412faf12717b2f17d3af # shrinks to typed = "chat.example.com"
+cc c17d7c81ff42a462cb23869cf841d2c5c088246e831a73bec93520f15b2d11d7 # shrinks to typed = "ftp://chat.example.com"

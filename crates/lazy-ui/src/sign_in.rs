@@ -2,12 +2,13 @@
 
 use gpui::{
     AnyElement, Context, Entity, FocusHandle, Focusable, FontWeight, IntoElement, Render,
-    SharedString, Subscription, Window, div, prelude::*, px,
+    ScrollHandle, SharedString, Subscription, Window, div, prelude::*, px,
 };
 use lazy_client_core::{Input, SessionPhase};
 
 use crate::app_model::AppModel;
 use crate::keyboard::{self, FocusNextControl, FocusPrevControl};
+use crate::server_row::ServerRow;
 use crate::text_input::{TextInput, TextInputEvent, TextInputOptions};
 use crate::theme::Theme;
 
@@ -27,6 +28,11 @@ pub struct SignInView {
     invite_code: Entity<TextInput>,
     submit_focus: FocusHandle,
     toggle_focus: FocusHandle,
+    /// Which server this is, and a way to change it; its stops come after the form's own.
+    server_row: Entity<ServerRow>,
+    /// The card scrolls when the window is too short for it, and follows the keyboard.
+    scroll: ScrollHandle,
+    scrolled_for: Option<usize>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -54,7 +60,7 @@ impl SignInView {
         // never kept in a log or a label (its field is labelled by its name alone).
         let invite_code = field(
             crate::states::INVITE_CODE_PLACEHOLDER,
-            "Invitation code",
+            "Invitation or setup code",
             false,
             cx,
         );
@@ -77,6 +83,7 @@ impl SignInView {
         let handle = username.focus_handle(cx);
         window.focus(&handle, cx);
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
+        let server_row = cx.new(|cx| ServerRow::new(model.clone(), window, cx));
 
         Self {
             model,
@@ -87,8 +94,16 @@ impl SignInView {
             invite_code,
             submit_focus: cx.focus_handle().tab_stop(true),
             toggle_focus: cx.focus_handle().tab_stop(true),
+            server_row,
+            scroll: ScrollHandle::new(),
+            scrolled_for: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The "Server" row. For tests.
+    pub fn server_row(&self) -> &Entity<ServerRow> {
+        &self.server_row
     }
 
     /// Tab and Shift+Tab leave a single-line field for the next or previous control, which may be
@@ -184,7 +199,22 @@ impl Render for SignInView {
         }
         .into();
 
+        // Which row of the card has the keyboard, to keep it in view in a short window.
+        let mut focused_row: Option<usize> = None;
+        let mut row = 1usize;
+        let mut note = |has: bool| {
+            if has {
+                focused_row = Some(row);
+            }
+            row += 1;
+        };
+        let max_height = (f32::from(window.viewport_size().height) - 32.0).max(200.0);
         let mut form = div()
+            .id("sign-in-card")
+            .debug_selector(|| "sign-in-card".into())
+            .max_h(px(max_height))
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
             .w(px(360.))
             .flex()
             .flex_col()
@@ -194,42 +224,49 @@ impl Render for SignInView {
             .bg(theme.colors.surface_raised)
             .border_1()
             .border_color(theme.colors.border)
-            .child(
+            // The logo, the headline, and a line under it: the brand's opening (one row of the
+            // card, so the rows below keep their numbers).
+            .child(crate::brand::masthead(
+                cx,
+                Some(if creating {
+                    "Create your account"
+                } else {
+                    crate::states::BRAND_SUPPORT
+                }),
+            ))
+            .child(self.labeled(&theme, "Username", &self.username, window, cx));
+        note(self.username.read(cx).is_focused(window));
+        if creating {
+            form = form.child(self.labeled(&theme, "Display name", &self.display_name, window, cx));
+            note(self.display_name.read(cx).is_focused(window));
+        }
+        form = form.child(self.labeled(&theme, "Password", &self.password, window, cx));
+        note(self.password.read(cx).is_focused(window));
+        if creating {
+            note(self.invite_code.read(cx).is_focused(window));
+            form = form.child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .child(self.labeled(
+                        &theme,
+                        crate::states::INVITE_CODE_LABEL,
+                        &self.invite_code,
+                        window,
+                        cx,
+                    ))
                     .child(
                         div()
-                            .text_size(theme.type_scale.heading)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.colors.text)
-                            .child("Lazy"),
-                    )
-                    .child(
-                        div()
-                            .text_size(theme.type_scale.body)
-                            .text_color(theme.colors.text_muted)
-                            .child(if creating {
-                                "Create your account"
-                            } else {
-                                "Sign in to your workspace"
-                            }),
+                            .debug_selector(|| "register-code-hint".into())
+                            .text_size(theme.type_scale.small)
+                            .text_color(theme.colors.text_faint)
+                            .child(crate::states::INVITE_CODE_HINT),
                     ),
-            )
-            .child(self.labeled(&theme, "Username", &self.username, window, cx));
-        if creating {
-            form = form.child(self.labeled(&theme, "Display name", &self.display_name, window, cx));
+            );
         }
-        form = form.child(self.labeled(&theme, "Password", &self.password, window, cx));
-        if creating {
-            form = form.child(self.labeled(
-                &theme,
-                crate::states::INVITE_CODE_LABEL,
-                &self.invite_code,
-                window,
-                cx,
-            ));
+        if error.is_some() {
+            note(false);
         }
         if let Some(error) = error {
             form = form.child(
@@ -243,6 +280,9 @@ impl Render for SignInView {
                     .child(error),
             );
         }
+        note(self.submit_focus.is_focused(window));
+        note(self.toggle_focus.is_focused(window));
+        note(self.server_row.read(cx).has_focus(window, cx));
         form = form
             .child(
                 div()
@@ -322,8 +362,24 @@ impl Render for SignInView {
                     } else {
                         "New here? Create an account"
                     }),
+            )
+            // Last, so the form's own tab order is what it always was.
+            .child(
+                div()
+                    .pt_4()
+                    .border_t_1()
+                    .border_color(theme.colors.border)
+                    .child(self.server_row.clone()),
             );
 
+        if focused_row != self.scrolled_for {
+            self.scrolled_for = focused_row;
+            if let Some(row) = focused_row
+                && window.last_input_was_keyboard()
+            {
+                self.scroll.scroll_to_item(row);
+            }
+        }
         div()
             .size_full()
             .key_context(keyboard::SHELL_CONTEXT)

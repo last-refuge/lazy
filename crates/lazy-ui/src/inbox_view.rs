@@ -617,10 +617,12 @@ impl ThreadInboxView {
                 states::sentence(reason),
                 can_retry.then(|| retry_button(self, states::TRY_AGAIN)),
             ),
-            (InboxStatus::Ready, 0) => note_block(
+            (InboxStatus::Ready, 0) => note_block_with(
                 theme,
                 "inbox-empty",
-                None,
+                crate::brand::moss(cx, crate::brand::Moss::CaughtUp, 120.)
+                    .map(IntoElement::into_any_element),
+                Some(states::INBOX_CAUGHT_UP),
                 if unread_only {
                     states::INBOX_NO_UNREAD.to_owned()
                 } else {
@@ -777,6 +779,18 @@ pub(crate) fn note_block(
     text: String,
     action: Option<AnyElement>,
 ) -> AnyElement {
+    note_block_with(theme, selector, None, title, text, action)
+}
+
+/// Like [`note_block`], with a picture above the heading: Moss, for the "nothing left" states.
+pub(crate) fn note_block_with(
+    theme: &Theme,
+    selector: &'static str,
+    mascot: Option<AnyElement>,
+    title: Option<&'static str>,
+    text: String,
+    action: Option<AnyElement>,
+) -> AnyElement {
     let colors = theme.colors;
     div()
         .id(selector)
@@ -797,12 +811,14 @@ pub(crate) fn note_block(
                 .items_center()
                 .gap_2()
                 .text_center()
+                .children(mascot)
                 .children(title.map(|title| {
-                    div()
-                        .text_size(theme.type_scale.title)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(colors.text)
-                        .child(title)
+                    crate::fonts::heading(
+                        div()
+                            .text_size(theme.type_scale.title)
+                            .text_color(colors.text)
+                            .child(title),
+                    )
                 }))
                 .child(
                     div()

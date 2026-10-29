@@ -46,6 +46,8 @@ const ALLOWED_FIELDS: &[&str] = &[
     "seed",
     "open_registration",
     "open_workspace_creation",
+    "seed_registration",
+    "setup_code_set",
     "event_retention_days",
     "max_db_connections",
     "max_attachment_bytes",
@@ -129,7 +131,20 @@ fn every_tracing_call_is_reviewed() {
         let text = std::fs::read_to_string(&file).unwrap();
         let name = file.file_name().unwrap().to_string_lossy().into_owned();
         for forbidden in ["println!", "eprintln!", "dbg!"] {
-            if text.contains(forbidden) {
+            let uses = text.matches(forbidden).count()
+                - if forbidden == "println!" {
+                    text.matches("eprintln!").count()
+                } else {
+                    0
+                };
+            // The one place that prints: the health check's single line, `healthy` or `unhealthy:`
+            // and a kind of failure (`lazy-server healthcheck`).
+            let allowed = if name == "main.rs" && forbidden == "println!" {
+                2
+            } else {
+                0
+            };
+            if uses != allowed {
                 problems.push(format!("{name}: {forbidden} bypasses the log filter"));
             }
         }

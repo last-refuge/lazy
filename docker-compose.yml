@@ -1,0 +1,49 @@
+# The Lazy server with its Postgres, for any machine with Docker:
+#   cp .env.example .env     (then fill in the secrets)
+#   docker compose up -d --build
+# Coolify uses deploy/coolify/docker-compose.yaml instead. See llm-docs/DEPLOY.md.
+name: lazy
+
+services:
+  postgres:
+    # 18 and later keep the cluster in a versioned folder, so the volume is the parent directory.
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lazy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: lazy
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lazy -d lazy"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  lazy:
+    build:
+      context: .
+    image: ${LAZY_IMAGE:-lazy-server:local}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://lazy:${POSTGRES_PASSWORD}@postgres:5432/lazy
+      LAZY_PUBLIC_URL: ${LAZY_PUBLIC_URL:-http://localhost:8080}
+      LAZY_SETUP_CODE: ${LAZY_SETUP_CODE:?set LAZY_SETUP_CODE in .env (at least 16 characters)}
+      LAZY_SEED_REGISTRATION: ${LAZY_SEED_REGISTRATION:-invite_only}
+      LAZY_OPEN_WORKSPACE_CREATION: ${LAZY_OPEN_WORKSPACE_CREATION:-true}
+      LAZY_EVENT_RETENTION_DAYS: ${LAZY_EVENT_RETENTION_DAYS:-30}
+      LAZY_MAX_ATTACHMENT_BYTES: ${LAZY_MAX_ATTACHMENT_BYTES:-26214400}
+      LAZY_LOG: ${LAZY_LOG:-info,sqlx=warn}
+      LAZY_LOG_FORMAT: ${LAZY_LOG_FORMAT:-text}
+    volumes:
+      - attachments:/data/attachments
+    ports:
+      - "${LAZY_PORT:-8080}:8080"
+
+volumes:
+  pgdata:
+  attachments:

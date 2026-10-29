@@ -208,7 +208,7 @@ impl RailView {
                 div()
                     .size(px(size))
                     .flex_none()
-                    .rounded(theme.radii.large)
+                    .rounded(theme.radii.panel)
                     .border_2()
                     .border_color(if cursor_here {
                         colors.focus_ring
@@ -218,12 +218,12 @@ impl RailView {
                         transparent_black()
                     })
                     .bg(if item.active {
-                        colors.accent
+                        colors.rail_active
                     } else {
                         colors.rail_square
                     })
                     .text_color(if item.active {
-                        colors.on_accent
+                        colors.rail_active_text
                     } else {
                         colors.rail_text
                     })
@@ -258,7 +258,8 @@ impl RailView {
                         .right(px(8.))
                         .size(px(9.))
                         .rounded_full()
-                        .bg(colors.rail_text)
+                        // Apricot, the brand's warm highlight, marks unread messages.
+                        .bg(colors.mention_bar)
                         .border_2()
                         .border_color(colors.rail)
                 }),
@@ -331,7 +332,7 @@ impl Render for RailView {
                     .child(
                         div()
                             .size(px(size))
-                            .rounded(theme.radii.large)
+                            .rounded(theme.radii.panel)
                             .border_2()
                             // Dashed, so it does not read as a workspace; solid under the cursor.
                             .when(!add_cursor, |square| square.border_dashed())

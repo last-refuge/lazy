@@ -1,0 +1,9 @@
+# Everything is excluded except what the server image is built from.
+**
+!Cargo.toml
+!Cargo.lock
+!crates/lazy-domain
+!crates/lazy-protocol
+!crates/lazy-server
+# ...and not the build output inside them.
+**/target

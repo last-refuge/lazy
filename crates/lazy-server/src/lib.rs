@@ -23,6 +23,7 @@ pub mod emoji;
 pub mod error;
 pub mod events;
 pub mod groups;
+pub mod health;
 pub mod http;
 pub mod logging;
 pub mod messages;
@@ -42,6 +43,6 @@ pub mod testing;
 pub use app::{AppState, run, serve, serve_all, serve_full, serve_with};
 pub use config::{
     AttachmentBackend, AttachmentOptions, Config, IntegrationOptions, PasswordCost,
-    RetentionPolicy, SearchOptions, ServerOptions, WebhookRate,
+    RetentionPolicy, SearchOptions, ServerOptions, SetupCode, WebhookRate,
 };
 pub use error::AppError;

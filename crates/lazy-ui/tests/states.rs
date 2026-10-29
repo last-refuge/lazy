@@ -12,9 +12,9 @@
 //!
 //! | State                                   | Says                                   | Offers                         |
 //! |-----------------------------------------|----------------------------------------|--------------------------------|
-//! | no conversations at all                 | shell: "You're not in any ..."         | Browse channels, New message   |
-//! | no channels / no direct messages        | sidebar lines                          | Browse channels, Start one     |
-//! | empty channel                           | "beginning of #x. Say hello!"          | the composer                   |
+//! | no conversations at all                 | shell: "A good place to start." + Moss | Browse channels, New message   |
+//! | no channels / no direct messages        | sidebar lines ("Say hello. ...")       | Browse channels, Find people   |
+//! | empty channel                           | "Start the conversation."              | the composer                   |
 //! | empty archived channel                  | "... archived, so it is read-only"     | none (read-only)               |
 //! | history loading                         | "Loading messages…"                    | -                              |
 //! | first page of history failed            | title + reason                         | Try again                      |
@@ -39,7 +39,7 @@
 //! | search idle, no recents                 | "Type to search ... from:alice ..."    | the field                      |
 //! | search idle, with recents               | "Recent searches" + the filter hint    | Enter or click on a recent     |
 //! | search loading (first page)             | skeleton rows the size of results      | -                              |
-//! | search with no results                  | "No results for “x”. Try fewer ..."    | edit the query, remove a chip  |
+//! | search with no results                  | "No messages found." + "Nothing matched ..." | edit the query, remove a chip  |
 //! | search query that cannot run            | the parser's reason under the field    | fix the text                   |
 //! | search took too long                    | "...took too long. Narrow it with ..." | Try again                      |
 //! | search network failure                  | "Couldn't reach the server. Check ..." | Try again                      |
@@ -47,8 +47,8 @@
 //! | next page loading / failed              | "Loading more ..." / "More results ..."| Try again                      |
 //! | more results than ranked / at the limit | the truncated note / the end note      | narrow the search              |
 //! | thread inbox loading (first page)       | skeleton rows the size of rows         | -                              |
-//! | thread inbox, follows no threads        | how a thread becomes followed          | Close                          |
-//! | thread inbox, Unread, none unread       | "No unread threads."                   | All                            |
+//! | thread inbox, follows no threads        | "You're all caught up." + how a thread becomes followed (Moss) | Close |
+//! | thread inbox, Unread, none unread       | "You're all caught up." + "No unread threads." (Moss) | All             |
 //! | thread inbox failed (first page)        | "The threads didn't load" + reason     | Try again (focused)            |
 //! | thread inbox, next page failed          | the note under the rows + reason       | Try again                      |
 //! | thread whose first message was deleted  | "This message was deleted" + replies   | open it, Mark all read         |
@@ -862,7 +862,7 @@ fn a_first_page_loading_shows_a_skeleton_and_an_empty_answer_says_what_to_try(
     assert!(world.on_screen(cx, "search-no-results"));
     let text = lazy_ui::states::search_no_results("zzz from:alice", &["from:alice".to_owned()]);
     assert!(
-        text.contains("Try fewer words") && text.contains("from:alice"),
+        text.contains("Try another word") && text.contains("from:alice"),
         "{text}"
     );
 }

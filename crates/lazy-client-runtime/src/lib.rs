@@ -17,6 +17,7 @@ mod prefs;
 mod realtime;
 mod recent_conversations;
 mod runtime;
+mod saved_server;
 mod searches;
 mod secure;
 mod store;

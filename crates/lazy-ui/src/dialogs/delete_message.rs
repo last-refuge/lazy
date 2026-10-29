@@ -186,7 +186,7 @@ impl Render for DeleteMessageDialog {
                 div()
                     .text_size(theme.type_scale.body)
                     .text_color(colors.text)
-                    .child("This message will be deleted for everyone in the conversation. This can't be undone."),
+                    .child("This removes the message from the conversation for everyone. You can't undo it."),
             )
             .when(self.replies > 0, |body| {
                 body.child(
@@ -258,7 +258,7 @@ impl Render for DeleteMessageDialog {
 
         dialog_overlay(
             &theme,
-            "Delete message",
+            "Delete this message?",
             460.,
             &self.trap,
             body,

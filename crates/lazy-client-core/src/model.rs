@@ -349,6 +349,9 @@ pub struct StartupState {
     /// Human-readable storage problems found while loading, such as a corrupt file that was set
     /// aside.
     pub problems: Vec<String>,
+    /// The server in use, as the runtime resolved it (the environment, else the saved choice,
+    /// else the default). Never checked yet.
+    pub server: crate::server::ServerInfo,
 }
 
 /// Failure of a server request, classified by what the caller may safely do next.

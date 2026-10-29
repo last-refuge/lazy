@@ -56,3 +56,9 @@ directories = "6"
 # Client runtime.
 async-channel = "2"
 tempfile = "3"
+
+# What the release workflow ships: the release profile, stripped. (Debug symbols are not needed for
+# bug reports: the log and Diagnostics carry what a report needs, and the binary is half the size.)
+[profile.dist]
+inherits = "release"
+strip = true

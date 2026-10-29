@@ -205,6 +205,8 @@ impl Render for AddWorkspaceDialog {
             .flex()
             .flex_col()
             .gap_4()
+            // Moss keeps the dialog company: a friendly start to something new.
+            .children(crate::brand::moss(cx, crate::brand::Moss::Primary, 96.))
             .child(form::toggle_group(
                 &theme,
                 "add-workspace-way",
@@ -262,7 +264,7 @@ impl Render for AddWorkspaceDialog {
                 &theme,
                 "add-workspace-submit",
                 match (creating, busy) {
-                    (true, false) => "Create workspace",
+                    (true, false) => "Create a workspace",
                     (true, true) => "Creating…",
                     (false, false) => "Join workspace",
                     (false, true) => "Joining…",

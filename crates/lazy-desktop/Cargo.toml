@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# macOS: compile the Metal shaders when the app starts instead of building them with the Metal
+# compiler, for build machines that do not have it. Off by default.
+runtime-shaders = ["gpui_platform/runtime_shaders"]
+
 [lib]
 name = "lazy_desktop"
 path = "src/lib.rs"
@@ -23,6 +28,7 @@ lazy-ui.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 serde.workspace = true
+directories.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
@@ -34,3 +40,7 @@ gpui = { workspace = true, features = ["test-support"] }
 # higher-level `notify-rust` (also already built) cannot do without a handle per notification.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
+
+# Windows hosts embed the version information (and the icon, once there is one) in the executable.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

@@ -747,7 +747,7 @@ fn the_shell_can_be_driven_entirely_from_the_keyboard(cx: &mut TestAppContext) {
 
     // Shift+Tab walks back through everything between Send and the sidebar's channel list:
     // the emoji button, the Attach button, the composer, the timeline (one stop for all its messages), Details,
-    // Favorite, the notification bell, Sign out, Preferences, "Start a conversation", the Direct
+    // Favorite, the notification bell, Sign out, Preferences, "Find people", the Direct
     // messages "+", and then the last channel row (random).
     cx.simulate_keystrokes(
         "shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab shift-tab \

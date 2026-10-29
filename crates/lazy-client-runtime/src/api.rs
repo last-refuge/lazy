@@ -13,7 +13,8 @@ const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 
 pub(crate) struct Api {
     http: reqwest::Client,
-    base: String,
+    /// The server's address. Swappable: the person can choose another server while signed out.
+    base: RwLock<String>,
     token: RwLock<Option<SessionToken>>,
 }
 
@@ -26,7 +27,7 @@ impl Api {
             .build()?;
         Ok(Self {
             http,
-            base: base.trim_end_matches('/').to_owned(),
+            base: RwLock::new(base.trim_end_matches('/').to_owned()),
             token: RwLock::new(None),
         })
     }
@@ -39,18 +40,29 @@ impl Api {
         self.token.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    fn base(&self) -> String {
+        self.base.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Points every later request, and every later realtime connection, at another server.
+    pub(crate) fn set_base(&self, base: &str) {
+        *self.base.write().unwrap_or_else(|e| e.into_inner()) =
+            base.trim_end_matches('/').to_owned();
+    }
+
     fn url(&self, path: &str) -> String {
-        format!("{}{}", self.base, path)
+        format!("{}{}", self.base(), path)
     }
 
     /// The realtime WebSocket URL (`ws`/`wss` scheme).
     pub(crate) fn realtime_url(&self) -> String {
-        let base = if let Some(rest) = self.base.strip_prefix("https://") {
+        let base = self.base();
+        let base = if let Some(rest) = base.strip_prefix("https://") {
             format!("wss://{rest}")
-        } else if let Some(rest) = self.base.strip_prefix("http://") {
+        } else if let Some(rest) = base.strip_prefix("http://") {
             format!("ws://{rest}")
         } else {
-            self.base.clone()
+            base
         };
         format!("{base}{}", lazy_protocol::paths::REALTIME)
     }
@@ -354,6 +366,81 @@ fn percent_encode(name: &str) -> String {
         }
     }
     out
+}
+
+/// The largest `/healthz` answer read.
+const MAX_HEALTH_BYTES: u64 = 4096;
+
+/// Asks a server which protocol it speaks (`GET <url>/healthz`), without a session.
+///
+/// The words of a failure are fixed phrases: the system's own text names the address. A redirect is
+/// followed only to the same host (at most three times), so a typed address cannot send the
+/// client somewhere else.
+pub(crate) async fn probe(url: &str, timeout: Duration) -> Result<u32, String> {
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .connect_timeout(timeout)
+        .user_agent(concat!("lazy-client/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let same_host = attempt
+                .previous()
+                .first()
+                .is_some_and(|first| first.host_str() == attempt.url().host_str());
+            if same_host && attempt.previous().len() < 3 {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .build()
+        .map_err(|_| "the check could not start".to_owned())?;
+    let response = client
+        .get(format!(
+            "{}{}",
+            url.trim_end_matches('/'),
+            lazy_protocol::paths::HEALTH
+        ))
+        .send()
+        .await
+        .map_err(|error| probe_failure(&error))?;
+    let status = response.status();
+    if status.is_redirection() {
+        return Err("it redirects somewhere else".to_owned());
+    }
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err("there is no Lazy server at this address".to_owned());
+    }
+    if !status.is_success() {
+        return Err("the server answered with an error".to_owned());
+    }
+    let not_lazy = || "there is no Lazy server at this address".to_owned();
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_HEALTH_BYTES)
+    {
+        return Err(not_lazy());
+    }
+    let bytes = response.bytes().await.map_err(|_| not_lazy())?;
+    if bytes.len() as u64 > MAX_HEALTH_BYTES {
+        return Err(not_lazy());
+    }
+    serde_json::from_slice::<lazy_protocol::HealthResponse>(&bytes)
+        .map(|health| health.protocol_version)
+        .map_err(|_| not_lazy())
+}
+
+/// Why a check got no answer, in fixed words (a certificate problem is the one thing worth
+/// telling apart from "connection failed": it is what a self-signed server looks like).
+fn probe_failure(error: &reqwest::Error) -> String {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(cause) = source {
+        let text = cause.to_string().to_lowercase();
+        if text.contains("certificate") || text.contains("invalid peer") {
+            return "its certificate isn't trusted".to_owned();
+        }
+        source = cause.source();
+    }
+    describe(error)
 }
 
 /// Says what went wrong with a request in fixed words.

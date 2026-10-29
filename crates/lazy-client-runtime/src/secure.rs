@@ -212,6 +212,11 @@ impl SecretVault {
         }
     }
 
+    /// The secrets of the same profile on another server (the same store).
+    pub fn for_server(&self, profile_dir: &Path, server_url: &str) -> Self {
+        Self::new(self.storage.clone(), profile_dir, server_url)
+    }
+
     pub fn namespace(&self) -> &str {
         &self.namespace
     }

@@ -919,7 +919,7 @@ impl Render for EmojiPicker {
             .h(px(HEIGHT))
             .flex()
             .flex_col()
-            .rounded(theme.radii.large)
+            .rounded(theme.radii.panel)
             .bg(colors.surface_raised)
             .border_1()
             .border_color(colors.border_strong)

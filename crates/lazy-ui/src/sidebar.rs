@@ -965,12 +965,12 @@ impl Render for SidebarView {
                         div()
                             .text_size(theme.type_scale.small)
                             .text_color(colors.sidebar_text_muted)
-                            .child("No conversations with people yet."),
+                            .child("Say hello. Find a teammate and send them a message."),
                     )
                     .child(form::button(
                         &theme,
                         "sidebar-new-message",
-                        "Start a conversation",
+                        "Find people",
                         ButtonKind::Secondary,
                         true,
                         &self.message_link_focus,
@@ -985,6 +985,14 @@ impl Render for SidebarView {
         for row in people_rows {
             list = list.child(self.row(&row, &theme, cx));
         }
+
+        // The app's symbol beside the workspace's name; the narrow layout keeps the room for the
+        // name. Decorative: the name beside it is what is read.
+        let mark = if compact {
+            None
+        } else {
+            crate::brand::symbol(cx, 32.)
+        };
 
         div()
             .size_full()
@@ -1004,7 +1012,16 @@ impl Render for SidebarView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_size(theme.type_scale.title)
                     .text_color(colors.sidebar_text)
-                    .child(div().flex_1().min_w_0().truncate().child(workspace_name))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .children(mark)
+                            .child(div().flex_1().min_w_0().truncate().child(workspace_name)),
+                    )
                     // A Mac has the native menu bar; everywhere else the same menus are here.
                     .children((!cfg!(target_os = "macos")).then(|| {
                         let menu_to = this.clone();

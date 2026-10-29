@@ -110,6 +110,21 @@ struct Stub {
     registrations: Mutex<Vec<serde_json::Value>>,
     /// A text frame (that is not a frame) the realtime route sends after the catch-up.
     bad_frame: Mutex<Option<String>>,
+    /// What `/healthz` answers.
+    health: Mutex<HealthMode>,
+}
+
+/// What the stub's `/healthz` does.
+#[derive(Clone)]
+enum HealthMode {
+    /// Answers with this protocol version.
+    Version(u32),
+    /// Answers 200 with something that is not JSON.
+    NotJson,
+    /// Answers 500.
+    Error,
+    /// Redirects to this address.
+    RedirectTo(String),
 }
 
 impl Stub {
@@ -141,6 +156,7 @@ impl Stub {
             afters: Mutex::new(Vec::new()),
             registrations: Mutex::new(Vec::new()),
             bad_frame: Mutex::new(None),
+            health: Mutex::new(HealthMode::Version(PROTOCOL_VERSION)),
             calls: Mutex::new(Vec::new()),
             api_plan: Mutex::new(VecDeque::new()),
             message_plan: Mutex::new(VecDeque::new()),
@@ -1076,8 +1092,29 @@ async fn members_api(
     .into_response()
 }
 
+async fn health(State(s): State<Arc<Stub>>, headers: HeaderMap) -> Response {
+    s.record("GET healthz", &headers);
+    let mode = s.health.lock().unwrap().clone();
+    match mode {
+        HealthMode::Version(protocol_version) => {
+            Json(lazy_protocol::HealthResponse { protocol_version }).into_response()
+        }
+        HealthMode::NotJson => (StatusCode::OK, "<html>welcome</html>").into_response(),
+        HealthMode::Error => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        HealthMode::RedirectTo(to) => (StatusCode::FOUND, [("location", to)]).into_response(),
+    }
+}
+
+/// Sends the client to `/healthz` on the same host.
+async fn same_host_redirect() -> Response {
+    (StatusCode::FOUND, [("location", "/healthz")]).into_response()
+}
+
 fn router(stub: Arc<Stub>) -> Router {
     Router::new()
+        .route("/healthz", get(health))
+        .route("/lazy/healthz", get(health))
+        .route("/redirected/healthz", get(same_host_redirect))
         .route("/v1/auth/login", post(login))
         .route("/v1/auth/register", post(register))
         .route("/v1/bootstrap", get(bootstrap))
@@ -1291,6 +1328,7 @@ impl Server {
 
 fn fast_config(url: &str, profile: &TempDir, storage: Arc<dyn SecureStorage>) -> RuntimeConfig {
     RuntimeConfig {
+        server_locked: true,
         server_url: url.to_owned(),
         profile_dir: Some(profile.path().to_owned()),
         secure_storage: SecureStorageChoice::Custom(storage),
@@ -5755,4 +5793,512 @@ fn nothing_the_runtime_logs_holds_what_was_typed_or_any_secret() {
         "the log holds secrets:\n{}",
         leaks.join("\n")
     );
+}
+
+// ----- Choosing the server (dogfood packaging) -----
+
+/// A runtime whose server the person may change: `server_url` is only the default.
+fn chooser(default: &Server, profile: TempDir, storage: Arc<MemoryStorage>) -> (Client, Input) {
+    let (runtime, inputs) = Runtime::start(RuntimeConfig {
+        server_locked: false,
+        ..fast_config(&default.url, &profile, storage.clone())
+    })
+    .expect("runtime starts");
+    let mut client = Client {
+        runtime: Some(runtime),
+        inputs,
+        profile,
+        storage,
+        url: default.url.clone(),
+        skipped: Vec::new(),
+    };
+    let started = client.expect("Started", |i| matches!(i, Input::Started(_)));
+    (client, started)
+}
+
+fn started_state(input: Input) -> lazy_client_core::StartupState {
+    let Input::Started(state) = input else {
+        panic!("expected Started")
+    };
+    state
+}
+
+/// Asks a server which protocol it speaks, through the runtime.
+fn ask(client: &mut Client, url: &str) -> Result<u32, String> {
+    client.execute(vec![Effect::CheckServer {
+        url: url.to_owned(),
+        generation: 7,
+    }]);
+    let Input::ServerChecked { generation, result } =
+        client.expect("the check", |i| matches!(i, Input::ServerChecked { .. }))
+    else {
+        unreachable!()
+    };
+    assert_eq!(generation, 7, "the answer echoes the question");
+    result
+}
+
+/// Moves the runtime to a server, through the runtime.
+fn move_to(client: &mut Client, url: &str) -> Result<Box<lazy_client_core::StartupState>, String> {
+    client.execute(vec![Effect::UseServer {
+        url: url.to_owned(),
+        generation: 8,
+    }]);
+    let Input::ServerSwitched { generation, result } =
+        client.expect("the move", |i| matches!(i, Input::ServerSwitched { .. }))
+    else {
+        unreachable!()
+    };
+    assert_eq!(generation, 8);
+    result
+}
+
+fn auth_of_last_request(server: &Server) -> Option<String> {
+    server
+        .stub
+        .requests
+        .lock()
+        .unwrap()
+        .last()
+        .expect("the stub saw a request")
+        .1
+        .clone()
+}
+
+#[test]
+fn the_environment_wins_over_a_saved_choice_which_wins_over_the_default() {
+    use lazy_client_core::ServerSource;
+    let (a, b) = (Server::start(), Server::start());
+    let profile = tempfile::tempdir().unwrap();
+    let file = profile.path().join("server.json");
+
+    // Nothing chosen: the default.
+    let storage = MemoryStorage::new();
+    let (mut client, started) = chooser(&a, profile, storage.clone());
+    let state = started_state(started);
+    assert_eq!(
+        (state.server.url.as_str(), state.server.source),
+        (a.url.as_str(), ServerSource::Default)
+    );
+    client.shutdown();
+    let profile = client.profile;
+
+    // A choice was saved: it wins over the default.
+    std::fs::write(
+        &file,
+        format!(r#"{{"version": 1, "server_url": "{}"}}"#, b.url),
+    )
+    .unwrap();
+    let (mut client, started) = chooser(&a, profile, storage.clone());
+    let state = started_state(started);
+    assert_eq!(
+        (state.server.url.as_str(), state.server.source),
+        (b.url.as_str(), ServerSource::Saved)
+    );
+    client.shutdown();
+    let profile = client.profile;
+
+    // The environment (or whoever started the runtime) wins over both, and leaves the file be.
+    let before = std::fs::read(&file).unwrap();
+    let (mut client, started) = Client::start_with(&a, profile, storage.clone());
+    let state = started_state(started);
+    assert_eq!(
+        (state.server.url.as_str(), state.server.source),
+        (a.url.as_str(), ServerSource::Environment)
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    client.shutdown();
+}
+
+#[test]
+fn a_damaged_or_unknown_choice_is_the_same_as_none() {
+    use lazy_client_core::ServerSource;
+    let a = Server::start();
+    for content in [
+        "not json".to_owned(),
+        r#"{"version": 2, "server_url": "https://elsewhere.example.com"}"#.to_owned(),
+        r#"{"server_url": "https://elsewhere.example.com"}"#.to_owned(),
+        r#"{"version": 1, "server_url": "https://user:pw@elsewhere.example.com"}"#.to_owned(),
+        String::new(),
+    ] {
+        let profile = tempfile::tempdir().unwrap();
+        std::fs::write(profile.path().join("server.json"), &content).unwrap();
+        let (mut client, started) = chooser(&a, profile, MemoryStorage::new());
+        let state = started_state(started);
+        assert_eq!(
+            (state.server.url.as_str(), state.server.source),
+            (a.url.as_str(), ServerSource::Default),
+            "{content}"
+        );
+        assert!(
+            state.problems.is_empty(),
+            "no alarm for {content}: {:?}",
+            state.problems
+        );
+        client.shutdown();
+    }
+}
+
+#[test]
+fn a_profile_from_before_the_choice_existed_keeps_its_session() {
+    // A session saved by a build that knew nothing of the choice (the address came from the
+    // environment, or the default) is found again by one that does: the secrets were always kept
+    // under the profile and the server's address, and still are.
+    let a = Server::start();
+    let profile = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let (mut client, _) = Client::start_with(&a, profile, storage.clone());
+    client.login();
+    client.shutdown();
+    let profile = client.profile;
+    assert!(
+        !profile.path().join("server.json").exists(),
+        "the premise: no file"
+    );
+
+    let (mut client, started) = chooser(&a, profile, storage);
+    let state = started_state(started);
+    assert!(
+        state.session_restored,
+        "the session is found under the same key"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn a_token_for_one_server_is_never_sent_to_another() {
+    let (a, b) = (Server::start(), Server::start());
+    let profile = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let (mut client, _) = Client::start_with(&a, profile, storage.clone());
+    client.login();
+    client.shutdown();
+    let profile = client.profile;
+
+    // The same profile and credential store, another server: no session, no Authorization.
+    let (mut other, started) = Client::start_with(&b, profile, storage.clone());
+    assert!(!started_state(started).session_restored);
+    other.execute(vec![Effect::LoadBootstrap]);
+    other.expect("the refusal", |i| matches!(i, Input::BootstrapFailed(_)));
+    assert_eq!(
+        auth_of_last_request(&b),
+        None,
+        "no token was offered to the other server"
+    );
+    other.shutdown();
+    let profile = other.profile;
+
+    // Back on the first, the session is still there.
+    let (mut again, started) = Client::start_with(&a, profile, storage);
+    assert!(started_state(started).session_restored);
+    again.execute(vec![Effect::LoadBootstrap]);
+    again.expect("bootstrap", |i| matches!(i, Input::BootstrapLoaded(_)));
+    assert!(auth_of_last_request(&a).is_some_and(|auth| auth.starts_with("Bearer tok-")));
+    again.shutdown();
+}
+
+#[test]
+fn a_server_is_asked_which_protocol_it_speaks() {
+    let a = Server::start();
+    let (mut client, _) = chooser(&a, tempfile::tempdir().unwrap(), MemoryStorage::new());
+    assert_eq!(ask(&mut client, &a.url), Ok(PROTOCOL_VERSION));
+    assert_eq!(
+        auth_of_last_request(&a),
+        None,
+        "no session goes with the question"
+    );
+    // Another protocol is an answer, not a failure: the core decides what it means.
+    *a.stub.health.lock().unwrap() = HealthMode::Version(PROTOCOL_VERSION + 3);
+    assert_eq!(ask(&mut client, &a.url), Ok(PROTOCOL_VERSION + 3));
+    // A reverse proxy's path prefix is part of the address.
+    *a.stub.health.lock().unwrap() = HealthMode::Version(PROTOCOL_VERSION);
+    assert_eq!(
+        ask(&mut client, &format!("{}/lazy", a.url)),
+        Ok(PROTOCOL_VERSION)
+    );
+    client.shutdown();
+}
+
+#[test]
+fn a_server_that_is_not_there_or_not_lazy_is_told_in_fixed_words() {
+    let a = Server::start();
+    let (mut client, _) = chooser(&a, tempfile::tempdir().unwrap(), MemoryStorage::new());
+    // Nothing listens (port 1 is never handed out to a connection).
+    assert_eq!(
+        ask(&mut client, "http://127.0.0.1:1"),
+        Err("connection failed".to_owned())
+    );
+    // Something that is not a Lazy server.
+    *a.stub.health.lock().unwrap() = HealthMode::NotJson;
+    let not_lazy = Err("there is no Lazy server at this address".to_owned());
+    assert_eq!(ask(&mut client, &a.url), not_lazy);
+    assert_eq!(
+        ask(&mut client, &format!("{}/nowhere", a.url)),
+        not_lazy,
+        "a 404"
+    );
+    *a.stub.health.lock().unwrap() = HealthMode::Error;
+    assert_eq!(
+        ask(&mut client, &a.url),
+        Err("the server answered with an error".to_owned())
+    );
+    // None of the phrases quotes the address.
+    for url in ["http://127.0.0.1:1", &a.url] {
+        let told = ask(&mut client, url).unwrap_err();
+        assert!(
+            !told.contains("127.0.0.1") && !told.contains("http"),
+            "{told}"
+        );
+    }
+    client.shutdown();
+}
+
+#[test]
+fn a_redirect_is_followed_only_to_the_same_host() {
+    let (a, b) = (Server::start(), Server::start());
+    let (mut client, _) = chooser(&a, tempfile::tempdir().unwrap(), MemoryStorage::new());
+    // Same host: followed.
+    assert_eq!(
+        ask(&mut client, &format!("{}/redirected", a.url)),
+        Ok(PROTOCOL_VERSION)
+    );
+    // Another host (the same machine under another name): not followed, and b is never asked.
+    let elsewhere = b.url.replace("127.0.0.1", "localhost");
+    *a.stub.health.lock().unwrap() = HealthMode::RedirectTo(format!("{elsewhere}/healthz"));
+    let before = b.stub.requests.lock().unwrap().len();
+    assert_eq!(
+        ask(&mut client, &a.url),
+        Err("it redirects somewhere else".to_owned())
+    );
+    assert_eq!(b.stub.requests.lock().unwrap().len(), before);
+    client.shutdown();
+}
+
+#[test]
+fn moving_to_a_server_sends_everything_there_and_nothing_to_the_old_one() {
+    let (a, b) = (Server::start(), Server::start());
+    let profile = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let (mut client, _) = chooser(&a, profile, storage.clone());
+    assert_eq!(ask(&mut client, &b.url), Ok(PROTOCOL_VERSION));
+
+    let state = move_to(&mut client, &b.url).expect("the move");
+    assert_eq!(state.server.url, b.url);
+    assert_eq!(state.server.source, lazy_client_core::ServerSource::Saved);
+    assert!(!state.session_restored);
+    // Saved, and nothing else in the file.
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(client.profile.path().join("server.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        saved,
+        serde_json::json!({ "version": 1, "server_url": b.url })
+    );
+
+    // Requests go to the new server: the sign-in, the load, and the realtime connection.
+    let a_before = a.stub.requests.lock().unwrap().len();
+    client.execute(vec![Effect::Login(LoginRequest {
+        username: Username::parse("stubby").unwrap(),
+        password: lazy_protocol::Password::new("password-1"),
+    })]);
+    client.expect("signed in", |i| matches!(i, Input::Authenticated { .. }));
+    client.execute(vec![Effect::LoadBootstrap]);
+    client.expect("bootstrap", |i| matches!(i, Input::BootstrapLoaded(_)));
+    client.execute(vec![Effect::Subscribe {
+        workspace: b.stub.workspace,
+        after: EventSeq::new(10).unwrap(),
+    }]);
+    client.expect("the connection", |i| {
+        matches!(i, Input::Socket(SocketEvent::Opened { .. }))
+    });
+    assert_eq!(b.stub.logins.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        b.stub.upgrades.load(Ordering::SeqCst),
+        1,
+        "the realtime URL moved too"
+    );
+    assert_eq!(a.stub.logins.load(Ordering::SeqCst), 0);
+    assert_eq!(a.stub.upgrades.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        a.stub.requests.lock().unwrap().len(),
+        a_before,
+        "nothing more reached the old one"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn moving_leaves_no_session_behind_and_sends_none_to_the_new_server() {
+    // Even if the core were bypassed while signed in, the old session goes nowhere.
+    let (a, b) = (Server::start(), Server::start());
+    let profile = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let (mut client, _) = chooser(&a, profile, storage.clone());
+    client.login();
+    let old_vault = SecretVault::new(storage.clone(), client.profile.path(), &a.url);
+    assert!(old_vault.session_token().unwrap().is_some());
+
+    move_to(&mut client, &b.url).expect("the move");
+    assert!(
+        old_vault.session_token().unwrap().is_none(),
+        "the old server's session is deleted"
+    );
+    assert_eq!(
+        storage
+            .keys()
+            .iter()
+            .filter(|key| key.contains(old_vault.namespace()))
+            .count(),
+        0,
+        "and so is its key: {:?}",
+        storage.keys()
+    );
+    client.execute(vec![Effect::LoadBootstrap]);
+    client.expect("the refusal", |i| matches!(i, Input::BootstrapFailed(_)));
+    assert_eq!(
+        auth_of_last_request(&b),
+        None,
+        "no token reached the new server"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn the_choice_and_the_new_servers_state_survive_a_restart() {
+    let (a, b) = (Server::start(), Server::start());
+    let profile = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let (mut client, _) = chooser(&a, profile, storage.clone());
+    move_to(&mut client, &b.url).expect("the move");
+    client.login();
+    // State written after the move is kept under the new server's key.
+    let conversation = ConversationId::generate();
+    client.execute(vec![Effect::PersistDrafts(vec![(
+        conversation,
+        "a draft".into(),
+    )])]);
+    client.shutdown();
+    let profile = client.profile;
+
+    let (mut client, started) = chooser(&a, profile, storage);
+    let state = started_state(started);
+    assert_eq!(
+        (state.server.url.as_str(), state.server.source),
+        (b.url.as_str(), lazy_client_core::ServerSource::Saved),
+        "the default (a) is not used: the saved choice wins"
+    );
+    assert!(state.session_restored, "the session on the new server");
+    assert_eq!(
+        state.drafts.get(&conversation).map(String::as_str),
+        Some("a draft")
+    );
+    assert!(state.problems.is_empty(), "{:?}", state.problems);
+    client.execute(vec![Effect::LoadBootstrap]);
+    client.expect("bootstrap", |i| matches!(i, Input::BootstrapLoaded(_)));
+    assert_eq!(
+        a.stub.requests.lock().unwrap().len(),
+        0,
+        "the old server heard nothing"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn moving_deletes_what_the_old_server_left_in_the_profile() {
+    let (a, b) = (Server::start(), Server::start());
+    let profile = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let (mut client, _) = chooser(&a, profile, storage.clone());
+    client.login();
+    let conversation = ConversationId::generate();
+    client.execute(vec![Effect::PersistDrafts(vec![(
+        conversation,
+        "old".into(),
+    )])]);
+    let key = SecretVault::new(storage.clone(), client.profile.path(), &a.url)
+        .state_key()
+        .unwrap();
+    let profile_path = client.profile.path().to_owned();
+    wait_until("the draft on disk", || {
+        inspect_state(&profile_path, &key)
+            .drafts
+            .contains_key(&conversation)
+    });
+
+    let state = move_to(&mut client, &b.url).expect("the move");
+    assert!(state.drafts.is_empty() && state.journal.is_empty() && state.cache.is_none());
+    assert!(
+        inspect_state(&profile_path, &key).drafts.is_empty(),
+        "wiped from disk"
+    );
+    assert!(
+        state.problems.is_empty(),
+        "no alarm about the old files: {:?}",
+        state.problems
+    );
+    client.shutdown();
+}
+
+#[test]
+fn a_choice_that_cannot_be_saved_changes_nothing() {
+    let (a, b) = (Server::start(), Server::start());
+    let profile = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let (mut client, _) = chooser(&a, profile, storage.clone());
+    client.login();
+    // The file cannot be written: something else is in its place.
+    std::fs::create_dir(client.profile.path().join("server.json")).unwrap();
+    let failed = move_to(&mut client, &b.url).unwrap_err();
+    assert_eq!(failed, "the choice could not be saved");
+    // Still on the first server, still signed in there.
+    client.execute(vec![Effect::LoadBootstrap]);
+    client.expect("bootstrap", |i| matches!(i, Input::BootstrapLoaded(_)));
+    assert!(auth_of_last_request(&a).is_some());
+    assert_eq!(b.stub.requests.lock().unwrap().len(), 0);
+    client.shutdown();
+}
+
+#[test]
+fn a_server_set_by_the_environment_is_not_moved_by_a_stray_effect() {
+    let (a, b) = (Server::start(), Server::start());
+    let (mut client, _) = Client::start(&a);
+    let failed = move_to(&mut client, &b.url).unwrap_err();
+    assert!(failed.contains("environment"), "{failed}");
+    client.login();
+    assert_eq!(a.stub.logins.load(Ordering::SeqCst), 1);
+    assert_eq!(b.stub.logins.load(Ordering::SeqCst), 0);
+    assert!(!client.profile.path().join("server.json").exists());
+    client.shutdown();
+}
+
+#[test]
+fn what_is_saved_after_signing_out_and_in_again_is_still_readable_after_a_restart() {
+    let a = Server::start();
+    let profile = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let (mut client, _) = Client::start_with(&a, profile, storage.clone());
+    client.login();
+    client.execute(vec![Effect::SignOut]);
+    // Sign-out deletes the secrets, including the key the state is encrypted with.
+    let vault = client.vault();
+    wait_until("the secrets to be deleted", || {
+        vault.session_token().unwrap().is_none()
+    });
+    client.login();
+    let conversation = ConversationId::generate();
+    client.execute(vec![Effect::PersistDrafts(vec![(
+        conversation,
+        "after".into(),
+    )])]);
+    client.shutdown();
+    let profile = client.profile;
+
+    let (mut client, started) = Client::start_with(&a, profile, storage);
+    let state = started_state(started);
+    assert!(state.problems.is_empty(), "{:?}", state.problems);
+    assert_eq!(
+        state.drafts.get(&conversation).map(String::as_str),
+        Some("after")
+    );
+    client.shutdown();
 }

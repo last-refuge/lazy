@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use lazy_domain::workspace::WorkspaceSettings;
 use lazy_domain::{
     ChannelName, ChannelVisibility, ConversationId, ConversationKind, DisplayName, UserId,
     Username, WorkspaceId, WorkspaceRole,
@@ -61,6 +62,16 @@ pub struct SeededWorkspace {
 /// Safe to run from several servers at once: a transaction-scoped advisory lock serializes the
 /// check and the insert. Returns `None` when nothing was created.
 pub async fn seed_default_workspace(pool: &PgPool) -> Result<Option<SeededWorkspace>, AppError> {
+    seed_default_workspace_with(pool, WorkspaceSettings::default()).await
+}
+
+/// [`seed_default_workspace`] with the given settings for the workspace it creates (its
+/// registration policy, for a server that should not be open to everyone from the first minute).
+/// When a workspace already exists nothing is created and the settings are ignored.
+pub async fn seed_default_workspace_with(
+    pool: &PgPool,
+    settings: WorkspaceSettings,
+) -> Result<Option<SeededWorkspace>, AppError> {
     /// Arbitrary constant identifying the seed lock.
     const SEED_LOCK_KEY: i64 = 0x4c41_5a59_5345_4544;
 
@@ -79,11 +90,29 @@ pub async fn seed_default_workspace(pool: &PgPool) -> Result<Option<SeededWorksp
     let general_id = insert_workspace(&mut tx, workspace_id, "Lazy", None)
         .await?
         .ok_or_else(|| AppError::internal("a new workspace id was already taken"))?;
+    if settings != WorkspaceSettings::default() {
+        sqlx::query("UPDATE workspaces SET settings = $2 WHERE id = $1")
+            .bind(workspace_id.as_uuid())
+            .bind(sqlx::types::Json(settings))
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
     Ok(Some(SeededWorkspace {
         workspace_id,
         general_id,
     }))
+}
+
+/// Whether the workspace registration targets (the oldest with no creator: the seeded one) has no
+/// members yet; `None` if there is no such workspace.
+pub async fn default_workspace_is_empty(pool: &PgPool) -> Result<Option<bool>, AppError> {
+    Ok(sqlx::query_scalar(
+        "SELECT NOT EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id) \
+         FROM workspaces w WHERE w.created_by IS NULL ORDER BY w.created_at, w.id LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?)
 }
 
 /// Inserts a workspace with default settings and its default channel, `#general`, and returns the

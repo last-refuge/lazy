@@ -7,19 +7,25 @@ guide: please report it.
 
 ## What you need
 
-- A machine that meets the requirements in `README.md` (Linux with Wayland or X11, Vulkan, and a
-  Secret Service keyring), and the repository built once (`scripts/run-client.sh` builds it).
-- A server. For a small group, one person runs it on a machine the others can reach:
-  `scripts/run-server.sh` (development database on this machine; see `README.md`) and shares the
-  server's address. Clients choose it with `LAZY_SERVER_URL`.
-- An account. The first person to register owns the workspace. Everyone else either registers
-  directly (if the workspace is open) or with an **invitation code** from an owner or admin:
-  **Invite people…** at the bottom of the sidebar, create an invitation (an hour to 30 days, one
-  use or many), and send the code. The code is shown once.
+- **The client.** Download the installer for your system from the project's GitHub releases (see
+  `RELEASE.md`): a `.deb` or tarball for Linux, a `.dmg` for macOS, a Setup `.exe` for Windows. The
+  files are not code-signed yet, so macOS and Windows ask you to confirm the first run (`RELEASE.md`
+  says how). Linux needs a Vulkan driver and a Secret Service keyring (GNOME Keyring, KWallet,
+  KeePassXC) to keep your sign-in. Desktop notifications work on Linux only so far.
+- **A server.** One person runs it, on a machine everyone can reach, with Docker Compose or Coolify
+  (`DEPLOY.md`); it must be on HTTPS if it is reachable from the internet. They give you its address.
+  On the client's sign-in screen, choose that address under **Server** (it is remembered).
+- **An account.** The person who set up the server creates the owner account first, with the server's
+  setup code typed into the **Invitation or setup code** field. Everyone else joins with an
+  **invitation code**: the owner opens **Invite people…** at the bottom of the sidebar, creates an
+  invitation (an hour to 30 days, one use or many), and sends the code, which is shown once.
 
-Your data lives on the server's database and, for your client, in its profile directory (see
-**Where things are** below). Message history is not end-to-end encrypted; the server operator can
-read it.
+For development instead (everything on one machine, no installers): `scripts/run-server.sh` and
+`scripts/run-client.sh <name>` as in `README.md`.
+
+Your data lives in the server's database and attachment folder and, for your client, in its profile
+directory (see **Where things are** below). Message history is not end-to-end encrypted; whoever runs
+the server can read it.
 
 ## A first day, as a checklist
 

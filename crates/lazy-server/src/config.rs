@@ -1,8 +1,93 @@
 //! Server configuration.
 
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
+
+use lazy_domain::workspace::RegistrationPolicy;
+
+/// The secret that lets the first account be created on a server that anyone can reach: while the
+/// default workspace has no members, registration needs it (as the "invitation code"), and once it
+/// has any it does nothing. Never logged: `Debug` hides it, and the only way to read it is to
+/// compare against it.
+#[derive(Clone)]
+pub struct SetupCode(String);
+
+impl SetupCode {
+    /// The fewest characters a setup code may have.
+    pub const MIN_CHARS: usize = 16;
+
+    /// A setup code, or a message (never containing the code) saying why it is not one.
+    pub fn new(code: impl Into<String>) -> Result<Self, String> {
+        let code = code.into();
+        if code.chars().count() < Self::MIN_CHARS {
+            return Err(format!(
+                "the setup code must be at least {} characters",
+                Self::MIN_CHARS
+            ));
+        }
+        Ok(Self(code))
+    }
+
+    /// Whether `candidate` is the code, compared in constant time: both are hashed first, so the
+    /// time depends neither on where they differ nor on how long the candidate is.
+    pub fn matches(&self, candidate: &str) -> bool {
+        use sha2::{Digest, Sha256};
+        use subtle::ConstantTimeEq;
+        let ours = Sha256::digest(self.0.as_bytes());
+        let theirs = Sha256::digest(candidate.as_bytes());
+        ours.ct_eq(&theirs).into()
+    }
+}
+
+impl fmt::Debug for SetupCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SetupCode(<redacted>)")
+    }
+}
+
+#[cfg(test)]
+mod setup_code_tests {
+    use super::*;
+
+    #[test]
+    fn a_setup_code_is_sixteen_characters_or_more_counted_as_characters() {
+        assert!(SetupCode::new("0123456789abcde").is_err());
+        assert!(SetupCode::new("0123456789abcdef").is_ok());
+        // Eight characters of two bytes each are sixteen bytes and not sixteen characters.
+        assert!(SetupCode::new("éééééééé").is_err());
+        assert!(SetupCode::new("é".repeat(16)).is_ok());
+        let message = SetupCode::new("short").unwrap_err();
+        assert!(
+            message.contains("16") && !message.contains("short"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn it_matches_exactly_and_never_shows_itself() {
+        let code = SetupCode::new("the-right-setup-code").unwrap();
+        assert!(code.matches("the-right-setup-code"));
+        for wrong in [
+            "",
+            "the-right-setup-cod",
+            "the-right-setup-code ",
+            "THE-RIGHT-SETUP-CODE",
+            "x",
+        ] {
+            assert!(!code.matches(wrong), "{wrong:?}");
+        }
+        assert_eq!(format!("{code:?}"), "SetupCode(<redacted>)");
+        let mut config = Config::new("127.0.0.1:1".parse().unwrap(), "postgres://u:pw@h:1/d");
+        config.setup_code = Some(code);
+        let shown = format!("{config:?}");
+        assert!(
+            !shown.contains("the-right-setup-code") && !shown.contains("pw@"),
+            "{shown}"
+        );
+    }
+}
 
 /// Argon2id cost parameters for password hashing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +181,11 @@ pub struct Config {
     pub open_registration: bool,
     /// Allow any signed-in person to create workspaces of their own.
     pub open_workspace_creation: bool,
+    /// The registration policy of the workspace the server creates when it seeds (ignored when a
+    /// workspace already exists).
+    pub seed_registration: RegistrationPolicy,
+    /// See [`SetupCode`]; `None` means the first person to register owns the workspace.
+    pub setup_code: Option<SetupCode>,
     pub password_cost: PasswordCost,
     /// Days of event history to keep; `0` keeps everything. See [`RetentionPolicy`].
     pub event_retention_days: u32,
@@ -124,6 +214,8 @@ impl std::fmt::Debug for Config {
             .field("seed", &self.seed)
             .field("open_registration", &self.open_registration)
             .field("open_workspace_creation", &self.open_workspace_creation)
+            .field("seed_registration", &self.seed_registration)
+            .field("setup_code", &self.setup_code)
             .field("password_cost", &self.password_cost)
             .field("event_retention_days", &self.event_retention_days)
             .field("max_db_connections", &self.max_db_connections)
@@ -147,6 +239,8 @@ impl Config {
             seed: true,
             open_registration: true,
             open_workspace_creation: true,
+            seed_registration: RegistrationPolicy::Open,
+            setup_code: None,
             password_cost: PasswordCost::DEFAULT,
             event_retention_days: RetentionPolicy::DEFAULT_DAYS,
             max_db_connections: 20,
@@ -206,6 +300,9 @@ pub struct IntegrationOptions {
     /// See [`Config::public_url`]; `None` means `http://` and the listening address.
     pub public_url: Option<String>,
     pub webhook_rate: WebhookRate,
+    /// See [`Config::setup_code`]. (Not about integrations; kept here so that adding it does not
+    /// change a struct other crates construct.)
+    pub setup_code: Option<SetupCode>,
 }
 
 /// Where the bytes of attachments live.

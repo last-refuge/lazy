@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Lazy
+GenericName=Team chat
+Comment=A native place for channels, messages and the people you work with
+Exec=@EXEC@
+Icon=lazy
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=chat;messaging;team;slack;
+StartupWMClass=lazy
+StartupNotify=true

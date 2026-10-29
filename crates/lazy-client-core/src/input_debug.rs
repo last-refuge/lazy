@@ -699,6 +699,18 @@ impl fmt::Debug for Input {
                 .field("generation", generation)
                 .field("result", &ResReq(result, "InvitationList"))
                 .finish(),
+            Input::SetServerUrl(v0) => f.debug_tuple("SetServerUrl").field(&Text(v0)).finish(),
+            Input::CheckServer => f.write_str("CheckServer"),
+            Input::ServerChecked { generation, result } => f
+                .debug_struct("ServerChecked")
+                .field("generation", generation)
+                .field("result", &ResText(result, "protocol version"))
+                .finish(),
+            Input::ServerSwitched { generation, result } => f
+                .debug_struct("ServerSwitched")
+                .field("generation", generation)
+                .field("result", &ResText(result, "StartupState"))
+                .finish(),
         }
     }
 }

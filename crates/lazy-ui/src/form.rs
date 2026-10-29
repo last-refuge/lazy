@@ -41,13 +41,10 @@ pub fn button(
     let on_activate = Rc::new(on_activate);
     let on_key = on_activate.clone();
     let on_click = on_activate;
-    // The ring is the accent color, which is also a primary button's fill: there it would vanish,
-    // so a filled button is outlined in the text color, which contrasts with the surface around it
-    // (white-on-white would not).
-    let focus_ring = match kind {
-        ButtonKind::Primary => colors.text,
-        ButtonKind::Secondary | ButtonKind::Danger => colors.focus_ring,
-    };
+    // The ring is the brand's focus color, which holds 3:1 against the surface around a button
+    // (tested in `theme`); it is drawn on the button's edge, so a filled button's own fill, which
+    // it does not contrast with, is not relied on.
+    let focus_ring = colors.focus_ring;
     let (bg, fg, hover_bg, border) = match kind {
         ButtonKind::Primary => (
             colors.accent,
@@ -73,9 +70,10 @@ pub fn button(
         .debug_selector(move || selector)
         .track_focus(focus)
         .flex_none()
-        .px_3()
+        .px_4()
         .py_1p5()
-        .rounded(theme.radii.medium)
+        // The brand's pill button.
+        .rounded(theme.radii.pill)
         .border_1()
         .border_color(border)
         .text_size(theme.type_scale.body)

@@ -1864,7 +1864,9 @@ impl ShellView {
             .map_or_else(|| core.connection(), |item| item.connection);
         let connection = match own {
             ConnectionState::Reconnecting { attempt } => Some((
-                format!("Connection lost. Reconnecting… (attempt {attempt})"),
+                format!(
+                    "Reconnecting… (attempt {attempt}) Your conversations will update when you're back online."
+                ),
                 true,
             )),
             ConnectionState::Connecting => Some(("Connecting…".to_owned(), false)),
@@ -2188,18 +2190,19 @@ impl ShellView {
             .justify_center()
             .gap_3()
             .px_8()
-            .child(
+            // Moss welcomes a person who has no conversations yet, with the next step beside it.
+            .children(crate::brand::moss(cx, crate::brand::Moss::Welcome, 128.))
+            .child(crate::fonts::heading(
                 div()
                     .text_size(theme.type_scale.heading)
-                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(colors.text)
-                    .child("You're not in any conversations yet"),
-            )
+                    .child("A good place to start."),
+            ))
             .child(
                 div()
                     .text_size(theme.type_scale.body)
                     .text_color(colors.text_muted)
-                    .child("Join a channel to see what your team is talking about, or message someone directly."),
+                    .child("Find your people and say hello."),
             )
             .child(
                 div()

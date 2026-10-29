@@ -169,9 +169,21 @@ impl Render for DiagnosticsDialog {
             .gap_3()
             .child(
                 div()
-                    .text_size(theme.type_scale.body)
-                    .text_color(colors.text_muted)
-                    .child("This has no messages, names, or passwords. Copy it into a bug report."),
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    // The symbol stands for the app itself here, where a generic glyph would.
+                    .children(crate::brand::symbol(cx, 40.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(theme.type_scale.body)
+                            .text_color(colors.text_muted)
+                            .child(
+                                "This has no messages, names, or passwords. Copy it into a bug report.",
+                            ),
+                    ),
             )
             .child(
                 div()

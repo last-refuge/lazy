@@ -44,6 +44,9 @@ pub struct Diagnostics {
     pub phase: String,
     /// The aggregate connection, in the words of `WorkspaceDiagnostics::connection`.
     pub connection: String,
+    /// Where the server's address came from and what the last check found, in words
+    /// (`saved, reachable`). The address itself is `ClientCore::server().url`.
+    pub server: String,
     pub workspaces: Vec<WorkspaceDiagnostics>,
     /// Conversations the person can read, in all workspaces.
     pub conversations: usize,
@@ -64,6 +67,7 @@ impl Diagnostics {
         let _ = writeln!(text, "protocol: {}", self.protocol_version);
         let _ = writeln!(text, "session: {}", self.phase);
         let _ = writeln!(text, "connection: {}", self.connection);
+        let _ = writeln!(text, "server: {}", self.server);
         for (index, workspace) in self.workspaces.iter().enumerate() {
             let applied = workspace
                 .applied

@@ -22,7 +22,8 @@ use std::time::Duration;
 
 use lazy_client_core::{
     ActionKind, ActionOutcome, ContentCache, CreatedWebhook, Effect, EmojiPrefs, Input,
-    JournalEntry, RequestError, SecretUrl, StartupState, ThreadDraft, ViewState,
+    JournalEntry, RequestError, SecretUrl, ServerInfo, ServerSource, StartupState, ThreadDraft,
+    ViewState,
 };
 use lazy_domain::{ConversationId, EventSeq, OperationId, WorkspaceId};
 use lazy_protocol::{
@@ -89,7 +90,10 @@ struct Inner {
     handle: tokio::runtime::Handle,
     config: RuntimeConfig,
     api: Arc<Api>,
-    vault: SecretVault,
+    /// The secrets of this profile on the server in use; replaced when the server is changed.
+    vault: Mutex<SecretVault>,
+    /// The server in use and where its address came from.
+    server: Mutex<(String, ServerSource)>,
     profile_dir: PathBuf,
     inputs: async_channel::Sender<Input>,
     cancel: CancellationToken,
@@ -143,11 +147,20 @@ impl Runtime {
     pub fn start(
         config: RuntimeConfig,
     ) -> Result<(Self, async_channel::Receiver<Input>), RuntimeError> {
-        let server_url = config.server_url.trim().trim_end_matches('/').to_owned();
-        if !(server_url.starts_with("http://") || server_url.starts_with("https://")) {
+        let configured = config.server_url.trim().trim_end_matches('/').to_owned();
+        if !(configured.starts_with("http://") || configured.starts_with("https://")) {
             return Err(RuntimeError::InvalidServerUrl(config.server_url));
         }
         let profile_dir = resolve_profile_dir(&config)?;
+        // The environment (or whoever started the runtime) wins, then what the person chose in
+        // the application, then the default.
+        let (server_url, source) = if config.server_locked {
+            (configured, ServerSource::Environment)
+        } else if let Some(saved) = crate::saved_server::load(&profile_dir) {
+            (saved, ServerSource::Saved)
+        } else {
+            (configured, ServerSource::Default)
+        };
         let storage: Arc<dyn SecureStorage> = match &config.secure_storage {
             SecureStorageChoice::Keyring => match KeyringStorage::new() {
                 Ok(storage) => Arc::new(storage),
@@ -172,7 +185,8 @@ impl Runtime {
             handle: tokio.handle().clone(),
             config,
             api,
-            vault,
+            vault: Mutex::new(vault),
+            server: Mutex::new((server_url, source)),
             profile_dir,
             inputs,
             cancel: CancellationToken::new(),
@@ -295,6 +309,25 @@ impl Inner {
     async fn emit(&self, input: Input) {
         // A closed channel means the host is gone; there is nobody to tell.
         let _ = self.inputs.send(input).await;
+    }
+
+    /// The secrets of this profile on the server in use.
+    fn vault(&self) -> SecretVault {
+        self.vault.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The server in use, as `Started` and `ServerSwitched` carry it.
+    fn server_info(&self) -> ServerInfo {
+        let (url, source) = self
+            .server
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        ServerInfo {
+            url,
+            source,
+            ..ServerInfo::default()
+        }
     }
 
     fn persistence(&self) -> Option<Arc<Persistence>> {
@@ -477,19 +510,87 @@ impl Inner {
                 (state, None, None)
             }
         };
-        *self.files.lock().unwrap_or_else(|e| e.into_inner()) = files;
+        self.install_local_state(files, store);
         self.spawn_unguarded(self.clone().run_prefs_saver());
         self.spawn_unguarded(self.clone().run_clock());
-        if let Some(store) = store {
-            let persistence = Persistence::start(&self, store);
-            *self.persistence.lock().unwrap_or_else(|e| e.into_inner()) = Some(persistence);
-        }
         self.emit(Input::Started(state)).await;
+    }
+
+    /// Starts using the opened state: the files' services and the journal.
+    fn install_local_state(
+        self: &Arc<Self>,
+        files: Option<Arc<FileServices>>,
+        store: Option<StateStore>,
+    ) {
+        *self.files.lock().unwrap_or_else(|e| e.into_inner()) = files;
+        let persistence = store.map(|store| Persistence::start(self, store));
+        *self.persistence.lock().unwrap_or_else(|e| e.into_inner()) = persistence;
+    }
+
+    /// `Effect::UseServer`: saves the address, deletes the local state and the secrets of the
+    /// server left (a session and a profile's state belong to one server), points requests and
+    /// realtime connections at the new one, and loads what its profile holds.
+    async fn switch_server(self: &Arc<Self>, url: String) -> Result<Box<StartupState>, String> {
+        if self.config.server_locked {
+            return Err("the server is set by the environment".to_owned());
+        }
+        let url = lazy_client_core::normalize_server_url(&url)
+            .map_err(|_| "that isn't a server address".to_owned())?;
+        let dir = self.profile_dir.clone();
+        let saving = url.clone();
+        let saved =
+            tokio::task::spawn_blocking(move || crate::saved_server::save(&dir, &saving)).await;
+        if !matches!(saved, Ok(Ok(()))) {
+            return Err("the choice could not be saved".to_owned());
+        }
+        // Nothing of the old server goes to the new one: not its session, not its messages.
+        self.api.set_token(None);
+        self.stop_subscriptions();
+        self.cancel_search();
+        self.cancel_slot(&self.inbox);
+        self.cancel_slot(&self.saved);
+        self.cancel_slot(&self.people);
+        self.cancel_slot(&self.profile);
+        self.cancel_slot(&self.browse);
+        self.cancel_slot(&self.invitations);
+        self.forget_files().await;
+        if let Some(persistence) = self.persistence() {
+            persistence.wipe().await;
+        }
+        self.forget_prefs().await;
+        let old = self.vault();
+        let deleted = tokio::task::spawn_blocking(move || old.delete_all()).await;
+        if !matches!(deleted, Ok(Ok(()))) {
+            tracing::warn!("the secrets of the server left could not all be deleted");
+        }
+        self.api.set_base(&url);
+        let vault = self.vault().for_server(&self.profile_dir, &url);
+        *self.vault.lock().unwrap_or_else(|e| e.into_inner()) = vault;
+        *self.server.lock().unwrap_or_else(|e| e.into_inner()) = (url, ServerSource::Saved);
+        tracing::info!("now using another server");
+        self.reopen_local_state().await.map(Box::new)
+    }
+
+    /// Opens the local state again under the vault's current key, which is a new one after the
+    /// old key was deleted (sign-out, or a change of server): what is saved from then on has to be
+    /// readable at the next start, and the old key is gone. The journal still open is closed.
+    async fn reopen_local_state(self: &Arc<Self>) -> Result<StartupState, String> {
+        if let Some(persistence) = self.persistence() {
+            persistence.close().await;
+        }
+        let loader = self.clone();
+        let loaded = tokio::task::spawn_blocking(move || loader.load_local_state()).await;
+        let (state, store, files) = loaded.map_err(|error| {
+            format!("local state could not be loaded ({})", task_failure(&error))
+        })?;
+        self.install_local_state(files, store);
+        Ok(state)
     }
 
     /// Reads the stored session and opens the encrypted state. Blocking.
     fn load_local_state(&self) -> (StartupState, Option<StateStore>, Option<Arc<FileServices>>) {
         let mut state = StartupState {
+            server: self.server_info(),
             emoji_prefs: prefs::load(&self.profile_dir),
             recent_searches: searches::load(&self.profile_dir),
             recent_conversations: recent_conversations::load(&self.profile_dir),
@@ -497,7 +598,7 @@ impl Inner {
             active_workspace: crate::active_workspace::load(&self.profile_dir),
             ..StartupState::default()
         };
-        match self.vault.session_token() {
+        match self.vault().session_token() {
             Ok(Some(token)) => {
                 self.api.set_token(Some(token));
                 state.session_restored = true;
@@ -506,7 +607,7 @@ impl Inner {
             Err(error) => state.problems.push(storage_problem(&error)),
         }
         let mut files = None;
-        let store = match self.vault.state_key() {
+        let store = match self.vault().state_key() {
             Ok(key) => {
                 let (store, recovered) = StateStore::open(self.profile_dir.clone(), &key);
                 // Copies of files the journal does not name are left over from an interrupted
@@ -590,19 +691,42 @@ impl Inner {
                         persistence.wipe().await;
                     }
                     inner.forget_prefs().await;
-                    let vault = inner.vault.clone();
+                    let vault = inner.vault();
                     let deleted = tokio::task::spawn_blocking(move || vault.delete_all()).await;
                     if let Ok(Err(error)) = deleted {
                         inner
                             .emit(Input::StorageProblem(storage_problem(&error)))
                             .await;
                     }
+                    // The key the state was encrypted with went with the secrets: whoever signs
+                    // in next needs a new one before anything is saved, or what is saved cannot
+                    // be read at the next start.
+                    let _ = inner.reopen_local_state().await;
+                });
+            }
+            Effect::CheckServer { url, generation } => {
+                let inner = self.clone();
+                let timeout = self.config.request_timeout.min(Duration::from_secs(8));
+                self.spawn(async move {
+                    let result = crate::api::probe(&url, timeout).await;
+                    inner
+                        .emit(Input::ServerChecked { generation, result })
+                        .await;
+                });
+            }
+            Effect::UseServer { url, generation } => {
+                let inner = self.clone();
+                self.spawn_unguarded(async move {
+                    let result = inner.switch_server(url).await;
+                    inner
+                        .emit(Input::ServerSwitched { generation, result })
+                        .await;
                 });
             }
             Effect::ForgetSession => {
                 self.api.set_token(None);
                 self.stop_subscriptions();
-                let vault = self.vault.clone();
+                let vault = self.vault();
                 self.spawn_unguarded(async move {
                     let _ = tokio::task::spawn_blocking(move || vault.delete_session_token()).await;
                 });
@@ -1546,7 +1670,7 @@ impl Inner {
         match result {
             Ok(session) => {
                 self.api.set_token(Some(session.token.clone()));
-                let vault = self.vault.clone();
+                let vault = self.vault();
                 let token = session.token.clone();
                 let saved =
                     tokio::task::spawn_blocking(move || vault.set_session_token(&token)).await;
@@ -2052,5 +2176,6 @@ pub fn inspect_state(profile_dir: &Path, key: &[u8; 32]) -> StartupState {
         appearance: crate::appearance::load(profile_dir),
         active_workspace: crate::active_workspace::load(profile_dir),
         problems: recovered.problems,
+        server: ServerInfo::default(),
     }
 }

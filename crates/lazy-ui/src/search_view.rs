@@ -782,7 +782,7 @@ impl SearchResultsView {
             (SearchStatus::Ready, 0) => message_block(
                 theme,
                 "search-no-results",
-                None,
+                Some(states::SEARCH_NO_RESULTS_TITLE),
                 states::search_no_results(&typed, &filters),
                 None,
             ),
@@ -1249,11 +1249,12 @@ fn message_block(
                 .gap_2()
                 .text_center()
                 .children(title.map(|title| {
-                    div()
-                        .text_size(theme.type_scale.title)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(colors.text)
-                        .child(title)
+                    crate::fonts::heading(
+                        div()
+                            .text_size(theme.type_scale.title)
+                            .text_color(colors.text)
+                            .child(title),
+                    )
                 }))
                 .child(
                     div()

@@ -1,0 +1,34 @@
+name: screens
+
+# Manual only, like ci. Renders the client's offscreen scenes (light, dark, narrow; GPUI's headless
+# renderer on a software Vulkan driver) and uploads the PNGs, so the interface can be reviewed
+# without building it locally. Download the "screens" artifact from the run.
+#   gh workflow run screens
+on:
+  workflow_dispatch:
+
+jobs:
+  render:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GPUI system libraries and a software Vulkan driver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libvulkan-dev mesa-vulkan-drivers libfontconfig-dev libssl-dev libdbus-1-dev \
+            pkg-config cmake clang
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: screens
+      - name: Render
+        run: cargo run --release -p lazy-ui --example screens -- screens-out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screens
+          path: screens-out/*.png
+          if-no-files-found: error

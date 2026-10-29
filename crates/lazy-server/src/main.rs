@@ -29,6 +29,21 @@ enum Command {
     Serve(ServeArgs),
     /// Apply database migrations and exit.
     Migrate(DatabaseArgs),
+    /// Exit 0 only if a running server answers `GET /healthz` with 200 within 3 seconds. For a
+    /// container's HEALTHCHECK; needs no curl and no database.
+    Healthcheck(HealthcheckArgs),
+}
+
+#[derive(Args)]
+struct HealthcheckArgs {
+    /// The server's address (`http://host:port`, optionally with a path; the default path is
+    /// `/healthz`). Defaults to the address in `LAZY_LISTEN`, with an unspecified host (0.0.0.0, [::])
+    /// read as 127.0.0.1.
+    #[arg(long)]
+    url: Option<String>,
+    /// Where the server listens, to derive the address from.
+    #[arg(long, env = "LAZY_LISTEN", default_value = "127.0.0.1:8080")]
+    listen: String,
 }
 
 #[derive(Args)]
@@ -72,16 +87,39 @@ struct ServeArgs {
     /// The largest attachment, in bytes.
     #[arg(long, env = "LAZY_MAX_ATTACHMENT_BYTES", default_value_t = lazy_domain::attachment::MAX_ATTACHMENT_BYTES)]
     max_attachment_bytes: u64,
+    /// The workspace's registration policy when the server creates it at its first start: `open`
+    /// (default) or `invite_only`. Ignored once a workspace exists.
+    #[arg(long, env = "LAZY_SEED_REGISTRATION", default_value = "open", value_parser = parse_registration)]
+    seed_registration: lazy_domain::workspace::RegistrationPolicy,
+    /// A secret (at least 16 characters) that the first account's registration must carry in the
+    /// "invitation code" field while the workspace has no members; with it set, a stranger cannot
+    /// become the owner by registering first. It does nothing once anyone is in. Prefer the
+    /// environment variable: a command line is visible to other users of the machine.
+    #[arg(long, env = "LAZY_SETUP_CODE", hide_env_values = true)]
+    setup_code: Option<String>,
+}
+
+fn parse_registration(text: &str) -> Result<lazy_domain::workspace::RegistrationPolicy, String> {
+    match text.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "open" => Ok(lazy_domain::workspace::RegistrationPolicy::Open),
+        "invite_only" => Ok(lazy_domain::workspace::RegistrationPolicy::InviteOnly),
+        _ => Err("expected `open` or `invite_only`".to_owned()),
+    }
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    // The health check says one line of its own and logs nothing.
+    if let Command::Healthcheck(args) = &cli.command {
+        return healthcheck(args).await;
+    }
     lazy_server::logging::init(cli.log_format);
 
     let result = match cli.command {
         Command::Serve(args) => serve(args).await,
         Command::Migrate(args) => migrate(args).await,
+        Command::Healthcheck(_) => unreachable!("handled above"),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -92,8 +130,41 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Prints `healthy` or `unhealthy: <kind of failure>` and exits 0 or 1.
+async fn healthcheck(args: &HealthcheckArgs) -> ExitCode {
+    let url = match &args.url {
+        Some(url) => Ok(url.clone()),
+        None => lazy_server::health::default_url(&args.listen),
+    };
+    let outcome = match url {
+        Ok(url) => lazy_server::health::check(&url, lazy_server::health::TIMEOUT).await,
+        Err(reason) => Err(reason),
+    };
+    match outcome {
+        Ok(()) => {
+            println!("healthy");
+            ExitCode::SUCCESS
+        }
+        Err(reason) => {
+            println!("unhealthy: {reason}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 async fn serve(args: ServeArgs) -> Result<(), lazy_server::AppError> {
+    // Refuse a setup code that is too short before anything else, saying why and not what it was.
+    let setup_code = match args.setup_code.as_deref().filter(|code| !code.is_empty()) {
+        Some(code) => Some(lazy_server::SetupCode::new(code).map_err(|reason| {
+            lazy_server::AppError::internal(format!(
+                "{reason} (LAZY_SETUP_CODE or --setup-code); the server did not start"
+            ))
+        })?),
+        None => None,
+    };
     let mut config = Config::new(args.listen, args.database.database_url);
+    config.setup_code = setup_code;
+    config.seed_registration = args.seed_registration;
     config.migrate = !args.no_migrate;
     config.seed = !args.no_seed;
     config.open_registration = args.open_registration;
@@ -157,8 +228,39 @@ mod tests {
         argv.extend_from_slice(extra);
         match Cli::try_parse_from(argv).expect("valid arguments").command {
             Command::Serve(args) => args,
-            Command::Migrate(_) => panic!("expected the serve command"),
+            Command::Migrate(_) | Command::Healthcheck(_) => panic!("expected the serve command"),
         }
+    }
+
+    #[test]
+    fn the_seed_policy_is_open_unless_asked_and_the_setup_code_is_absent_unless_given() {
+        use lazy_domain::workspace::RegistrationPolicy::{InviteOnly, Open};
+        let args = serve_args(&[]);
+        assert_eq!(
+            (args.seed_registration, args.setup_code.is_none()),
+            (Open, true)
+        );
+        for (text, policy) in [
+            ("open", Open),
+            ("invite_only", InviteOnly),
+            ("Invite-Only", InviteOnly),
+        ] {
+            assert_eq!(
+                serve_args(&["--seed-registration", text]).seed_registration,
+                policy
+            );
+        }
+        let argv = [
+            "lazy-server",
+            "serve",
+            "--database-url",
+            "x",
+            "--seed-registration",
+            "closed",
+        ];
+        assert!(Cli::try_parse_from(argv).is_err());
+        let args = serve_args(&["--setup-code", "a-long-enough-setup-code"]);
+        assert_eq!(args.setup_code.as_deref(), Some("a-long-enough-setup-code"));
     }
 
     #[test]

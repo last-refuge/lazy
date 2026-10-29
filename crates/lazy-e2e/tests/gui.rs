@@ -91,7 +91,7 @@ struct GuiClient {
 impl GuiClient {
     fn start(name: &'static str, server_url: &str, profile: &Path) -> GuiClient {
         let mut cx = HeadlessAppContext::with_platform(
-            Arc::new(gpui_wgpu::CosmicTextSystem::new("IBM Plex Sans")),
+            Arc::new(gpui_wgpu::CosmicTextSystem::new("DM Sans")),
             Arc::new(()),
             gpui_platform::current_headless_renderer,
         );
@@ -211,6 +211,7 @@ impl GuiClient {
         // Sign-in order is: username, password, Sign in, "New here? Create an account".
         self.keys("tab tab tab enter");
         // Create-account order is: username, display name, password, invitation code, button, link.
+        // (The "Server" row's stops come after the link, so they are not in the way here.)
         // Back to the top.
         self.keys("shift-tab shift-tab shift-tab shift-tab shift-tab");
         self.type_text(username);
