@@ -47,7 +47,8 @@ pub struct RootView {
     /// The first-run screens, when the application has them (D29), and which of them or the
     /// sign-in card a signed-out window shows.
     onboarding: Option<Entity<OnboardingView>>,
-    joining: Joining,
+    /// Decided when the first signed-out screen is drawn (see `render`); `None` until then.
+    joining: Option<Joining>,
     /// "New here? Join with an invitation", under the sign-in card.
     join_link_focus: FocusHandle,
     _onboarding_events: Option<Subscription>,
@@ -66,9 +67,6 @@ impl RootView {
             cx.observe(updates, |_, _, cx| cx.notify()).detach();
         }
         let first_run = crate::onboarding::enabled(cx);
-        // Nothing chosen yet means a new install: the first-run screens. A server that was chosen
-        // before (or fixed by the environment) means someone coming back: the sign-in card.
-        let fresh_install = model.read(cx).core().server().source == ServerSource::Default;
         let mut root = Self {
             model,
             sign_in,
@@ -82,11 +80,7 @@ impl RootView {
             updates,
             update_focus: BarFocus::new(cx),
             onboarding: None,
-            joining: if first_run && fresh_install {
-                Joining::Join
-            } else {
-                Joining::SignIn
-            },
+            joining: None,
             join_link_focus: cx.focus_handle().tab_stop(true),
             _onboarding_events: None,
         };
@@ -105,12 +99,12 @@ impl RootView {
             window,
             |this, _view, event: &OnboardingEvent, window, cx| match event {
                 OnboardingEvent::HaveAccount => {
-                    this.joining = Joining::SignIn;
+                    this.joining = Some(Joining::SignIn);
                     cx.notify();
                 }
                 OnboardingEvent::Finished => {
                     // Signing out later is signing in again, not joining.
-                    this.joining = Joining::SignIn;
+                    this.joining = Some(Joining::SignIn);
                     cx.notify();
                     cx.defer_in(window, |this, window, cx| this.start_onboarding(window, cx));
                 }
@@ -336,7 +330,7 @@ impl RootView {
                 &self.join_link_focus,
                 move |_, cx| {
                     this.update(cx, |root, cx| {
-                        root.joining = Joining::Join;
+                        root.joining = Some(Joining::Join);
                         cx.notify();
                     })
                     .ok();
@@ -350,6 +344,21 @@ impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *Theme::get(cx);
         let phase = self.model.read(cx).core().phase().clone();
+
+        // A window starts on the first-run screens or on the sign-in card. Which, is decided when it
+        // first has to show a signed-out screen, because only then has the core heard which server
+        // was chosen before (it has not when the window opens). Nothing chosen means a new install:
+        // the first-run screens. A server chosen before, or fixed by the environment, means someone
+        // coming back: the sign-in card.
+        if self.joining.is_none() && matches!(phase, SessionPhase::SignedOut { .. }) {
+            let fresh_install =
+                self.model.read(cx).core().server().source == ServerSource::Default;
+            self.joining = Some(if self.onboarding.is_some() && fresh_install {
+                Joining::Join
+            } else {
+                Joining::SignIn
+            });
+        }
 
         if !matches!(phase, SessionPhase::Unreachable { .. }) {
             self.retry_focused = false;
@@ -375,7 +384,7 @@ impl Render for RootView {
         // exists until they are left; the sign-in card has it for someone who already has one.
         let onboarding_on = self.onboarding.as_ref().is_some_and(|onboarding| {
             onboarding.read(cx).shows(&phase)
-                && (self.joining == Joining::Join
+                && (self.joining == Some(Joining::Join)
                     || !matches!(
                         phase,
                         SessionPhase::SignedOut { .. } | SessionPhase::SigningIn

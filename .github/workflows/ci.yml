@@ -19,6 +19,9 @@ jobs:
           POSTGRES_USER: lazy
           POSTGRES_PASSWORD: lazy
           POSTGRES_DB: lazy
+          # As the local test database (scripts/dev-db.sh): a test that gives the server a made-up
+          # password to prove it is never logged must still be able to connect.
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U lazy"
@@ -32,7 +35,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libasound2-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
-            libvulkan-dev libfontconfig-dev libssl-dev libdbus-1-dev pkg-config cmake clang
+            libvulkan-dev mesa-vulkan-drivers libfontconfig-dev libssl-dev libdbus-1-dev \
+            pkg-config cmake clang
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.99.0"

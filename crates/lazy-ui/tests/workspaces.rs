@@ -751,9 +751,9 @@ fn joining_with_a_code_is_chosen_with_left_and_right_and_never_shows_the_code_ba
     }
     assert!(world.on_screen(cx, "add-workspace-failed"));
 
-    // A well-formed one is sent, trimmed.
+    // A well-formed one is sent trimmed and in its plain form, however it was written.
     cx.simulate_keystrokes("ctrl-a backspace");
-    cx.simulate_input(" lazy-9f3kq2m7vx8d4ztb ");
+    cx.simulate_input(" k7qm-4txd-9bwp-h2va-zx3c ");
     cx.simulate_keystrokes("enter");
     let codes: Vec<String> = world
         .take_effects()
@@ -763,7 +763,7 @@ fn joining_with_a_code_is_chosen_with_left_and_right_and_never_shows_the_code_ba
             _ => None,
         })
         .collect();
-    assert_eq!(codes, ["lazy-9f3kq2m7vx8d4ztb"]);
+    assert_eq!(codes, ["K7QM4TXD9BWPH2VAZX3C"]);
     assert_eq!(
         world.core(cx, |core| core.action(ActionKind::AcceptInvitation).clone()),
         ActionState::InFlight

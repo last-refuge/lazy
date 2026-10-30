@@ -2070,7 +2070,10 @@ impl ShellView {
             .border_color(colors.border)
             .child(
                 div()
-                    .flex_none()
+                    // The title gives way before the buttons are pushed off the window's edge,
+                    // whatever the widths of the fonts that draw the star and the bell.
+                    .flex_shrink_1()
+                    .min_w_0()
                     .max_w(px(260.))
                     .truncate()
                     .font_weight(FontWeight::SEMIBOLD)
