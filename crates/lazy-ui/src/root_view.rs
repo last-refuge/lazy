@@ -351,8 +351,7 @@ impl Render for RootView {
         // the first-run screens. A server chosen before, or fixed by the environment, means someone
         // coming back: the sign-in card.
         if self.joining.is_none() && matches!(phase, SessionPhase::SignedOut { .. }) {
-            let fresh_install =
-                self.model.read(cx).core().server().source == ServerSource::Default;
+            let fresh_install = self.model.read(cx).core().server().source == ServerSource::Default;
             self.joining = Some(if self.onboarding.is_some() && fresh_install {
                 Joining::Join
             } else {
