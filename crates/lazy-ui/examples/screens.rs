@@ -3794,6 +3794,16 @@ fn first_run_as(
     owner: bool,
 ) {
     dispatch(cx, model, Input::Started(StartupState::default()));
+    // The screens arrive with a fade; the stills show them arrived. (Starting applies the saved
+    // appearance, so the choice is made after it.)
+    dispatch(
+        cx,
+        model,
+        Input::SetAppearance(lazy_client_core::Appearance {
+            motion: lazy_client_core::MotionChoice::Reduce,
+            ..Default::default()
+        }),
+    );
     draw(cx, win);
     if upto == Upto::Connect {
         return;
@@ -9646,8 +9656,6 @@ fn main() {
             lazy_ui::init(app, scene.appearance);
             if scene.name.starts_with("first-") {
                 lazy_ui::onboarding::enable(app);
-                // The screens arrive with a fade; the stills show them arrived.
-                app.set_reduce_motion(true);
             }
         });
         let recorder = Rc::new(Recorder::default());
