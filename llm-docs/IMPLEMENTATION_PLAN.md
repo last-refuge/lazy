@@ -303,12 +303,12 @@ Goal: dogfood users can do normal work without developer assistance.
   - [X] Dogfood guide (`llm-docs/DOGFOOD.md`) and issue template (`.github/ISSUE_TEMPLATE/dogfood.md`)
   - [ ] Server container, Docker Compose, and Coolify deployment (written: Dockerfile, compose files, smoke test, `llm-docs/DEPLOY.md`; the smoke test passed against a locally started server, but the image build, the compose stack, and Coolify have never run)
   - [ ] Client installers for Linux, macOS, and Windows from the manual `release` workflow (written: `.deb`, tarball, `.dmg`, Windows installer and zip, `llm-docs/RELEASE.md`; the Linux packages were assembled and inspected here, the macOS and Windows builds and the workflow have never run)
-  - [ ] Choose the server in the app, so installed clients need no environment variable (written, not compiled or tested)
-  - [ ] First run: address and invitation code, then a short, branded account creation (plan in `llm-docs/ONBOARDING.md`, D29; the invitee's and the owner's paths are written, not compiled or run)
-    - [ ] Server: public server info, previewing an invitation without using it, a readable invitation code, Copy message to send (written, not run)
-    - [ ] Client core and runtime: what the server says, the preview, forgiving code input, the first-run screens for a new install (written, not run)
-    - [ ] UI: the five screens, Moss at onboarding size, motion, dark theme (written, not rendered); the owner's two extra screens (name the workspace, the first invitation) are written; a warning for plain `http://` and accessibility passes are not done
-    - [ ] Looked at in `screens` scenes (light, dark, wide, narrow, every error) and walked through on Windows, macOS, and Linux with a fresh server (manual)
+  - [X] Choose the server in the app, so installed clients need no environment variable (tested in CI on Linux, `ci` run on `1f99b8f`; not tried on an installed app)
+  - [ ] First run: address and invitation code, then a short, branded account creation (plan in `llm-docs/ONBOARDING.md`, D29; the invitee's and the owner's paths are written and tested in CI on Linux; the first walkthrough on real machines is still to do)
+    - [X] Server: public server info, previewing an invitation without using it, a readable invitation code, Copy message to send (tested in CI against a real Postgres, `ci` run on `1f99b8f`)
+    - [X] Client core and runtime: what the server says, the preview, forgiving code input, the first-run screens for a new install (tested in CI: the core and the screens' logic directly, the runtime against a stub server, never a real one)
+    - [ ] UI: the five screens, Moss at onboarding size, motion, dark theme (rendered and read in `screens`, `bdb1b45`; the motion itself not seen); the owner's two extra screens (name the workspace, the first invitation) are done; a warning for plain `http://` and accessibility passes are not done
+    - [ ] Looked at in `screens` scenes (light, dark, wide, narrow, every error: all 24 `first-*` scenes read, `bdb1b45`) and walked through on Windows, macOS, and Linux with a fresh server (manual: not done)
   - [ ] Apply the Soft Signal brand to the client and the packages (written, not compiled or rendered: `llm-docs/DECISIONS.md` D26)
   - [ ] Onboard dogfood users
   - [ ] Track and triage issues from real use

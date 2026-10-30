@@ -216,7 +216,7 @@ server was chosen before or fixed by `LAZY_SERVER_URL`, the sign-in card is firs
 so the existing tests and `scripts/run-client.sh` are unchanged. The sign-in card gained "New here?
 Join with an invitation" and the first screen "I already have an account".
 
-**The owner's two extra screens (written, not run).** A code that previews as `setup` makes the
+**The owner's two extra screens (tested in CI and rendered; not walked through on a real machine).** A code that previews as `setup` makes the
 person the owner: the heading of the second screen is "Set up your workspace.", the steps are counted
 to six, and after the picture come **Name your workspace** (renames the seeded "Lazy"; Continue is off
 until there is a name that can be used, a refusal is said under the field, Skip keeps "Lazy", and a
@@ -229,7 +229,7 @@ many; **Copy message to send** puts the whole message on the clipboard, Continue
 invitation is said with Try again. The first screen counts "Step 1" without a total, because a
 person who has not been checked yet might be either.
 
-**Setup codes the client can send (written, not run).** A setup code is typed into the same field as
+**Setup codes the client can send (tested in CI; not tried on a deployed server).** A setup code is typed into the same field as
 an invitation code, so the server now refuses to start with one that is not 20 to 64 letters, digits,
 `-` and `_` (the message says so, does not repeat it, and says to remove the variable when people have
 signed up already, since it then does nothing). It also compares the code in the form the app sends it
