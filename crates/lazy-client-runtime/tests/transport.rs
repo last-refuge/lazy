@@ -2217,7 +2217,9 @@ fn signing_out_wipes_this_profile_and_leaves_another_profiles_state_and_secrets_
     b.expect("b persisted", |i| {
         matches!(i, Input::SubmissionPersisted { .. })
     });
+    let key_a = a.vault().state_key().unwrap();
     let key_b = b.vault().state_key().unwrap();
+    let a_namespace = a.vault().namespace().to_owned();
     let b_namespace = b.vault().namespace().to_owned();
     assert_eq!(
         storage.keys().len(),
@@ -2233,12 +2235,28 @@ fn signing_out_wipes_this_profile_and_leaves_another_profiles_state_and_secrets_
                 .all(|e| !e.file_name().to_string_lossy().contains(".enc"))
         })
     });
-    wait_until("A's secrets to be deleted", || storage.keys().len() == 2);
+    // A's session token and its state key are deleted, and a new state key is made at once, so
+    // that what is saved from then on can be read at the next start: A keeps one secret, and it
+    // is not the old one.
+    let a_state_key = format!("state-key:{a_namespace}");
+    wait_until("A's secrets to be replaced", || {
+        storage.keys().len() == 3
+            && storage
+                .get(&a_state_key)
+                .ok()
+                .flatten()
+                .is_some_and(|fresh| fresh != key_a)
+    });
 
+    let keys = storage.keys();
     assert!(
-        storage.keys().iter().all(|k| k.ends_with(&b_namespace)),
-        "only B's secrets remain: {:?}",
-        storage.keys()
+        !keys.contains(&format!("session-token:{a_namespace}")),
+        "A is signed out: {keys:?}"
+    );
+    assert_eq!(
+        keys.iter().filter(|k| k.ends_with(&b_namespace)).count(),
+        2,
+        "B keeps both of its secrets: {keys:?}"
     );
     assert_eq!(
         inspect_state(b.profile.path(), &key_b).journal,
