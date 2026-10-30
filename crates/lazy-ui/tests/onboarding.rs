@@ -541,6 +541,17 @@ fn the_first_screen_keeps_the_keyboard_in_its_own_fields_and_buttons(cx: &mut Te
     assert_eq!(world.step(cx), Step::Connect);
 }
 
+#[gpui::test]
+fn tab_walks_a_screen_of_buttons_and_enter_presses_the_one_it_is_on(cx: &mut TestAppContext) {
+    let (world, cx) = start(cx, true);
+    world.owner_at_picture(cx);
+    // "Choose a picture" has the keyboard; Tab goes on to "Skip for now", which Enter presses.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(world.step(cx), Step::Picture);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(world.step(cx), Step::Workspace);
+}
+
 #[test]
 fn the_invitation_code_is_read_in_one_place_only() {
     // The screens hand the code to the core and nothing else; anything that formats it (a label,
@@ -585,9 +596,8 @@ impl World {
         }
     }
 
-    /// Joins with the setup code and skips the picture: the owner is on the step that names the
-    /// workspace.
-    fn owner_at_naming(&self, cx: &mut VisualTestContext) {
+    /// Joins with the setup code: the owner is on the picture step.
+    fn owner_at_picture(&self, cx: &mut VisualTestContext) {
         self.open_new_install(cx);
         let (_, generation) = self.connect(cx, "chat.example.com", CODE);
         let (_, asked) = self
@@ -620,6 +630,12 @@ impl World {
         );
         self.send(cx, Input::Clock(Timestamp::now()));
         assert_eq!(self.step(cx), Step::Picture);
+    }
+
+    /// Joins with the setup code and skips the picture: the owner is on the step that names the
+    /// workspace.
+    fn owner_at_naming(&self, cx: &mut VisualTestContext) {
+        self.owner_at_picture(cx);
         self.click(cx, "onboarding-skip");
         self.take_effects();
     }

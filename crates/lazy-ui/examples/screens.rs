@@ -9646,6 +9646,8 @@ fn main() {
             lazy_ui::init(app, scene.appearance);
             if scene.name.starts_with("first-") {
                 lazy_ui::onboarding::enable(app);
+                // The screens arrive with a fade; the stills show them arrived.
+                app.set_reduce_motion(true);
             }
         });
         let recorder = Rc::new(Recorder::default());

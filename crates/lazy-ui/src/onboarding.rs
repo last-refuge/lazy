@@ -47,6 +47,7 @@ use crate::app_model::AppModel;
 use crate::avatar::Avatar;
 use crate::brand::{self, Moss};
 use crate::form::{self, ButtonKind};
+use crate::keyboard::{self, FocusNextControl, FocusPrevControl};
 use crate::server_row::{self, Tone};
 use crate::text_input::{TextInput, TextInputEvent, TextInputOptions};
 use crate::theme::Theme;
@@ -1949,6 +1950,15 @@ impl Render for OnboardingView {
             .debug_selector(|| "onboarding".into())
             .size_full()
             .bg(theme.colors.surface)
+            // Tab moves between the buttons, as it does on the sign-in form (a text field passes
+            // its own Tab up through `move_focus`).
+            .key_context(keyboard::SHELL_CONTEXT)
+            .on_action(cx.listener(|this, _: &FocusNextControl, window, cx| {
+                this.move_focus(false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FocusPrevControl, window, cx| {
+                this.move_focus(true, window, cx)
+            }))
             .flex();
         if wide {
             root.child(panel).child(
