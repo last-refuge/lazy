@@ -22,6 +22,10 @@ pub mod paths {
     };
 
     pub const HEALTH: &str = "/healthz";
+    /// `GET` what a client may know about a server before anyone has signed in (D29).
+    pub const SERVER_INFO: &str = "/v1/server";
+    /// `POST` asks what an invitation code is for, without using it (D29).
+    pub const PREVIEW_INVITATION: &str = "/v1/invitations/preview";
     pub const REGISTER: &str = "/v1/auth/register";
     pub const LOGIN: &str = "/v1/auth/login";
     pub const LOGOUT: &str = "/v1/auth/logout";
@@ -295,6 +299,63 @@ pub mod paths {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub protocol_version: u32,
+}
+
+/// Who may create an account on a server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerRegistration {
+    /// Anyone may register, with no code.
+    Open,
+    /// An invitation code is needed (or, for the first account, the setup code).
+    InviteOnly,
+    /// The server accepts no new accounts, invitations included.
+    Closed,
+}
+
+/// Response of `GET /v1/server` (D29), which needs no sign-in: what a new client needs to show the
+/// right first screen. It holds no name and no count, so a server nobody has invited a stranger to
+/// tells that stranger nothing but how to talk to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerInfoResponse {
+    /// As in [`HealthResponse`]: a client that does not speak it cannot use the server.
+    pub protocol_version: u32,
+    pub registration: ServerRegistration,
+    /// The server is waiting for its first account, which needs the setup code (given where an
+    /// invitation code goes). False once the workspace has a member.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub setup_code_required: bool,
+}
+
+/// What a code is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvitationKind {
+    /// An invitation to join the workspace it belongs to.
+    Invitation,
+    /// The server's setup code: the person will be the workspace's first member and its owner.
+    Setup,
+}
+
+/// `POST /v1/invitations/preview` (D29), which needs no sign-in: asks what a code is for before
+/// anything is created or used. A code that is wrong, expired, revoked, used up, or of the wrong
+/// shape is `invitation_invalid` with one message, as at registration, and a server that accepts no
+/// registrations is `forbidden`. Names are given only for a code that is valid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewInvitationRequest {
+    pub code: InviteCode,
+}
+
+/// Response of `POST /v1/invitations/preview`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvitationPreview {
+    pub kind: InvitationKind,
+    pub workspace_name: String,
+    /// Who made the invitation; absent for the setup code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inviter: Option<DisplayName>,
+    /// How many people are in the workspace now (0 for the setup code).
+    pub member_count: u32,
 }
 
 /// A person, as other people see them.
@@ -2180,6 +2241,77 @@ mod tests {
     }
 
     #[test]
+    fn server_info_and_invitation_previews_have_a_stable_shape() {
+        let info = ServerInfoResponse {
+            protocol_version: 14,
+            registration: ServerRegistration::InviteOnly,
+            setup_code_required: false,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert_eq!(
+            json,
+            r#"{"protocol_version":14,"registration":"invite_only"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<ServerInfoResponse>(&json).unwrap(),
+            info
+        );
+        // A server that says nothing about the setup code is not waiting for one.
+        let setup = ServerInfoResponse {
+            setup_code_required: true,
+            registration: ServerRegistration::Open,
+            ..info
+        };
+        let json = serde_json::to_string(&setup).unwrap();
+        assert_eq!(
+            json,
+            r#"{"protocol_version":14,"registration":"open","setup_code_required":true}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<ServerInfoResponse>(&json).unwrap(),
+            setup
+        );
+        for (registration, text) in [
+            (ServerRegistration::Open, "open"),
+            (ServerRegistration::InviteOnly, "invite_only"),
+            (ServerRegistration::Closed, "closed"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&registration).unwrap(),
+                format!("\"{text}\"")
+            );
+        }
+
+        let preview = InvitationPreview {
+            kind: InvitationKind::Invitation,
+            workspace_name: "Zebrafish Collective".into(),
+            inviter: Some(DisplayName::parse("Alice Example").unwrap()),
+            member_count: 12,
+        };
+        let json = serde_json::to_string(&preview).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"invitation","workspace_name":"Zebrafish Collective","inviter":"Alice Example","member_count":12}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<InvitationPreview>(&json).unwrap(),
+            preview
+        );
+        let setup = InvitationPreview {
+            kind: InvitationKind::Setup,
+            workspace_name: "Lazy".into(),
+            inviter: None,
+            member_count: 0,
+        };
+        assert_eq!(
+            serde_json::to_string(&setup).unwrap(),
+            r#"{"kind":"setup","workspace_name":"Lazy","member_count":0}"#
+        );
+        assert_eq!(paths::SERVER_INFO, "/v1/server");
+        assert_eq!(paths::PREVIEW_INVITATION, "/v1/invitations/preview");
+    }
+
+    #[test]
     fn profile_and_workspace_creation_routes_and_bodies() {
         let user = UserId::generate();
         assert_eq!(
@@ -2198,6 +2330,9 @@ mod tests {
         let accept: AcceptInvitationRequest =
             serde_json::from_str(r#"{"code":"abcdefghijklmnopqrstuvwxyz"}"#).unwrap();
         assert!(!format!("{accept:?}").contains("abcdefghijklmnop"));
+        let preview: PreviewInvitationRequest =
+            serde_json::from_str(r#"{"code":"abcdefghijklmnopqrstuvwxyz"}"#).unwrap();
+        assert!(!format!("{preview:?}").contains("abcdefghijklmnop"));
         assert_eq!(
             serde_json::from_str::<UpdateProfileRequest>("{}").unwrap(),
             UpdateProfileRequest::default()

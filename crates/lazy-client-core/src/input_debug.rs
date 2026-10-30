@@ -711,6 +711,29 @@ impl fmt::Debug for Input {
                 .field("generation", generation)
                 .field("result", &ResText(result, "StartupState"))
                 .finish(),
+            Input::ServerFacts { url, facts } => f
+                .debug_struct("ServerFacts")
+                .field("url", &Text(url))
+                .field("facts", facts)
+                .finish(),
+            Input::PreviewInvitation { code } => f
+                .debug_struct("PreviewInvitation")
+                .field("code", &Text(code))
+                .finish(),
+            Input::InvitationPreviewed { generation, result } => f
+                .debug_struct("InvitationPreviewed")
+                .field("generation", generation)
+                .field(
+                    "result",
+                    &match result {
+                        Ok(preview) => format!(
+                            "Ok(InvitationPreview {{ kind: {:?}, member_count: {} }})",
+                            preview.kind, preview.member_count
+                        ),
+                        Err(failure) => format!("Err({failure:?})"),
+                    },
+                )
+                .finish(),
         }
     }
 }

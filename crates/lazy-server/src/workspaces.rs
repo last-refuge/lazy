@@ -5,7 +5,9 @@
 //! and joins one at a time, which makes the limit on workspaces created exact, makes joining
 //! idempotent, and keeps the workspaces they belong to still while a profile change fans out.
 
-use lazy_domain::workspace::{MAX_WORKSPACES_CREATED, invite_code_is_wellformed};
+use lazy_domain::workspace::{
+    MAX_WORKSPACES_CREATED, canonical_invite_code, invite_code_is_wellformed,
+};
 use lazy_domain::{UserId, WorkspaceId, WorkspaceRole};
 use lazy_protocol::{AcceptInvitationRequest, CreateWorkspaceRequest, ErrorCode, JoinedWorkspace};
 use sqlx::PgConnection;
@@ -125,11 +127,11 @@ pub async fn accept_invitation(
     actor: UserId,
     request: AcceptInvitationRequest,
 ) -> Result<JoinedWorkspace, AppError> {
-    let code = request.code.expose();
-    if !invite_code_is_wellformed(code) {
+    let code = canonical_invite_code(request.code.expose());
+    if !invite_code_is_wellformed(&code) {
         return Err(invitation_invalid());
     }
-    let hash = crypto::invite_code_hash(code);
+    let hash = crypto::invite_code_hash(&code);
 
     let mut tx = state.pool.begin().await?;
     profile::lock_person(&mut tx, actor).await?;

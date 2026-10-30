@@ -88,10 +88,19 @@ fn main() -> ExitCode {
     );
 
     let app_runtime = runtime.clone();
+    let update_runtime = runtime.clone();
+    let update_profile = profile_dir.clone();
+    let update_logs = log_dir.clone();
     application().run(move |cx: &mut App| {
         let desktop = lazy_desktop::start_desktop(app_runtime, inputs, cx);
         let model = desktop.model.clone();
         set_desktop_info(cx, info);
+        // A new install opens on the first-run screens (D29); someone who chose a server before,
+        // or whose environment fixed one, opens on the sign-in card.
+        lazy_ui::onboarding::enable(cx);
+        // Looking for a newer release every half hour, and installing one when the person agrees
+        // (D28). Before the window opens, so that the window's root finds the updater.
+        lazy_desktop::updater::start_updates(&update_runtime, &update_profile, &update_logs, cx);
         // A Mac has a native menu bar; everywhere else the same menus are the sidebar's "Menu".
         if cfg!(target_os = "macos") {
             cx.set_menus(lazy_ui::commands::native_menus());

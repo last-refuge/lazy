@@ -163,6 +163,30 @@ async fn with_a_setup_code_the_first_account_needs_it_and_every_failure_is_one_a
 }
 
 #[sqlx::test]
+async fn a_setup_code_of_twenty_hex_digits_is_matched_as_the_app_writes_it(pool: PgPool) {
+    // 20 hexadecimal digits are also 20 characters of the invitation alphabet, which the app puts
+    // in capitals before it sends them: the server must not hold out for the lower case it was
+    // configured in.
+    let configured = "0123456789abcdef0123";
+    let app = start(pool, RegistrationPolicy::Open, Some(configured), true).await;
+    // Padding is not forgiven (the app trims), and a code that is one digit off is nothing.
+    for wrong in [" 0123456789ABCDEF0123", "0123456789ABCDEF0124"] {
+        let (status, error) =
+            refused(app.try_register_with("stranger", PASSWORD, Some(wrong)).await).await;
+        assert_error(status, &error, ErrorCode::Forbidden);
+        assert_eq!(error.message, SETUP_MESSAGE);
+    }
+    assert_eq!(members(&app).await, 0);
+    let owner = account_of(
+        app.try_register_with("owner", PASSWORD, Some("0123456789ABCDEF0123"))
+            .await,
+    )
+    .await;
+    assert_eq!(role_of(&app, &owner).await, WorkspaceRole::Owner);
+    app.server.shutdown().await.unwrap();
+}
+
+#[sqlx::test]
 async fn once_anyone_is_in_the_setup_code_has_no_effect_at_all(pool: PgPool) {
     let app = start(pool, RegistrationPolicy::Open, Some(SETUP_CODE), true).await;
     let owner = account_of(

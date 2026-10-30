@@ -35,6 +35,23 @@ Linux needs a Vulkan driver, a Secret Service keyring (GNOME Keyring, KWallet, K
 stored sign-in, and X11 or Wayland. The client's sign-in screen has the server address (D25); it is
 also settable with `LAZY_SERVER_URL`.
 
+## What a running Lazy needs from a release (D28)
+
+Installed copies find new releases by reading the newest release's `SHA256SUMS`, so a release is
+only seen if:
+
+- it is **published**, not a draft, and **not a pre-release** (GitHub's "latest" skips both; the
+  workflow's draft pre-release must be edited to make it so);
+- its tag is `v<version>` (the download address is `releases/download/v<version>/<file>`);
+- `SHA256SUMS` is attached and lists the files **named exactly as the packaging scripts name them**
+  (`Lazy-Setup-<v>-windows-x64.exe`, `Lazy-<v>-macos-universal.dmg`, `lazy-chat_<v>_amd64.deb`,
+  `lazy-<v>-linux-x86_64.tar.gz`). The version is read from the names. Renaming a file means changing
+  `Package` in `crates/lazy-client-core/src/update.rs` in the same release, or installed copies will
+  not see it.
+
+A release that changes the wire protocol (`PROTOCOL_VERSION`) also needs its notes to say that the
+server must be updated first or together with the clients.
+
 ## Not signed: what people will see
 
 - **macOS:** the app is signed *ad hoc*, which is enough to run but not to pass Gatekeeper without
@@ -85,8 +102,8 @@ you work with."
 - **Desktop notifications exist only on Linux.** On macOS and Windows the app runs, shows unread
   counts and the window title badge, but sends no operating system notifications (the platform
   notifier there is a stub). This matters for dogfooding on those systems.
-- No auto-update: a new version is installed over the old one (the installers and the `.deb` upgrade
-  in place; profiles and logs are untouched).
+- Updating from inside Lazy (D28) exists from the first release after 0.5.0, which has no updater
+  and is replaced by hand once. Nothing about it has been run (`VERIFICATION.md`).
 - The window position cannot be restored on Wayland (compositors decide).
 - Only x86_64 on Linux and Windows; no ARM builds.
 - The licenses of bundled fonts (DM Sans, Nunito, Lilex, Noto Color Emoji) are shipped in every package;

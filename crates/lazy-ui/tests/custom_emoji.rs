@@ -1389,7 +1389,10 @@ fn the_workspace_menu_lists_custom_emoji_beside_user_groups_and_opens_with_the_k
     );
     let groups = cx.debug_bounds("command-menu-UserGroups").unwrap();
     let emoji = cx.debug_bounds("command-menu-CustomEmoji").unwrap();
-    assert!(emoji.top() >= groups.bottom(), "after it: {groups:?} then {emoji:?}");
+    assert!(
+        emoji.top() >= groups.bottom(),
+        "after it: {groups:?} then {emoji:?}"
+    );
 
     // Down to Custom emoji (after Workspace settings, Invite people, and User groups, with the
     // first item highlighted when the menu opens) and press Enter.

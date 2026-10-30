@@ -11,6 +11,7 @@
 
 pub mod logging;
 pub mod notifier;
+pub mod updater;
 pub mod window_state;
 
 use std::cell::RefCell;

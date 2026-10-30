@@ -1,17 +1,29 @@
 //! The window's root: chooses what to show for the current session phase.
 
 use gpui::{
-    AnyElement, Context, Entity, FocusHandle, IntoElement, Render, Window, div, prelude::*, px,
+    AnyElement, Context, Entity, FocusHandle, IntoElement, Render, Subscription, Window, div,
+    prelude::*, px,
 };
-use lazy_client_core::{Input, SessionPhase};
+use lazy_client_core::{Input, ServerSource, SessionPhase};
 
 use crate::app_model::AppModel;
 use crate::fonts;
 use crate::form::{self, ButtonKind};
+use crate::onboarding::{OnboardingEvent, OnboardingView};
 use crate::server_row::ServerRow;
 use crate::shell::ShellView;
 use crate::sign_in::SignInView;
 use crate::theme::Theme;
+use crate::updates::{BarFocus, UpdateModel};
+
+/// What the signed-out window shows when the application opens on the first-run screens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Joining {
+    /// The first-run screens: address and code, then the account.
+    Join,
+    /// The sign-in card, for someone who has an account.
+    SignIn,
+}
 
 pub struct RootView {
     model: Entity<AppModel>,
@@ -28,6 +40,17 @@ pub struct RootView {
     sign_out_focused: bool,
     /// The server row of the unreachable and no-access screens (D25).
     server_row: Entity<ServerRow>,
+    /// The updater, when this application has one (D28): its bar goes across the top of whatever
+    /// screen is showing.
+    updates: Option<Entity<UpdateModel>>,
+    update_focus: BarFocus,
+    /// The first-run screens, when the application has them (D29), and which of them or the
+    /// sign-in card a signed-out window shows.
+    onboarding: Option<Entity<OnboardingView>>,
+    joining: Joining,
+    /// "New here? Join with an invitation", under the sign-in card.
+    join_link_focus: FocusHandle,
+    _onboarding_events: Option<Subscription>,
 }
 
 impl RootView {
@@ -38,7 +61,15 @@ impl RootView {
         let sign_in = cx.new(|cx| SignInView::new(model.clone(), window, cx));
         let server_row = cx.new(|cx| ServerRow::new(model.clone(), window, cx));
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
-        Self {
+        let updates = crate::updates::model(cx);
+        if let Some(updates) = &updates {
+            cx.observe(updates, |_, _, cx| cx.notify()).detach();
+        }
+        let first_run = crate::onboarding::enabled(cx);
+        // Nothing chosen yet means a new install: the first-run screens. A server that was chosen
+        // before (or fixed by the environment) means someone coming back: the sign-in card.
+        let fresh_install = model.read(cx).core().server().source == ServerSource::Default;
+        let mut root = Self {
             model,
             sign_in,
             shell: None,
@@ -48,7 +79,49 @@ impl RootView {
             sign_out_focus: cx.focus_handle().tab_stop(true),
             sign_out_focused: false,
             server_row,
+            updates,
+            update_focus: BarFocus::new(cx),
+            onboarding: None,
+            joining: if first_run && fresh_install {
+                Joining::Join
+            } else {
+                Joining::SignIn
+            },
+            join_link_focus: cx.focus_handle().tab_stop(true),
+            _onboarding_events: None,
+        };
+        if first_run {
+            root.start_onboarding(window, cx);
         }
+        root
+    }
+
+    /// A fresh set of first-run screens, listened to.
+    fn start_onboarding(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let model = self.model.clone();
+        let view = cx.new(|cx| OnboardingView::new(model, window, cx));
+        self._onboarding_events = Some(cx.subscribe_in(
+            &view,
+            window,
+            |this, _view, event: &OnboardingEvent, window, cx| match event {
+                OnboardingEvent::HaveAccount => {
+                    this.joining = Joining::SignIn;
+                    cx.notify();
+                }
+                OnboardingEvent::Finished => {
+                    // Signing out later is signing in again, not joining.
+                    this.joining = Joining::SignIn;
+                    cx.notify();
+                    cx.defer_in(window, |this, window, cx| this.start_onboarding(window, cx));
+                }
+            },
+        ));
+        self.onboarding = Some(view);
+    }
+
+    /// The first-run screens, when they are what the window shows. For tests.
+    pub fn onboarding(&self) -> Option<&Entity<OnboardingView>> {
+        self.onboarding.as_ref()
     }
 
     /// The "Server" row of the screen showing it: the form's, the unreachable screen's, or the
@@ -133,60 +206,59 @@ impl RootView {
             &title,
             Some(detail.to_owned()),
         )
-            .id("no-access")
-            .debug_selector(|| "no-access".into())
-            // Tab moves between the two buttons, as it does on the sign-in form.
-            .key_context(crate::keyboard::SHELL_CONTEXT)
-            .on_action(
-                cx.listener(|_, _: &crate::keyboard::FocusNextControl, window, cx| {
-                    window.focus_next(cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|_, _: &crate::keyboard::FocusPrevControl, window, cx| {
-                    window.focus_prev(cx)
-                }),
-            )
-            .child(
-                div()
-                    .mt_3()
-                    .flex()
-                    .gap_2()
-                    .child(form::button(
-                        theme,
-                        "no-access-check",
-                        "Check again",
-                        ButtonKind::Primary,
-                        true,
-                        &self.check_focus,
-                        move |_, cx| {
-                            check_to
-                                .update(cx, |root, cx| {
-                                    root.model.update(cx, |model, cx| {
-                                        model.dispatch(Input::RetryLoad, cx)
-                                    });
-                                })
-                                .ok();
-                        },
-                    ))
-                    .child(form::button(
-                        theme,
-                        "no-access-sign-out",
-                        "Sign out",
-                        ButtonKind::Secondary,
-                        true,
-                        &self.sign_out_focus,
-                        move |_, cx| {
-                            this.update(cx, |root, cx| {
+        .id("no-access")
+        .debug_selector(|| "no-access".into())
+        // Tab moves between the two buttons, as it does on the sign-in form.
+        .key_context(crate::keyboard::SHELL_CONTEXT)
+        .on_action(
+            cx.listener(|_, _: &crate::keyboard::FocusNextControl, window, cx| {
+                window.focus_next(cx)
+            }),
+        )
+        .on_action(
+            cx.listener(|_, _: &crate::keyboard::FocusPrevControl, window, cx| {
+                window.focus_prev(cx)
+            }),
+        )
+        .child(
+            div()
+                .mt_3()
+                .flex()
+                .gap_2()
+                .child(form::button(
+                    theme,
+                    "no-access-check",
+                    "Check again",
+                    ButtonKind::Primary,
+                    true,
+                    &self.check_focus,
+                    move |_, cx| {
+                        check_to
+                            .update(cx, |root, cx| {
                                 root.model
-                                    .update(cx, |model, cx| model.dispatch(Input::SignOut, cx));
+                                    .update(cx, |model, cx| model.dispatch(Input::RetryLoad, cx));
                             })
                             .ok();
-                        },
-                    )),
-            )
-            .child(self.server_section())
-            .into_any_element()
+                    },
+                ))
+                .child(form::button(
+                    theme,
+                    "no-access-sign-out",
+                    "Sign out",
+                    ButtonKind::Secondary,
+                    true,
+                    &self.sign_out_focus,
+                    move |_, cx| {
+                        this.update(cx, |root, cx| {
+                            root.model
+                                .update(cx, |model, cx| model.dispatch(Input::SignOut, cx));
+                        })
+                        .ok();
+                    },
+                )),
+        )
+        .child(self.server_section())
+        .into_any_element()
     }
 
     /// The "Server" row under the buttons of the unreachable and no-access screens.
@@ -213,34 +285,63 @@ impl RootView {
             "Can't reach the server",
             Some(message),
         )
-            // Tab moves between "Try again" and the server row, as it does on the sign-in form.
-            .key_context(crate::keyboard::SHELL_CONTEXT)
-            .on_action(
-                cx.listener(|_, _: &crate::keyboard::FocusNextControl, window, cx| {
-                    window.focus_next(cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|_, _: &crate::keyboard::FocusPrevControl, window, cx| {
-                    window.focus_prev(cx)
-                }),
-            )
-            .child(div().mt_3().child(form::button(
+        // Tab moves between "Try again" and the server row, as it does on the sign-in form.
+        .key_context(crate::keyboard::SHELL_CONTEXT)
+        .on_action(
+            cx.listener(|_, _: &crate::keyboard::FocusNextControl, window, cx| {
+                window.focus_next(cx)
+            }),
+        )
+        .on_action(
+            cx.listener(|_, _: &crate::keyboard::FocusPrevControl, window, cx| {
+                window.focus_prev(cx)
+            }),
+        )
+        .child(div().mt_3().child(form::button(
+            theme,
+            "retry-load",
+            "Try again",
+            ButtonKind::Primary,
+            true,
+            &self.retry_focus,
+            move |_, cx| {
+                this.update(cx, |root, cx| {
+                    root.model
+                        .update(cx, |model, cx| model.dispatch(Input::RetryLoad, cx));
+                })
+                .ok();
+            },
+        )))
+        .child(self.server_section())
+        .into_any_element()
+    }
+}
+
+impl RootView {
+    /// "New here? Join with an invitation": from the sign-in card back to the first-run screens.
+    fn join_link(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let this = cx.entity().downgrade();
+        div()
+            .absolute()
+            .bottom_6()
+            .w_full()
+            .flex()
+            .justify_center()
+            .child(form::button(
                 theme,
-                "retry-load",
-                "Try again",
-                ButtonKind::Primary,
+                "join-instead",
+                "New here? Join with an invitation",
+                ButtonKind::Secondary,
                 true,
-                &self.retry_focus,
+                &self.join_link_focus,
                 move |_, cx| {
                     this.update(cx, |root, cx| {
-                        root.model
-                            .update(cx, |model, cx| model.dispatch(Input::RetryLoad, cx));
+                        root.joining = Joining::Join;
+                        cx.notify();
                     })
                     .ok();
                 },
-            )))
-            .child(self.server_section())
+            ))
             .into_any_element()
     }
 }
@@ -270,33 +371,74 @@ impl Render for RootView {
             self.shell = None;
         }
 
-        let content = match phase {
-            SessionPhase::Loading => {
-                Self::splash(
+        // The first-run screens have the window while a person is joining, and after the account
+        // exists until they are left; the sign-in card has it for someone who already has one.
+        let onboarding_on = self.onboarding.as_ref().is_some_and(|onboarding| {
+            onboarding.read(cx).shows(&phase)
+                && (self.joining == Joining::Join
+                    || !matches!(
+                        phase,
+                        SessionPhase::SignedOut { .. } | SessionPhase::SigningIn
+                    ))
+        });
+        let join_link = (self.onboarding.is_some()
+            && !onboarding_on
+            && matches!(phase, SessionPhase::SignedOut { .. }))
+        .then(|| self.join_link(&theme, cx));
+
+        let content = if onboarding_on {
+            self.onboarding
+                .clone()
+                .map(IntoElement::into_any_element)
+                .unwrap_or_else(|| div().into_any_element())
+        } else {
+            match phase {
+                SessionPhase::Loading => Self::splash(
                     &theme,
                     crate::brand::logo(cx, 160.),
                     "Lazy",
                     Some("Loading…".into()),
                 )
-                .into_any_element()
-            }
-            SessionPhase::SignedOut { .. } | SessionPhase::SigningIn => {
-                self.sign_in.clone().into_any_element()
-            }
-            SessionPhase::Unreachable { message } => {
-                self.unreachable_screen(&theme, message, window, cx)
-            }
-            SessionPhase::Ready if access_lost.is_some() => {
-                self.no_access_screen(&theme, access_lost.flatten(), window, cx)
-            }
-            SessionPhase::Ready => {
-                let model = self.model.clone();
-                let shell = self
-                    .shell
-                    .get_or_insert_with(|| cx.new(|cx| ShellView::new(model, window, cx)));
-                shell.clone().into_any_element()
+                .into_any_element(),
+                SessionPhase::SignedOut { .. } | SessionPhase::SigningIn => {
+                    self.sign_in.clone().into_any_element()
+                }
+                SessionPhase::Unreachable { message } => {
+                    self.unreachable_screen(&theme, message, window, cx)
+                }
+                SessionPhase::Ready if access_lost.is_some() => {
+                    self.no_access_screen(&theme, access_lost.flatten(), window, cx)
+                }
+                SessionPhase::Ready => {
+                    let model = self.model.clone();
+                    let shell = self
+                        .shell
+                        .get_or_insert_with(|| cx.new(|cx| ShellView::new(model, window, cx)));
+                    shell.clone().into_any_element()
+                }
             }
         };
-        div().size_full().font_family(fonts::FAMILY).child(content)
+        let content = match join_link {
+            Some(link) => div()
+                .size_full()
+                .child(content)
+                .child(link)
+                .into_any_element(),
+            None => content,
+        };
+        let bar = self
+            .updates
+            .as_ref()
+            .and_then(|updates| crate::updates::bar(&theme, updates, &self.update_focus, cx));
+        let root = div().size_full().font_family(fonts::FAMILY);
+        match bar {
+            // Nothing to say: the screen is laid out exactly as it always was.
+            None => root.child(content),
+            Some(bar) => root
+                .flex()
+                .flex_col()
+                .child(bar)
+                .child(div().flex_1().min_h_0().child(content)),
+        }
     }
 }

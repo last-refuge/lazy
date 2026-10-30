@@ -8,7 +8,7 @@
 //!
 //! # Keyboard
 //!
-//! Tab order: with a new code showing, the code, Copy, and Done; then how long the invitation
+//! Tab order: with a new code showing, the code, Copy, Copy message, and Done; then how long the invitation
 //! lasts and how many times it can be used (Left and Right choose), Create invitation, each
 //! active invitation's Revoke, and Try again when the list failed. Revoke asks first: Enter on
 //! "Revoke" confirms, Escape keeps the invitation. Escape otherwise closes the dialog.
@@ -35,6 +35,13 @@ use crate::theme::Theme;
 use crate::time_fmt::{ago_label, to_zoned};
 use crate::workspace_form::{self, Expiry, Uses};
 
+/// A new invitation's code as it is shown and sent, in groups of four, which is how it is read
+/// aloud, typed, and told apart. The one place a code is read out of the core: the invitations
+/// dialog and the owner's first-run screen both come here.
+pub(crate) fn shown_code(created: &lazy_client_core::CreatedInvite) -> String {
+    lazy_domain::workspace::format_invite_code(created.code.expose())
+}
+
 pub struct InvitationsDialog {
     model: Entity<AppModel>,
     trap: ModalTrap,
@@ -52,6 +59,7 @@ pub struct InvitationsDialog {
     uses_focus: FocusHandle,
     create_focus: FocusHandle,
     copy_focus: FocusHandle,
+    message_focus: FocusHandle,
     done_focus: FocusHandle,
     retry_focus: FocusHandle,
     confirm_yes_focus: FocusHandle,
@@ -88,6 +96,7 @@ impl InvitationsDialog {
             uses_focus: cx.focus_handle().tab_stop(true),
             create_focus: cx.focus_handle().tab_stop(true),
             copy_focus: cx.focus_handle().tab_stop(true),
+            message_focus: cx.focus_handle().tab_stop(true),
             done_focus: cx.focus_handle().tab_stop(true),
             retry_focus: cx.focus_handle().tab_stop(true),
             confirm_yes_focus: cx.focus_handle().tab_stop(true),
@@ -109,6 +118,8 @@ impl InvitationsDialog {
             "code"
         } else if self.copy_focus.is_focused(window) {
             "copy"
+        } else if self.message_focus.is_focused(window) {
+            "copy-message"
         } else if self.done_focus.is_focused(window) {
             "done"
         } else if self.expiry_focus.is_focused(window) {
@@ -155,7 +166,8 @@ impl InvitationsDialog {
             .invitations()
             .created
             .as_ref()
-            .map(|created| created.code.expose().to_owned());
+            // In groups of four, which is how it is read aloud, typed, and told apart.
+            .map(shown_code);
         match (&code, &self.code_text) {
             (Some(code), None) => {
                 let field = cx.new(|cx| {
@@ -248,6 +260,34 @@ impl InvitationsDialog {
         }
     }
 
+    /// Copies the whole message to send: where to get Lazy, the server, the code, and for how long
+    /// and how many it works.
+    fn copy_message(&mut self, cx: &mut Context<Self>) {
+        let Some(code) = &self.code_text else {
+            return;
+        };
+        let (server, created) = {
+            let core = self.model.read(cx).core();
+            (
+                core.server().url.clone(),
+                core.invitations().created.clone(),
+            )
+        };
+        let Some(created) = created else {
+            return;
+        };
+        let message = workspace_form::invitation_message(
+            &server,
+            code,
+            &created.invitation,
+            Timestamp::now(),
+            &self.zone,
+        );
+        cx.write_to_clipboard(ClipboardItem::new_string(message));
+        self.copied = true;
+        cx.notify();
+    }
+
     fn done(&mut self, cx: &mut Context<Self>) {
         self.dispatch(Input::DismissCreatedInvitation, cx);
     }
@@ -319,6 +359,7 @@ impl InvitationsDialog {
         let created = self.model.read(cx).core().invitations().created.clone()?;
         let this = cx.entity().downgrade();
         let copy_to = this.clone();
+        let message_to = this.clone();
         let done_to = this.clone();
         let now = Timestamp::now();
         let facts = [
@@ -379,6 +420,19 @@ impl InvitationsDialog {
                             },
                         )),
                 )
+                .child(div().flex().child(form::button(
+                    theme,
+                    "invite-copy-message",
+                    "Copy message to send",
+                    ButtonKind::Secondary,
+                    true,
+                    &self.message_focus,
+                    move |_, cx| {
+                        message_to
+                            .update(cx, |dialog, cx| dialog.copy_message(cx))
+                            .ok();
+                    },
+                )))
                 .child(
                     div()
                         .id("invite-shown-once")

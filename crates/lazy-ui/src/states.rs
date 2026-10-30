@@ -378,8 +378,7 @@ pub fn quick_hint() -> &'static str {
 pub const SAVED_EMPTY_TITLE: &str = "Nothing saved yet.";
 
 /// What it says under that heading.
-pub const SAVED_EMPTY: &str =
-    "Choose \u{201c}Save for later\u{201d} on a message to keep it here.";
+pub const SAVED_EMPTY: &str = "Choose \u{201c}Save for later\u{201d} on a message to keep it here.";
 
 /// The headline over a first page of saved messages that failed.
 pub const SAVED_FAILED_TITLE: &str = "The saved messages didn't load";

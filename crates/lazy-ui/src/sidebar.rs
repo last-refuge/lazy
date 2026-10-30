@@ -935,9 +935,7 @@ impl Render for SidebarView {
                             .cursor_pointer()
                             .rounded(theme.radii.small)
                             .hover(move |style| style.bg(colors.sidebar_hover))
-                            .on_click(
-                                cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Preferences)),
-                            )
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Preferences)))
                             .child(
                                 crate::avatar::Avatar::new(me_seed, me_name.clone(), 28.)
                                     .text_size(theme.type_scale.body)

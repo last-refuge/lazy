@@ -3306,8 +3306,9 @@ impl Render for TimelineView {
                     return self.failed_state(scope, &message, &theme);
                 }
                 Some(HistoryStatus::Ready { .. }) => {
-                    let (heading, text) = empty_text
-                        .unwrap_or_else(|| (Some("Say hello."), "Send the first message.".to_owned()));
+                    let (heading, text) = empty_text.unwrap_or_else(|| {
+                        (Some("Say hello."), "Send the first message.".to_owned())
+                    });
                     ("empty", heading, text)
                 }
                 _ => ("loading", None, loading.to_owned()),

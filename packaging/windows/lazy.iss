@@ -31,6 +31,8 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\lazy.exe
 CloseApplications=yes
+; The new Lazy is started by [Run] below, not by the Restart Manager, so it is never started twice.
+RestartApplications=no
 #ifdef IconFile
 SetupIconFile={#IconFile}
 #endif
@@ -48,3 +50,12 @@ Name: "{autodesktop}\Lazy"; Filename: "{app}\lazy.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\lazy.exe"; Description: "Start Lazy"; Flags: nowait postinstall skipifsilent
+; An update started from inside Lazy runs this setup silently with /LAZYUPDATE=1 and has no
+; "Start Lazy" box to tick, so the new Lazy is started here.
+Filename: "{app}\lazy.exe"; Flags: nowait runasoriginaluser skipifdoesntexist; Check: UpdatedFromLazy
+
+[Code]
+function UpdatedFromLazy: Boolean;
+begin
+  Result := ExpandConstant('{param:LAZYUPDATE|0}') = '1';
+end;

@@ -151,12 +151,190 @@ pub fn invite_code_is_wellformed(code: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// The alphabet of the invitation codes the server issues now (Crockford's base32): digits and
+/// letters without `I`, `L`, `O`, and `U`, which are mistaken for `1`, `1`, `0`, and `V`. A code
+/// is read aloud, typed, and copied by hand, so it is made of characters that survive that.
+pub const INVITE_CODE_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+/// How many characters a code issued now has: 20 of 5 bits, 100 bits, far beyond guessing.
+pub const INVITE_CODE_CHARS: usize = 20;
+/// The random bytes [`invite_code_from_entropy`] needs (104 bits; 100 are used).
+pub const INVITE_CODE_ENTROPY_BYTES: usize = 13;
+
+const _: () = assert!(INVITE_CODE_CHARS >= MIN_INVITE_CODE_LEN);
+
+/// An invitation code from random bytes: the first 100 bits, five at a time, in
+/// [`INVITE_CODE_ALPHABET`]. The caller supplies the randomness (the server's system generator).
+pub fn invite_code_from_entropy(entropy: &[u8; INVITE_CODE_ENTROPY_BYTES]) -> String {
+    let mut bits: u128 = 0;
+    for byte in entropy {
+        bits = (bits << 8) | u128::from(*byte);
+    }
+    // 104 bits were read; the code is the high 100.
+    let bits = bits >> 4;
+    (0..INVITE_CODE_CHARS)
+        .map(|index| {
+            let shift = 5 * (INVITE_CODE_CHARS - 1 - index);
+            char::from(INVITE_CODE_ALPHABET[((bits >> shift) & 31) as usize])
+        })
+        .collect()
+}
+
+/// Whether `c` is only there to make a code easier to read: a space, a hyphen or another dash, a
+/// soft hyphen, or a zero-width character that chat programs leave in what is copied.
+fn is_code_separator(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '-' | '\u{2010}'
+                ..='\u{2015}'
+                    | '\u{2212}'
+                    | '\u{00ad}'
+                    | '\u{200b}'
+                    | '\u{200c}'
+                    | '\u{200d}'
+                    | '\u{feff}'
+        )
+}
+
+/// The form an invitation code is sent, looked up, and stored in. A code of the kind the server
+/// issues now may be written in any case, in groups, with dashes or spaces between them, with `O`
+/// for `0` and `I` or `L` for `1`; this returns it as 20 capital characters. Anything else, such
+/// as a 32-character code issued before, comes back trimmed and otherwise unchanged. The
+/// longer codes are never altered, since 20 characters of the new alphabet is not a shape they can
+/// have after only separators are removed (they have 32).
+pub fn canonical_invite_code(input: &str) -> String {
+    let trimmed = input.trim();
+    let mut canonical = String::with_capacity(INVITE_CODE_CHARS);
+    for c in trimmed.chars().filter(|c| !is_code_separator(*c)) {
+        let upper = c.to_ascii_uppercase();
+        let mapped = match upper {
+            'O' => '0',
+            'I' | 'L' => '1',
+            other => other,
+        };
+        let in_alphabet = u8::try_from(mapped).is_ok_and(|b| INVITE_CODE_ALPHABET.contains(&b));
+        if !in_alphabet || canonical.len() == INVITE_CODE_CHARS {
+            return trimmed.to_owned();
+        }
+        canonical.push(mapped);
+    }
+    if canonical.len() == INVITE_CODE_CHARS {
+        canonical
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// A code as it is shown to a person: the 20 characters in five groups of four
+/// (`K7QM-4TXD-9BWP-H2VA-ZX3C`). A code of any other shape is shown as it is.
+pub fn format_invite_code(code: &str) -> String {
+    let canonical = canonical_invite_code(code);
+    if canonical.len() != INVITE_CODE_CHARS
+        || !canonical.bytes().all(|b| INVITE_CODE_ALPHABET.contains(&b))
+    {
+        return code.to_owned();
+    }
+    canonical
+        .as_bytes()
+        .chunks(4)
+        .map(|group| String::from_utf8_lossy(group).into_owned())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use WorkspaceRole::{Admin, Member, Owner};
 
     const ROLES: [WorkspaceRole; 3] = [Member, Admin, Owner];
+
+    #[test]
+    fn a_code_is_made_of_a_hundred_bits_in_an_alphabet_without_lookalikes() {
+        assert_eq!(
+            invite_code_from_entropy(&[0; INVITE_CODE_ENTROPY_BYTES]),
+            "0".repeat(20)
+        );
+        assert_eq!(
+            invite_code_from_entropy(&[0xff; INVITE_CODE_ENTROPY_BYTES]),
+            "Z".repeat(20),
+            "the high 100 bits of all ones"
+        );
+        // The low four bits of the last byte are not used.
+        let mut a = [7u8; INVITE_CODE_ENTROPY_BYTES];
+        let mut b = a;
+        a[12] = 0xa0;
+        b[12] = 0xaf;
+        assert_eq!(invite_code_from_entropy(&a), invite_code_from_entropy(&b));
+        // The first five bits are the first character.
+        let mut first = [0u8; INVITE_CODE_ENTROPY_BYTES];
+        first[0] = 0b0000_1000;
+        assert_eq!(invite_code_from_entropy(&first).as_bytes()[0], b'1');
+        for c in "ILOU".chars() {
+            assert!(!INVITE_CODE_ALPHABET.contains(&(c as u8)), "{c}");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for n in 0..=255u8 {
+            let code = invite_code_from_entropy(&[n; INVITE_CODE_ENTROPY_BYTES]);
+            assert_eq!(code.len(), INVITE_CODE_CHARS);
+            assert!(invite_code_is_wellformed(&code), "{code}");
+            assert!(code.bytes().all(|b| INVITE_CODE_ALPHABET.contains(&b)));
+            seen.insert(code);
+        }
+        assert!(seen.len() > 200, "different bytes give different codes");
+    }
+
+    #[test]
+    fn a_code_is_forgiving_to_type_and_to_paste() {
+        let canonical = "K7QM4TXD9BWPH2VAZX3C";
+        for written in [
+            "K7QM4TXD9BWPH2VAZX3C",
+            "K7QM-4TXD-9BWP-H2VA-ZX3C",
+            "k7qm-4txd-9bwp-h2va-zx3c",
+            "  K7QM 4TXD 9BWP H2VA ZX3C\n",
+            "K7QM\u{2013}4TXD\u{2013}9BWP\u{2013}H2VA\u{2013}ZX3C",
+            "K7QM\u{200b}-4TXD-9BWP-H2VA-ZX3C",
+            "\u{feff}K7QM-4TXD-9BWP-H2VA-ZX3C",
+        ] {
+            assert_eq!(canonical_invite_code(written), canonical, "{written:?}");
+        }
+        // O for 0, I and L for 1.
+        assert_eq!(
+            canonical_invite_code("OOOO-IIII-LLLL-0000-1111"),
+            "00001111111100001111"
+        );
+        // Shown in groups, and what is shown reads back.
+        assert_eq!(format_invite_code(canonical), "K7QM-4TXD-9BWP-H2VA-ZX3C");
+        assert_eq!(
+            canonical_invite_code(&format_invite_code(canonical)),
+            canonical
+        );
+    }
+
+    #[test]
+    fn codes_issued_before_are_never_changed_and_what_is_not_a_code_stays_as_typed() {
+        let old = "AbC-def_GHI0123456789jklMNOPqrst";
+        assert_eq!(old.len(), 32);
+        assert_eq!(canonical_invite_code(old), old);
+        assert_eq!(
+            canonical_invite_code(&format!("  {old}\n")),
+            old,
+            "trimmed only"
+        );
+        assert_eq!(format_invite_code(old), old);
+        for text in [
+            "",
+            "K7QM-4TXD",
+            "K7QM4TXD9BWPH2VAZX3",
+            "K7QM4TXD9BWPH2VAZX3CC",
+            "K7QM4TXD9BWPH2VAZX3U",
+            "K7QM4TXD9BWPH2VAZX3_",
+            "not a code, with spaces",
+        ] {
+            assert_eq!(canonical_invite_code(text), text.trim(), "{text:?}");
+            assert_eq!(format_invite_code(text), text, "{text:?}");
+        }
+    }
 
     #[test]
     fn role_changes_follow_the_table() {

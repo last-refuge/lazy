@@ -21,7 +21,10 @@ fn embed_windows_resource() {
     // The file and product versions come from this crate's version.
     resource.set("ProductName", "Lazy");
     resource.set("FileDescription", "Lazy");
-    resource.set("Comments", "A native place for channels, messages and the people you work with.");
+    resource.set(
+        "Comments",
+        "A native place for channels, messages and the people you work with.",
+    );
     let icon = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default())
         .join("../../branding/icons/lazy-app.ico");
     if icon.exists() {

@@ -5,6 +5,7 @@
 //! server in the application. Only the address is ever stored or shown, and by construction it
 //! has no user name, password, query, or fragment, so it can be logged and copied.
 
+use lazy_protocol::ServerRegistration;
 use url::{Host, Url};
 
 /// Used when neither the environment nor the person has chosen a server.
@@ -45,6 +46,17 @@ pub enum ServerCheck {
     },
     /// Nothing usable answered, or the address was refused; why, in a short phrase.
     Unreachable(String),
+}
+
+/// What a server says, before anyone has signed in, about taking accounts (D29): it tells the first
+/// screens whether to ask for an invitation code, and whether that code is the setup code. A server
+/// built before this existed says nothing, and the client then asks for a code and lets the server
+/// decide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerFacts {
+    pub registration: ServerRegistration,
+    /// The server is waiting for its first account, which needs the setup code.
+    pub setup_code_required: bool,
 }
 
 /// The server in use, and what is known about it.

@@ -141,19 +141,15 @@ pub fn new_webhook_secret() -> Result<(String, [u8; 32]), AppError> {
     Ok((secret, hash))
 }
 
-/// A new invitation code: 192 random bits as 32 URL-safe characters, and the SHA-256 hash that is
-/// stored in its place. The code is shown once, in the response that creates the invitation.
+/// A new invitation code: 100 random bits as 20 characters of an alphabet without lookalikes
+/// (`lazy_domain::workspace::invite_code_from_entropy`), and the SHA-256 hash that is stored in
+/// its place. The code is shown once, in the response that creates the invitation, and a person
+/// reads it aloud, types it, and pastes it, which a longer code of mixed case would make hard.
+/// 100 bits cannot be guessed, so there is nothing to rate-limit for the sake of the code itself.
 pub fn new_invite_code() -> Result<(lazy_protocol::InviteCode, [u8; 32]), AppError> {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut random = [0u8; 24];
+    let mut random = [0u8; lazy_domain::workspace::INVITE_CODE_ENTROPY_BYTES];
     fill_random(&mut random)?;
-    let mut code = String::with_capacity(32);
-    for chunk in random.chunks(3) {
-        let bits = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
-        for shift in [18, 12, 6, 0] {
-            code.push(char::from(ALPHABET[((bits >> shift) & 63) as usize]));
-        }
-    }
+    let code = lazy_domain::workspace::invite_code_from_entropy(&random);
     let hash = invite_code_hash(&code);
     Ok((lazy_protocol::InviteCode::new(code), hash))
 }

@@ -165,6 +165,8 @@ pub enum Change {
     },
     /// `ClientCore::server()` changed: the address in use, the one being tried, or a check.
     ServerChanged,
+    /// `ClientCore::invitation_check()` changed.
+    InvitationChanged,
 }
 
 /// Result of [`crate::ClientCore::handle`].

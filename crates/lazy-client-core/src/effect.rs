@@ -11,9 +11,9 @@ use lazy_domain::{
 use lazy_protocol::{
     AddMembersRequest, Attachment, BrowseChannelsQuery, CreateChannelRequest, CreateGroupRequest,
     CreateInvitationRequest, CreateWebhookRequest, EditMessageRequest, InboxQuery, LoginRequest,
-    OpenConversationRequest, PeopleQuery, RegisterRequest, RenameEmojiRequest, SavedQuery,
-    SearchParams, SetConversationNotificationPrefsRequest, SetDeactivatedRequest,
-    SetReactionRequest, SetRoleRequest, SetSavedRequest, SetStatusRequest,
+    OpenConversationRequest, PeopleQuery, PreviewInvitationRequest, RegisterRequest,
+    RenameEmojiRequest, SavedQuery, SearchParams, SetConversationNotificationPrefsRequest,
+    SetDeactivatedRequest, SetReactionRequest, SetRoleRequest, SetSavedRequest, SetStatusRequest,
     UpdateConversationRequest, UpdateGroupRequest, UpdateWorkspaceRequest,
 };
 
@@ -483,6 +483,13 @@ pub enum Effect {
     /// and load what that server's profile holds. Answered by `ServerSwitched`.
     UseServer {
         url: String,
+        generation: u64,
+    },
+    /// Ask the server in use what a code is for, without using it (`POST /v1/invitations/preview`,
+    /// no session needed). Answered by `InvitationPreviewed`, echoing `generation`. A read: the
+    /// runtime may repeat it, and a newer preview makes the answer pointless.
+    PreviewInvitation {
+        request: PreviewInvitationRequest,
         generation: u64,
     },
 }

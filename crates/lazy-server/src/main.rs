@@ -91,10 +91,11 @@ struct ServeArgs {
     /// (default) or `invite_only`. Ignored once a workspace exists.
     #[arg(long, env = "LAZY_SEED_REGISTRATION", default_value = "open", value_parser = parse_registration)]
     seed_registration: lazy_domain::workspace::RegistrationPolicy,
-    /// A secret (at least 16 characters) that the first account's registration must carry in the
-    /// "invitation code" field while the workspace has no members; with it set, a stranger cannot
-    /// become the owner by registering first. It does nothing once anyone is in. Prefer the
-    /// environment variable: a command line is visible to other users of the machine.
+    /// A secret (20 to 64 letters, digits, '-' and '_'; `openssl rand -hex 24` makes one) that the
+    /// first account's registration must carry in the "invitation code" field while the workspace
+    /// has no members; with it set, a stranger cannot become the owner by registering first. It
+    /// does nothing once anyone is in. Prefer the environment variable: a command line is visible
+    /// to other users of the machine.
     #[arg(long, env = "LAZY_SETUP_CODE", hide_env_values = true)]
     setup_code: Option<String>,
 }
@@ -153,11 +154,13 @@ async fn healthcheck(args: &HealthcheckArgs) -> ExitCode {
 }
 
 async fn serve(args: ServeArgs) -> Result<(), lazy_server::AppError> {
-    // Refuse a setup code that is too short before anything else, saying why and not what it was.
+    // Refuse a setup code the app could not send before anything else, saying why and not what it
+    // was. (One already used for the first account does nothing, which the message says.)
     let setup_code = match args.setup_code.as_deref().filter(|code| !code.is_empty()) {
         Some(code) => Some(lazy_server::SetupCode::new(code).map_err(|reason| {
             lazy_server::AppError::internal(format!(
-                "{reason} (LAZY_SETUP_CODE or --setup-code); the server did not start"
+                "{reason} (LAZY_SETUP_CODE or --setup-code); the server did not start. If \
+                 people have signed up here already, the setup code does nothing: remove it"
             ))
         })?),
         None => None,

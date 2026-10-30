@@ -175,6 +175,31 @@ pub fn expiry_text(invitation: &Invitation, now: Timestamp, zone: &TimeZone) -> 
     }
 }
 
+/// The message an admin sends to someone they invite (D29): where to get Lazy, the server's
+/// address, and the code in groups, then how long and for how many it works. The address is the one
+/// this Lazy is using, without a leading `https://` (a person types it, and Lazy adds that).
+pub fn invitation_message(
+    server_url: &str,
+    code: &str,
+    invitation: &Invitation,
+    now: Timestamp,
+    zone: &TimeZone,
+) -> String {
+    let server = server_url.strip_prefix("https://").unwrap_or(server_url);
+    let who = match invitation.max_uses {
+        Some(1) => "one person".to_owned(),
+        Some(max) => format!("up to {max} people"),
+        None => "anyone".to_owned(),
+    };
+    format!(
+        "Join us on Lazy.\n\n1. Get Lazy: {}/latest\n2. Server: {server}\n3. Invitation code: {}\n\n\
+         The code works for {who} until {}.",
+        lazy_client_core::RELEASES_URL,
+        lazy_domain::workspace::format_invite_code(code),
+        moment_label(invitation.expires_at, now, zone),
+    )
+}
+
 /// Whether a state can still be revoked: only an active invitation can be taken back.
 pub fn can_revoke(state: InvitationState) -> bool {
     state == InvitationState::Active

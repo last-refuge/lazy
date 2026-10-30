@@ -1460,7 +1460,8 @@ async fn invitations_are_validated_limited_listed_with_their_state_and_revoked(p
         (None, 0, InvitationState::Active)
     );
     assert_eq!(default.invitation.created_by, w.owner.user.id);
-    // The code: 32 URL-safe characters, different every time, never in the listing.
+    // The code: 20 characters of the alphabet without lookalikes, different every time, never in
+    // the listing.
     let codes = [
         edge_low.code.expose(),
         edge_high.code.expose(),
@@ -1471,7 +1472,13 @@ async fn invitations_are_validated_limited_listed_with_their_state_and_revoked(p
             lazy_domain::workspace::invite_code_is_wellformed(code),
             "{code}"
         );
-        assert_eq!(code.len(), 32);
+        assert_eq!(code.len(), 20);
+        assert!(
+            code.bytes()
+                .all(|b| lazy_domain::workspace::INVITE_CODE_ALPHABET.contains(&b)),
+            "{code}"
+        );
+        assert_eq!(lazy_domain::workspace::canonical_invite_code(code), code);
     }
     assert!(codes[0] != codes[1] && codes[1] != codes[2] && codes[0] != codes[2]);
     let listing = serde_json::to_string(&app.list_invitations(&w.owner).await).unwrap();

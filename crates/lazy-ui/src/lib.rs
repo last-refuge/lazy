@@ -28,6 +28,7 @@ pub mod menu;
 pub mod message_row;
 pub mod modal;
 pub mod notification_form;
+pub mod onboarding;
 pub mod people_picker;
 pub mod people_view;
 pub mod rail;
@@ -52,6 +53,7 @@ pub mod thread_pane;
 pub mod time_fmt;
 pub mod timeline;
 pub mod tooltip;
+pub mod updates;
 pub mod viewer;
 pub mod workspace_form;
 

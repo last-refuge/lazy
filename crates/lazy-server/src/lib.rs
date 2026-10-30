@@ -28,6 +28,7 @@ pub mod http;
 pub mod logging;
 pub mod messages;
 pub mod notifications;
+pub mod onboarding;
 pub mod profile;
 pub mod pruner;
 pub mod realtime;

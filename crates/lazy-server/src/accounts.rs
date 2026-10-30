@@ -1,6 +1,8 @@
 //! Registration, sign-in, and session authentication.
 
-use lazy_domain::workspace::{RegistrationPolicy, WorkspaceSettings, invite_code_is_wellformed};
+use lazy_domain::workspace::{
+    RegistrationPolicy, WorkspaceSettings, canonical_invite_code, invite_code_is_wellformed,
+};
 use lazy_domain::{UserId, WorkspaceId, WorkspaceRole};
 use lazy_protocol::{
     Conversation, ErrorCode, Event, LoginRequest, RegisterRequest, SessionResponse, User,
@@ -19,7 +21,7 @@ use crate::webhooks;
 
 /// The one answer for an invitation that cannot be used, whether the code is of the wrong shape,
 /// unknown, revoked, expired or used up: nothing says which, so codes cannot be probed.
-fn invitation_invalid() -> AppError {
+pub(crate) fn invitation_invalid() -> AppError {
     AppError::new(ErrorCode::InvitationInvalid, "that invitation is not valid")
 }
 
@@ -40,7 +42,7 @@ async fn lock_registration(
     Ok(())
 }
 
-async fn workspace_has_no_members(
+pub(crate) async fn workspace_has_no_members(
     conn: &mut PgConnection,
     workspace_id: WorkspaceId,
 ) -> Result<bool, AppError> {
@@ -123,8 +125,14 @@ pub async fn register(
     let invite_hash = match candidate {
         _ if in_setup => None,
         None => None,
-        Some(code) if invite_code_is_wellformed(code) => Some(crypto::invite_code_hash(code)),
-        Some(_) => return Err(invitation_invalid()),
+        Some(code) => {
+            // Written any way a person might write it (case, groups, dashes), it is the same code.
+            let code = canonical_invite_code(code);
+            if !invite_code_is_wellformed(&code) {
+                return Err(invitation_invalid());
+            }
+            Some(crypto::invite_code_hash(&code))
+        }
     };
 
     let workspace_id = match (&invite_hash, &default) {

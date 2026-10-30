@@ -21,6 +21,7 @@ mod saved_server;
 mod searches;
 mod secure;
 mod store;
+mod updates;
 
 pub use async_channel;
 pub use config::{
@@ -33,3 +34,4 @@ pub use secure::{
     InsecureFileStorage, KeyringStorage, MemoryStorage, SecretVault, SecureStorage, StorageError,
     secret_namespace,
 };
+pub use updates::{RELEASES_URL_VARIABLE, UpdateConfig, Updater};

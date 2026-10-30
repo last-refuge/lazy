@@ -24,7 +24,7 @@ if there is none. Migrations only go forward: back up before upgrading.
 
 Whoever registers first on a new server becomes the owner of its workspace. On a server that
 strangers can reach, that must not be a race. So the deployment files require a **setup code**
-(`LAZY_SETUP_CODE`, at least 16 characters): until the first account exists, registration needs
+(`LAZY_SETUP_CODE`, 20 to 64 letters, digits, `-` and `_`; `openssl rand -hex 24` makes one): until the first account exists, registration needs
 the code, typed into the **Invitation or setup code** field of the create-account form. Once the
 owner exists the code does nothing. The files also seed the workspace as **invitation only**
 (`LAZY_SEED_REGISTRATION=invite_only`): everyone after the owner joins with an invitation code from
@@ -115,7 +115,7 @@ All of these are also command-line options (`lazy-server serve --help`).
 | `DATABASE_URL` | required | `postgres://user:password@host:5432/db`; the password must be URL-safe |
 | `LAZY_LISTEN` | `0.0.0.0:8080` in the image | address inside the container |
 | `LAZY_PUBLIC_URL` | derived | the address clients reach; webhook URLs are shown under it |
-| `LAZY_SETUP_CODE` | none | needed to create the first account (at least 16 characters); set it on any reachable server |
+| `LAZY_SETUP_CODE` | none | needed to create the first account (20 to 64 letters, digits, `-` and `_`, because it is typed into the app like an invitation code; refused at start otherwise); set it on any reachable server |
 | `LAZY_SEED_REGISTRATION` | `open` (`invite_only` in the compose files) | who may register on the workspace the server creates |
 | `LAZY_OPEN_REGISTRATION` | `true` | `false` closes registration entirely, invitations included |
 | `LAZY_OPEN_WORKSPACE_CREATION` | `true` | whether any signed-in person may create a workspace of their own |

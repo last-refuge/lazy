@@ -55,6 +55,7 @@ pub enum CommandId {
     ToggleFavorite,
     Shortcuts,
     Diagnostics,
+    CheckForUpdates,
     SignOut,
 }
 
@@ -250,6 +251,7 @@ const REGISTRY: &[Command] = &[
         Some("secondary-/"),
     ),
     command(C::Diagnostics, G::Help, "Diagnostics…", None),
+    command(C::CheckForUpdates, G::Help, "Check for updates…", None),
 ];
 
 /// Every command.

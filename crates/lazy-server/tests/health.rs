@@ -205,9 +205,11 @@ async fn the_healthcheck_command_exits_zero_only_for_a_healthy_server(pool: PgPo
 }
 
 #[tokio::test]
-async fn a_setup_code_that_is_too_short_stops_the_server_before_it_starts_and_is_not_repeated() {
+async fn a_setup_code_the_app_cannot_send_stops_the_server_before_it_starts_and_is_not_repeated() {
     let short = "tooshortcode1";
     let unicode = "éééééééé"; // 8 characters, 16 bytes
+    // Long enough, and what `openssl rand -base64` makes: not letters and digits.
+    let base64 = "Zm9vYmFyYmF6cXV4Zm9vYg+/==";
     let database = "postgres://nobody@127.0.0.1:1/none";
     for (args, env) in [
         (
@@ -226,14 +228,29 @@ async fn a_setup_code_that_is_too_short_stops_the_server_before_it_starts_and_is
             vec!["serve", "--database-url", database],
             vec![("LAZY_SETUP_CODE", "fifteen-chars-1")],
         ),
+        (
+            // The old minimum was 16: this one was a setup code, and is not now.
+            vec!["serve", "--database-url", database],
+            vec![("LAZY_SETUP_CODE", "nineteen-chars-1234")],
+        ),
+        (
+            vec!["serve", "--database-url", database],
+            vec![("LAZY_SETUP_CODE", base64)],
+        ),
     ] {
         let (code, out, err, took) = cli(&args, &env).await;
         assert_eq!(code, Some(1), "{args:?}: {err}");
         assert!(
-            err.contains("at least 16 characters") && err.contains("did not start"),
+            err.contains("20 to 64 characters") && err.contains("did not start"),
             "{err}"
         );
-        for secret in [short, unicode, "fifteen-chars-1"] {
+        for secret in [
+            short,
+            unicode,
+            "fifteen-chars-1",
+            "nineteen-chars-1234",
+            base64,
+        ] {
             assert!(
                 !err.contains(secret) && !out.contains(secret),
                 "the code was repeated: {err}"
@@ -243,15 +260,16 @@ async fn a_setup_code_that_is_too_short_stops_the_server_before_it_starts_and_is
         assert!(!err.contains("database"), "{err}");
         assert!(took < Duration::from_secs(5), "{took:?}");
     }
-    // Long enough, it gets past the check (and stops at the database address, which is not one).
+    // Of the right shape, it gets past the check (and stops at the database address, which is
+    // not one).
     let (code, _, err, _) = cli(
         &["serve", "--database-url", "not a postgres url"],
-        &[("LAZY_SETUP_CODE", "exactly-16-chars")],
+        &[("LAZY_SETUP_CODE", "exactly-20-chars-aaa")],
     )
     .await;
     assert_eq!(code, Some(1));
     assert!(
-        !err.contains("at least 16 characters") && !err.contains("exactly-16-chars"),
+        !err.contains("20 to 64 characters") && !err.contains("exactly-20-chars-aaa"),
         "{err}"
     );
     // A policy that is not one is refused by the command line.

@@ -21,10 +21,12 @@ mod input;
 mod input_debug;
 mod model;
 mod notify;
+mod onboarding;
 mod redact;
 mod search;
 mod server;
 mod timeline;
+mod update;
 mod workspaces;
 
 pub use admin::{CreatedInvite, InvitationsView};
@@ -61,10 +63,15 @@ pub use notify::{
     DesktopNotification, INBOX_PAGE, INBOX_READ_CAP, InboxStatus, InboxView, LoadStatus,
     MAX_NOTIFICATION_BODY,
 };
+pub use onboarding::{InvitationCheck, PreviewFailure};
 pub use search::{MAX_RECENT_SEARCHES, SEARCH_PAGE, SearchStatus, SearchView};
 pub use server::{
-    DEFAULT_SERVER_URL, MAX_SERVER_URL_CHARS, ServerCheck, ServerInfo, ServerSource,
+    DEFAULT_SERVER_URL, MAX_SERVER_URL_CHARS, ServerCheck, ServerFacts, ServerInfo, ServerSource,
     ServerUrlError, normalize_server_url,
+};
+pub use update::{
+    AvailableUpdate, CHECK_INTERVAL, Checksum, MAX_CHECKSUMS_BYTES, Package, RELEASES_URL,
+    UpdateFailure, UpdateStatus, Version, parse_checksums,
 };
 pub use workspaces::{
     Appearance, MAX_HELD_AVATAR_BYTES, MAX_HELD_AVATARS, MAX_QUEUED_AVATAR_FETCHES, MotionChoice,

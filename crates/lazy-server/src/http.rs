@@ -20,8 +20,8 @@ use lazy_domain::{
 };
 use lazy_protocol::api::paths;
 use lazy_protocol::{
-    AcceptInvitationRequest, CreateWorkspaceRequest, JoinedWorkspace, ProfileResponse,
-    UpdateProfileRequest,
+    AcceptInvitationRequest, CreateWorkspaceRequest, InvitationPreview, JoinedWorkspace,
+    PreviewInvitationRequest, ProfileResponse, ServerInfoResponse, UpdateProfileRequest,
 };
 use lazy_protocol::{
     AddMembersRequest, AttachmentResponse, BootstrapResponse, BrowseChannelsQuery,
@@ -48,7 +48,7 @@ use crate::app::AppState;
 use crate::error::AppError;
 use crate::{
     admin, attachments, bootstrap, conversations, discovery, emoji, groups, logging, messages,
-    notifications, profile, realtime, search, threads, webhooks, workspaces,
+    notifications, onboarding, profile, realtime, search, threads, webhooks, workspaces,
 };
 
 /// Largest accepted request body.
@@ -82,6 +82,8 @@ pub fn router(state: AppState) -> Router {
         ));
     let api = Router::new()
         .route(paths::HEALTH, get(health))
+        .route(paths::SERVER_INFO, get(server_info))
+        .route(paths::PREVIEW_INVITATION, post(preview_invitation))
         .route(paths::REGISTER, post(register))
         .route(paths::LOGIN, post(login))
         .route(paths::LOGOUT, post(logout))
@@ -174,6 +176,19 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         protocol_version: PROTOCOL_VERSION,
     })
+}
+
+async fn server_info(State(state): State<AppState>) -> Result<Json<ServerInfoResponse>, AppError> {
+    onboarding::server_info(&state).await.map(Json)
+}
+
+async fn preview_invitation(
+    State(state): State<AppState>,
+    ApiJson(request): ApiJson<PreviewInvitationRequest>,
+) -> Result<Json<InvitationPreview>, AppError> {
+    onboarding::preview_invitation(&state, request)
+        .await
+        .map(Json)
 }
 
 async fn register(

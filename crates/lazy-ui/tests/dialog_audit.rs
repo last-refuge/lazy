@@ -277,6 +277,7 @@ fn name_of(dialog: &ShellDialog) -> &'static str {
         ShellDialog::DeleteMessage { .. } => "delete message",
         ShellDialog::Shortcuts => "shortcuts",
         ShellDialog::Diagnostics => "diagnostics",
+        ShellDialog::Updates => "updates",
     }
 }
 
@@ -301,6 +302,7 @@ fn every_dialog(world: &World) -> Vec<ShellDialog> {
         },
         ShellDialog::Shortcuts,
         ShellDialog::Diagnostics,
+        ShellDialog::Updates,
     ]
 }
 
@@ -327,6 +329,7 @@ const DIALOG_FILES: &[(&str, &str)] = &[
     ("profile", "ShellDialog::Profile"),
     ("quick_switcher", "ShellDialog::QuickSwitcher"),
     ("shortcuts", "ShellDialog::Shortcuts"),
+    ("updates", "ShellDialog::Updates"),
     ("workspace_settings", "ShellDialog::WorkspaceSettings"),
 ];
 

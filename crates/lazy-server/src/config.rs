@@ -5,39 +5,48 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use lazy_domain::workspace::RegistrationPolicy;
+use lazy_domain::workspace::{RegistrationPolicy, canonical_invite_code, invite_code_is_wellformed};
 
 /// The secret that lets the first account be created on a server that anyone can reach: while the
 /// default workspace has no members, registration needs it (as the "invitation code"), and once it
 /// has any it does nothing. Never logged: `Debug` hides it, and the only way to read it is to
 /// compare against it.
+///
+/// It is typed into the app's invitation-code field, so it has an invitation code's shape: 20 to 64
+/// letters, digits, `-` and `_` (D29). The app writes a code the way [`canonical_invite_code`]
+/// says before it sends it, so the server compares in that form too: a setup code of exactly 20
+/// characters of the invitation alphabet (20 hexadecimal digits, say) is matched in capitals
+/// whatever case it was configured in. Nothing else is forgiven: not padding, not another case.
 #[derive(Clone)]
 pub struct SetupCode(String);
 
 impl SetupCode {
-    /// The fewest characters a setup code may have.
-    pub const MIN_CHARS: usize = 16;
+    /// What a setup code is made of, in words, for the message that refuses one.
+    const SHAPE: &'static str = "20 to 64 characters, letters, digits, '-' and '_'";
 
     /// A setup code, or a message (never containing the code) saying why it is not one.
     pub fn new(code: impl Into<String>) -> Result<Self, String> {
         let code = code.into();
-        if code.chars().count() < Self::MIN_CHARS {
+        if !invite_code_is_wellformed(&canonical_invite_code(&code)) {
             return Err(format!(
-                "the setup code must be at least {} characters",
-                Self::MIN_CHARS
+                "the setup code must be {}, as it is typed into the app like an invitation code \
+                 (`openssl rand -hex 24` makes one)",
+                Self::SHAPE
             ));
         }
         Ok(Self(code))
     }
 
     /// Whether `candidate` is the code, compared in constant time: both are hashed first, so the
-    /// time depends neither on where they differ nor on how long the candidate is.
+    /// time depends neither on where they differ nor on how long the candidate is. Both are put in
+    /// the app's form first; a candidate with padding is never the code, since the app trims.
     pub fn matches(&self, candidate: &str) -> bool {
         use sha2::{Digest, Sha256};
         use subtle::ConstantTimeEq;
-        let ours = Sha256::digest(self.0.as_bytes());
-        let theirs = Sha256::digest(candidate.as_bytes());
-        ours.ct_eq(&theirs).into()
+        let ours = Sha256::digest(canonical_invite_code(&self.0).as_bytes());
+        let theirs = Sha256::digest(canonical_invite_code(candidate).as_bytes());
+        let padded = candidate.trim().len() != candidate.len();
+        bool::from(ours.ct_eq(&theirs)) && !padded
     }
 }
 
@@ -52,21 +61,47 @@ mod setup_code_tests {
     use super::*;
 
     #[test]
-    fn a_setup_code_is_sixteen_characters_or_more_counted_as_characters() {
-        assert!(SetupCode::new("0123456789abcde").is_err());
-        assert!(SetupCode::new("0123456789abcdef").is_ok());
-        // Eight characters of two bytes each are sixteen bytes and not sixteen characters.
-        assert!(SetupCode::new("éééééééé").is_err());
-        assert!(SetupCode::new("é".repeat(16)).is_ok());
+    fn a_setup_code_has_the_shape_the_app_can_send() {
+        // 20 to 64 letters, digits, '-' and '_'.
+        assert!(SetupCode::new("0123456789abcdefghi").is_err(), "19");
+        assert!(SetupCode::new("0123456789abcdefghij").is_ok(), "20");
+        assert!(SetupCode::new("x".repeat(64)).is_ok());
+        assert!(SetupCode::new("x".repeat(65)).is_err());
+        assert!(SetupCode::new("openssl-rand-hex-24_ok").is_ok());
+        assert!(SetupCode::new("0123456789abcdef0123456789abcdef0123456789abcdef").is_ok());
+        // Not a setup code: other characters (what `openssl rand -base64` makes), spaces inside,
+        // characters of more than one byte (eight of them are sixteen bytes, 20 of them are not
+        // letters), and nothing.
+        assert!(SetupCode::new("abcdefghijklmnopqrstuvwxyz+/==").is_err());
+        assert!(SetupCode::new("abcdefghij klmnopqrstuvwxyz").is_err());
+        assert!(SetupCode::new("é".repeat(20)).is_err());
+        assert!(SetupCode::new("").is_err());
+        // Written the way it is shown, in groups, it is the same 20 characters.
+        assert!(SetupCode::new("K7QM-4TXD-9BWP-H2VA-ZX3C").is_ok());
         let message = SetupCode::new("short").unwrap_err();
         assert!(
-            message.contains("16") && !message.contains("short"),
+            message.contains("20 to 64") && !message.contains("short"),
             "{message}"
         );
     }
 
     #[test]
+    fn a_code_of_twenty_characters_of_the_invitation_alphabet_is_matched_as_the_app_writes_it() {
+        // The app puts such a code in capitals, with nothing between the characters; so does the
+        // server, on both sides.
+        for configured in ["0123456789abcdef0123", "0123-4567-89AB-cdef-0123"] {
+            let code = SetupCode::new(configured).unwrap();
+            assert!(code.matches("0123456789ABCDEF0123"), "{configured}");
+            assert!(code.matches("0123-4567-89ab-cdef-0123"), "{configured}");
+            assert!(!code.matches("0123456789ABCDEF0124"), "{configured}");
+            assert!(!code.matches(" 0123456789ABCDEF0123"), "padding is not forgiven");
+            assert!(!code.matches("0123456789ABCDEF0123\n"), "padding is not forgiven");
+        }
+    }
+
+    #[test]
     fn it_matches_exactly_and_never_shows_itself() {
+        // Not of the invitation alphabet (it has a `u`), so nothing about it is forgiven.
         let code = SetupCode::new("the-right-setup-code").unwrap();
         assert!(code.matches("the-right-setup-code"));
         for wrong in [

@@ -18,6 +18,7 @@ mod preferences;
 mod profile;
 mod quick_switcher;
 mod shortcuts;
+mod updates;
 mod workspace_settings;
 
 pub use add_workspace::{AddWorkspaceDialog, Way};
@@ -32,6 +33,7 @@ pub use diagnostics::{
 pub use groups::GroupsDialog;
 pub use integrations::{IntegrationsEvent, IntegrationsSection};
 pub use invitations::InvitationsDialog;
+pub(crate) use invitations::shown_code;
 pub use people::{PeopleDialog, PeopleMode};
 pub use preferences::PreferencesDialog;
 pub use profile::{ProfileDialog, ProfileRequest};
@@ -40,6 +42,7 @@ pub use quick_switcher::{
     bind_keys as bind_quick_switcher_keys,
 };
 pub use shortcuts::ShortcutsDialog;
+pub use updates::UpdatesDialog;
 pub use workspace_settings::WorkspaceSettingsDialog;
 
 use gpui::{App, AppContext as _, Context, Entity};

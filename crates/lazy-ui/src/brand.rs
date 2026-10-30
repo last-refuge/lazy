@@ -39,6 +39,11 @@ const MOSS_WELCOME: &[u8] = include_bytes!("../assets/brand/moss-welcome-512.png
 const MOSS_CAUGHT_UP: &[u8] = include_bytes!("../assets/brand/moss-caught-up-512.png");
 const MOSS_CELEBRATE: &[u8] = include_bytes!("../assets/brand/moss-celebrate-512.png");
 const APP_ICON: &[u8] = include_bytes!("../assets/brand/lazy-app-256.png");
+// The three poses the first-run screens show large (D29): 160 to 320 px, which the 512 px
+// pictures would have to be stretched to.
+const MOSS_PRIMARY_LARGE: &[u8] = include_bytes!("../assets/brand/moss-primary-768.png");
+const MOSS_WELCOME_LARGE: &[u8] = include_bytes!("../assets/brand/moss-welcome-768.png");
+const MOSS_CELEBRATE_LARGE: &[u8] = include_bytes!("../assets/brand/moss-celebrate-768.png");
 
 /// The logo's own proportions (600 by 224 pixels).
 const LOGO_WIDTH: f32 = 600.0;
@@ -51,6 +56,10 @@ const LOGO_HEIGHT: f32 = 224.0;
 const LOGO_PREPARED: (u32, u32) = (320, 119);
 const SYMBOL_PREPARED: (u32, u32) = (64, 64);
 const MOSS_PREPARED: (u32, u32) = (256, 256);
+/// Moss drawn larger than [`LARGE_MOSS_FROM`] (up to 320 px) is prepared at twice that.
+const MOSS_LARGE_PREPARED: (u32, u32) = (640, 640);
+/// Above this size Moss is drawn from the larger pictures, for the poses that have them.
+pub const LARGE_MOSS_FROM: f32 = 160.0;
 /// Below this size Moss gives way to the symbol: Moss is not legible smaller.
 pub const SYMBOL_BELOW: f32 = 80.0;
 /// The narrowest the logo is drawn.
@@ -79,6 +88,9 @@ struct Pictures {
     moss_welcome: Option<Arc<RenderImage>>,
     moss_caught_up: Option<Arc<RenderImage>>,
     moss_celebrate: Option<Arc<RenderImage>>,
+    moss_primary_large: Option<Arc<RenderImage>>,
+    moss_welcome_large: Option<Arc<RenderImage>>,
+    moss_celebrate_large: Option<Arc<RenderImage>>,
 }
 
 impl Global for Pictures {}
@@ -105,6 +117,21 @@ pub fn install(cx: &mut App) {
         moss_welcome: one("Moss (welcome)", MOSS_WELCOME, MOSS_PREPARED),
         moss_caught_up: one("Moss (caught up)", MOSS_CAUGHT_UP, MOSS_PREPARED),
         moss_celebrate: one("Moss (celebrate)", MOSS_CELEBRATE, MOSS_PREPARED),
+        moss_primary_large: one(
+            "Moss (primary, large)",
+            MOSS_PRIMARY_LARGE,
+            MOSS_LARGE_PREPARED,
+        ),
+        moss_welcome_large: one(
+            "Moss (welcome, large)",
+            MOSS_WELCOME_LARGE,
+            MOSS_LARGE_PREPARED,
+        ),
+        moss_celebrate_large: one(
+            "Moss (celebrate, large)",
+            MOSS_CELEBRATE_LARGE,
+            MOSS_LARGE_PREPARED,
+        ),
     });
 }
 
@@ -174,6 +201,20 @@ pub fn logo(cx: &App, width: f32) -> Option<Stateful<Div>> {
     )
 }
 
+/// The horizontal logo in its paper variant whatever the theme, for a dark surface that is dark in
+/// both themes (the first-run screens' Forest panel). `width` as for [`logo`].
+pub fn logo_on_dark(cx: &App, width: f32) -> Option<Stateful<Div>> {
+    let width = width.max(MIN_LOGO_WIDTH);
+    let pictures = cx.try_global::<Pictures>()?;
+    let image = pictures.logo_paper.clone()?;
+    Some(
+        picture(image, width, width * LOGO_HEIGHT / LOGO_WIDTH)
+            .id("brand-logo")
+            .role(Role::Image)
+            .aria_label("Lazy"),
+    )
+}
+
 /// The symbol, `size` pixels square, for the app itself where a generic glyph would stand.
 /// Decorative: the words beside it name the app.
 pub fn symbol(cx: &App, size: f32) -> Option<Div> {
@@ -185,19 +226,29 @@ pub fn symbol(cx: &App, size: f32) -> Option<Div> {
     Some(picture(image, size, size))
 }
 
-/// Moss, `size` pixels square (96 to 160 is the range the brand sets; below
-/// [`SYMBOL_BELOW`] the symbol is drawn instead). Decorative.
+/// Moss, `size` pixels square (96 to 160 is the range the brand sets for a compact state, 160 to
+/// 320 for onboarding; below [`SYMBOL_BELOW`] the symbol is drawn instead). Decorative.
+///
+/// Above [`LARGE_MOSS_FROM`] the larger pictures are used for the poses that have them (primary,
+/// welcome, and celebrate), so a big Moss is as sharp as a small one.
 pub fn moss(cx: &App, which: Moss, size: f32) -> Option<Div> {
     if size < SYMBOL_BELOW {
         return symbol(cx, size);
     }
     let pictures = cx.try_global::<Pictures>()?;
+    let large = size > LARGE_MOSS_FROM;
     let image = match which {
+        Moss::Primary if large => pictures.moss_primary_large.clone(),
+        Moss::Welcome if large => pictures.moss_welcome_large.clone(),
+        Moss::Celebrate if large => pictures.moss_celebrate_large.clone(),
+        _ => None,
+    }
+    .or_else(|| match which {
         Moss::Primary => pictures.moss_primary.clone(),
         Moss::Welcome => pictures.moss_welcome.clone(),
         Moss::CaughtUp => pictures.moss_caught_up.clone(),
         Moss::Celebrate => pictures.moss_celebrate.clone(),
-    }?;
+    })?;
     Some(picture(image, size, size))
 }
 
@@ -251,11 +302,18 @@ mod tests {
             ("moss welcome", MOSS_WELCOME, 512, 512),
             ("moss caught up", MOSS_CAUGHT_UP, 512, 512),
             ("moss celebrate", MOSS_CELEBRATE, 512, 512),
+            ("moss primary large", MOSS_PRIMARY_LARGE, 768, 768),
+            ("moss welcome large", MOSS_WELCOME_LARGE, 768, 768),
+            ("moss celebrate large", MOSS_CELEBRATE_LARGE, 768, 768),
             ("app tile", APP_ICON, 256, 256),
         ] {
             let picture = image::load_from_memory(bytes)
                 .unwrap_or_else(|error| panic!("{name} does not decode: {error}"));
-            assert_eq!((picture.width(), picture.height()), (width, height), "{name}");
+            assert_eq!(
+                (picture.width(), picture.height()),
+                (width, height),
+                "{name}"
+            );
         }
     }
 
@@ -265,9 +323,14 @@ mod tests {
         assert!(LOGO_PREPARED.0 >= 2 * 160);
         assert!(SYMBOL_PREPARED.0 >= 2 * 32);
         assert!(MOSS_PREPARED.0 >= 2 * 128);
+        assert!(MOSS_LARGE_PREPARED.0 >= 2 * 320);
+        assert_eq!(MOSS_LARGE_PREPARED.0, MOSS_LARGE_PREPARED.1);
         // The prepared logo is the original's shape to within a pixel; the others are square.
         let logo_ratio = LOGO_PREPARED.0 as f32 / LOGO_PREPARED.1 as f32;
-        assert!((logo_ratio - LOGO_WIDTH / LOGO_HEIGHT).abs() < 0.03, "{logo_ratio}");
+        assert!(
+            (logo_ratio - LOGO_WIDTH / LOGO_HEIGHT).abs() < 0.03,
+            "{logo_ratio}"
+        );
         assert_eq!(SYMBOL_PREPARED.0, SYMBOL_PREPARED.1);
         assert_eq!(MOSS_PREPARED.0, MOSS_PREPARED.1);
     }
@@ -278,7 +341,10 @@ mod tests {
         let picture = scaled(SYMBOL_FOREST, width, height).expect("the symbol scales");
         assert_eq!(picture.dimensions(), (width, height));
         assert_eq!(picture.get_pixel(0, 0).0[3], 0, "the corner stays clear");
-        assert!(picture.pixels().any(|pixel| pixel.0[3] > 128), "the ink stays");
+        assert!(
+            picture.pixels().any(|pixel| pixel.0[3] > 128),
+            "the ink stays"
+        );
     }
 
     #[test]
@@ -298,9 +364,7 @@ mod tests {
             .expect("the test picture encodes");
         let picture = scaled(&png.into_inner(), 5, 5).expect("the test picture scales");
         assert!(
-            picture
-                .pixels()
-                .any(|pixel| (8..248).contains(&pixel.0[3])),
+            picture.pixels().any(|pixel| (8..248).contains(&pixel.0[3])),
             "some pixel straddles the edge"
         );
         for pixel in picture.pixels().filter(|pixel| pixel.0[3] >= 64) {

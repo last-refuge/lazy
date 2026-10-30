@@ -377,23 +377,7 @@ const MAX_HEALTH_BYTES: u64 = 4096;
 /// followed only to the same host (at most three times), so a typed address cannot send the
 /// client somewhere else.
 pub(crate) async fn probe(url: &str, timeout: Duration) -> Result<u32, String> {
-    let client = reqwest::Client::builder()
-        .timeout(timeout)
-        .connect_timeout(timeout)
-        .user_agent(concat!("lazy-client/", env!("CARGO_PKG_VERSION")))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            let same_host = attempt
-                .previous()
-                .first()
-                .is_some_and(|first| first.host_str() == attempt.url().host_str());
-            if same_host && attempt.previous().len() < 3 {
-                attempt.follow()
-            } else {
-                attempt.stop()
-            }
-        }))
-        .build()
-        .map_err(|_| "the check could not start".to_owned())?;
+    let client = probe_client(timeout).map_err(|_| "the check could not start".to_owned())?;
     let response = client
         .get(format!(
             "{}{}",
@@ -427,6 +411,65 @@ pub(crate) async fn probe(url: &str, timeout: Duration) -> Result<u32, String> {
     serde_json::from_slice::<lazy_protocol::HealthResponse>(&bytes)
         .map(|health| health.protocol_version)
         .map_err(|_| not_lazy())
+}
+
+/// The client that asks an address what it is: no session, short timeouts, and a redirect followed
+/// only to the same host.
+fn probe_client(timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .connect_timeout(timeout)
+        .user_agent(concat!("lazy-client/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let same_host = attempt
+                .previous()
+                .first()
+                .is_some_and(|first| first.host_str() == attempt.url().host_str());
+            if same_host && attempt.previous().len() < 3 {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .build()
+}
+
+/// What a server that passed the check says about taking accounts (`GET <url>/v1/server`, D29), or
+/// `None` when it says nothing usable: a server built before the route existed answers 404, and
+/// anything odd is the same as nothing. Never an error: the first screens work without it.
+pub(crate) async fn probe_facts(
+    url: &str,
+    timeout: Duration,
+) -> Option<lazy_client_core::ServerFacts> {
+    let client = probe_client(timeout).ok()?;
+    let response = client
+        .get(format!(
+            "{}{}",
+            url.trim_end_matches('/'),
+            lazy_protocol::paths::SERVER_INFO
+        ))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|len| len > MAX_HEALTH_BYTES)
+    {
+        return None;
+    }
+    let bytes = response.bytes().await.ok()?;
+    if bytes.len() as u64 > MAX_HEALTH_BYTES {
+        return None;
+    }
+    let info = serde_json::from_slice::<lazy_protocol::ServerInfoResponse>(&bytes).ok()?;
+    // A server speaking another protocol is not described in this one's terms.
+    (info.protocol_version == lazy_protocol::PROTOCOL_VERSION).then_some(
+        lazy_client_core::ServerFacts {
+            registration: info.registration,
+            setup_code_required: info.setup_code_required,
+        },
+    )
 }
 
 /// Why a check got no answer, in fixed words (a certificate problem is the one thing worth

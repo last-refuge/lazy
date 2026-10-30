@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use lazy_domain::{
     AttachmentId, ConversationId, DisplayName, DocumentError, EventSeq, MessageDocument, MessageId,
     OperationId, Permalink, ReactionEmoji, Timestamp, UserId, Username, WorkspaceId,
-    workspace::invite_code_is_wellformed,
+    workspace::{canonical_invite_code, invite_code_is_wellformed},
 };
 use lazy_protocol::{
     BootstrapResponse, Conversation, ConversationUserState, Event, EventEnvelope, InviteCode,
@@ -38,6 +38,7 @@ mod inbox;
 mod mentions;
 mod messages;
 mod notify;
+mod onboarding;
 mod permalink;
 mod reactions;
 mod readstate;
@@ -276,6 +277,12 @@ pub struct ClientCore {
     server: ServerInfo,
     server_job: Option<server::ServerJob>,
     server_generation: u64,
+    /// What the last check of an address heard about taking accounts, with the address it heard
+    /// it from (D29).
+    facts: Option<(String, crate::server::ServerFacts)>,
+    /// What is known about the invitation code last asked about, and which question that is.
+    invitation: crate::onboarding::InvitationCheck,
+    invitation_generation: u64,
     /// A bootstrap has been applied in this run, so the person's notification settings are the
     /// server's (the cache does not hold them).
     settings_known: bool,
@@ -388,6 +395,9 @@ impl ClientCore {
             server: ServerInfo::default(),
             server_job: None,
             server_generation: 0,
+            facts: None,
+            invitation: crate::onboarding::InvitationCheck::default(),
+            invitation_generation: 0,
             settings_known: false,
             active: None,
             scope: None,
@@ -552,6 +562,11 @@ impl ClientCore {
             }
             Input::ServerSwitched { generation, result } => {
                 self.server_switched(generation, result, &mut out)
+            }
+            Input::ServerFacts { url, facts } => self.server_facts_arrived(url, facts, &mut out),
+            Input::PreviewInvitation { code } => self.preview_invitation(&code, &mut out),
+            Input::InvitationPreviewed { generation, result } => {
+                self.invitation_previewed(generation, result, &mut out)
             }
             Input::RetryLoad => {
                 if matches!(self.phase, SessionPhase::Unreachable { .. }) {
@@ -963,7 +978,9 @@ impl ClientCore {
             return self.reject_sign_in(problem, out);
         }
         // The code is never echoed back in a message, and lives only in the request.
-        let invite_code = match invite_code.trim() {
+        // Written any way a person copies it (case, groups, dashes), it is the same code.
+        let invite_code = canonical_invite_code(invite_code);
+        let invite_code = match invite_code.as_str() {
             "" => None,
             code if invite_code_is_wellformed(code) => Some(InviteCode::new(code)),
             _ => return self.reject_sign_in(admin::MALFORMED_INVITE_CODE.into(), out),

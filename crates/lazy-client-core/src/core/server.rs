@@ -72,7 +72,7 @@ impl ClientCore {
     /// The runtime is moving to another server (`Effect::UseServer` is out). That cannot be
     /// stopped and the core must hear how it ended, so nothing else about the server is taken
     /// until then.
-    fn server_move_in_flight(&self) -> bool {
+    pub(super) fn server_move_in_flight(&self) -> bool {
         self.server_job
             .as_ref()
             .is_some_and(|job| matches!(job.stage, JobStage::Switching { .. }))

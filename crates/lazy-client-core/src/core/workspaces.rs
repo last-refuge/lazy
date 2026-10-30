@@ -15,7 +15,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use lazy_domain::workspace::{MAX_AVATAR_UPLOAD_BYTES, invite_code_is_wellformed};
+use lazy_domain::workspace::{
+    MAX_AVATAR_UPLOAD_BYTES, canonical_invite_code, invite_code_is_wellformed,
+};
 use lazy_domain::{
     ConversationId, ConversationKind, DisplayName, UserId, WorkspaceId, WorkspaceName,
 };
@@ -454,11 +456,12 @@ impl ClientCore {
         if !self.session_ready() || self.action(kind) == &ActionState::InFlight {
             return;
         }
-        let code = code.trim();
+        // Written any way a person copies it (case, groups, dashes), it is the same code.
+        let code = canonical_invite_code(code);
         if code.is_empty() {
             return self.fail_action(kind, "Enter the invitation code.", out);
         }
-        if !invite_code_is_wellformed(code) {
+        if !invite_code_is_wellformed(&code) {
             return self.fail_action(kind, MALFORMED_INVITE_CODE, out);
         }
         self.set_action(kind, ActionState::InFlight, out);

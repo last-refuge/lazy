@@ -536,6 +536,14 @@ impl fmt::Debug for Effect {
                 .field("url", &Text(url))
                 .field("generation", generation)
                 .finish(),
+            Effect::PreviewInvitation {
+                request: _,
+                generation,
+            } => f
+                .debug_struct("PreviewInvitation")
+                .field("request", &Named("PreviewInvitationRequest"))
+                .field("generation", generation)
+                .finish(),
         }
     }
 }

@@ -544,9 +544,7 @@ fn the_workspace_menu_opens_the_dialogs_and_escape_returns_the_keyboard(cx: &mut
 }
 
 #[gpui::test]
-fn the_finders_share_a_row_and_the_footer_is_only_the_person_and_sign_out(
-    cx: &mut TestAppContext,
-) {
+fn the_finders_share_a_row_and_the_footer_is_only_the_person_and_sign_out(cx: &mut TestAppContext) {
     let (world, cx) = start(cx);
     world.reach_as(cx, WorkspaceRole::Owner);
     for (width, height) in [(640.0_f32, 480.0_f32), (1500.0, 1600.0)] {
@@ -841,8 +839,25 @@ fn an_invitation_is_made_with_the_chosen_expiry_and_uses_and_its_code_shows_once
         Some(CODE),
         "the field still holds the code"
     );
-    // Done forgets it.
+    // The whole message to send can be copied too: where to get Lazy, the server, and the code.
     cx.simulate_keystrokes("tab tab");
+    assert_eq!(world.invitations_stop(cx), "copy-message");
+    cx.simulate_keystrokes("enter");
+    let message = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .expect("the message is on the clipboard");
+    for wanted in [
+        "Join us on Lazy.",
+        "1. Get Lazy: ",
+        "2. Server: ",
+        CODE,
+        " until ",
+    ] {
+        assert!(message.contains(wanted), "{wanted:?} is not in {message:?}");
+    }
+    // Done forgets it.
+    cx.simulate_keystrokes("tab");
     assert_eq!(world.invitations_stop(cx), "done");
     cx.simulate_keystrokes("enter");
     assert!(!world.on_screen(cx, "invite-created"));

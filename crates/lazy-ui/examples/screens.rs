@@ -3725,6 +3725,257 @@ fn gallery_scene(
     );
 }
 
+// ---- The first run (D29) ----
+
+/// How far into the first-run screens a scene goes.
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
+enum Upto {
+    Connect,
+    Checking,
+    Unreachable,
+    BadCode,
+    Invited,
+    Account,
+    Taken,
+    Picture,
+    /// The owner is asked what the workspace is called.
+    Workspace,
+    /// The name is typed.
+    Naming,
+    /// The first invitation is being made.
+    Share,
+    /// The first invitation is there, with the message to send.
+    Shared,
+    Done,
+}
+
+/// The generation of the newest effect `pick` selects.
+fn newest_generation(rec: &Recorder, pick: impl Fn(&Effect) -> Option<u64>) -> u64 {
+    rec.0
+        .borrow()
+        .iter()
+        .rev()
+        .find_map(pick)
+        .expect("the effect was asked for")
+}
+
+/// Does what a person does on the first-run screens, with the server answering, up to `upto`.
+fn first_run(
+    cx: &mut HeadlessAppContext,
+    model: &Entity<AppModel>,
+    cast: &Cast,
+    rec: &Recorder,
+    win: &WindowHandle<RootView>,
+    upto: Upto,
+) {
+    first_run_as(cx, model, cast, rec, win, upto, false)
+}
+
+/// The same for the person who runs the server: the code is the setup code, and the picture is
+/// followed by the workspace's name and the first invitation.
+fn first_run_owner(
+    cx: &mut HeadlessAppContext,
+    model: &Entity<AppModel>,
+    cast: &Cast,
+    rec: &Recorder,
+    win: &WindowHandle<RootView>,
+    upto: Upto,
+) {
+    first_run_as(cx, model, cast, rec, win, upto, true)
+}
+
+fn first_run_as(
+    cx: &mut HeadlessAppContext,
+    model: &Entity<AppModel>,
+    cast: &Cast,
+    rec: &Recorder,
+    win: &WindowHandle<RootView>,
+    upto: Upto,
+    owner: bool,
+) {
+    dispatch(cx, model, Input::Started(StartupState::default()));
+    draw(cx, win);
+    if upto == Upto::Connect {
+        return;
+    }
+    // The address, then the code (the keyboard starts in the address).
+    type_text(cx, win, "chat.example.com");
+    press(cx, win, "tab");
+    type_text(cx, win, "k7qm4txd9bwph2vazx3c");
+    press(cx, win, "enter");
+    if upto == Upto::Checking {
+        return;
+    }
+    if upto == Upto::Unreachable {
+        answer_server(cx, model, rec, Err("connection failed".into()));
+        draw(cx, win);
+        return;
+    }
+    dispatch(
+        cx,
+        model,
+        Input::ServerFacts {
+            url: "https://chat.example.com".into(),
+            facts: Some(lazy_client_core::ServerFacts {
+                registration: lazy_protocol::ServerRegistration::InviteOnly,
+                setup_code_required: owner,
+            }),
+        },
+    );
+    answer_server(cx, model, rec, Ok(lazy_protocol::PROTOCOL_VERSION));
+    let moved = newest_generation(rec, |effect| match effect {
+        Effect::UseServer { generation, .. } => Some(*generation),
+        _ => None,
+    });
+    dispatch(
+        cx,
+        model,
+        Input::ServerSwitched {
+            generation: moved,
+            result: Ok(Box::default()),
+        },
+    );
+    let asked = newest_generation(rec, |effect| match effect {
+        Effect::PreviewInvitation { generation, .. } => Some(*generation),
+        _ => None,
+    });
+    if upto == Upto::BadCode {
+        dispatch(
+            cx,
+            model,
+            Input::InvitationPreviewed {
+                generation: asked,
+                result: Err(lazy_client_core::PreviewFailure::Invalid),
+            },
+        );
+        draw(cx, win);
+        return;
+    }
+    dispatch(
+        cx,
+        model,
+        Input::InvitationPreviewed {
+            generation: asked,
+            result: Ok(lazy_protocol::InvitationPreview {
+                kind: if owner {
+                    lazy_protocol::InvitationKind::Setup
+                } else {
+                    lazy_protocol::InvitationKind::Invitation
+                },
+                workspace_name: "Zebrafish Collective".into(),
+                inviter: Some(DisplayName::parse("Alice Example").unwrap()),
+                member_count: 12,
+            }),
+        },
+    );
+    draw(cx, win);
+    if upto == Upto::Invited {
+        return;
+    }
+    // "Join workspace" has the keyboard.
+    press(cx, win, "enter");
+    if upto == Upto::Account {
+        return;
+    }
+    type_text(cx, win, "Quentin Fakename");
+    press(cx, win, "tab tab");
+    type_text(cx, win, "correct horse");
+    press(cx, win, "enter");
+    if upto == Upto::Taken {
+        dispatch(
+            cx,
+            model,
+            Input::AuthFailed(lazy_client_core::RequestError::Rejected(
+                lazy_protocol::ApiError::new(
+                    lazy_protocol::ErrorCode::UsernameTaken,
+                    "that username is taken",
+                ),
+            )),
+        );
+        draw(cx, win);
+        return;
+    }
+    dispatch(
+        cx,
+        model,
+        Input::Authenticated {
+            user: cast.me.clone(),
+        },
+    );
+    dispatch(
+        cx,
+        model,
+        Input::BootstrapLoaded(Box::new(cast.bootstrap())),
+    );
+    draw(cx, win);
+    if upto == Upto::Picture {
+        return;
+    }
+    // "Skip for now".
+    press(cx, win, "tab enter");
+    if !owner {
+        return;
+    }
+    // The owner goes on to name the workspace.
+    draw(cx, win);
+    if upto == Upto::Workspace {
+        return;
+    }
+    type_text(cx, win, "Acme Design");
+    if upto == Upto::Naming {
+        return;
+    }
+    press(cx, win, "enter");
+    dispatch(
+        cx,
+        model,
+        Input::ActionResult {
+            kind: lazy_client_core::ActionKind::UpdateWorkspace,
+            result: Ok(lazy_client_core::ActionOutcome::Workspace(
+                lazy_protocol::Workspace {
+                    id: cast.workspace,
+                    name: "Acme Design".into(),
+                    settings: Default::default(),
+                },
+            )),
+        },
+    );
+    draw(cx, win);
+    if upto == Upto::Share {
+        return;
+    }
+    dispatch(
+        cx,
+        model,
+        Input::ActionResult {
+            kind: lazy_client_core::ActionKind::CreateInvitation,
+            result: Ok(lazy_client_core::ActionOutcome::InvitationCreated(
+                lazy_protocol::CreatedInvitation {
+                    invitation: lazy_protocol::Invitation {
+                        id: lazy_domain::InvitationId::generate(),
+                        workspace_id: cast.workspace,
+                        created_by: cast.me.id,
+                        created_at: lazy_domain::Timestamp::now(),
+                        expires_at: lazy_domain::Timestamp::from(
+                            time::OffsetDateTime::now_utc() + time::Duration::days(7),
+                        ),
+                        max_uses: Some(25),
+                        uses: 0,
+                        state: lazy_protocol::InvitationState::Active,
+                    },
+                    code: lazy_protocol::InviteCode::new("K7QM4TXD9BWPH2VAZX3C"),
+                },
+            )),
+        },
+    );
+    draw(cx, win);
+    if upto == Upto::Shared {
+        return;
+    }
+    // Copy has the keyboard; Continue is next.
+    press(cx, win, "tab enter");
+}
+
 fn main() {
     let out: PathBuf = std::env::args()
         .nth(1)
@@ -9181,6 +9432,201 @@ fn main() {
                 draw(cx, win);
             },
         },
+        // ---- The first run (D29): from the address to the first conversation ----
+        Scene {
+            name: "first-01-connect-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Connect),
+        },
+        Scene {
+            name: "first-02-connect-dark",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Connect),
+        },
+        Scene {
+            name: "first-03-connect-narrow-light",
+            width: 560.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Connect),
+        },
+        Scene {
+            name: "first-04-connect-checking-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                first_run(cx, model, cast, rec, win, Upto::Checking);
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "first-05-connect-unreachable-dark",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                first_run(cx, model, cast, rec, win, Upto::Unreachable)
+            },
+        },
+        Scene {
+            name: "first-06-connect-bad-code-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::BadCode),
+        },
+        Scene {
+            name: "first-07-invited-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Invited),
+        },
+        Scene {
+            name: "first-08-invited-dark",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Invited),
+        },
+        Scene {
+            name: "first-09-invited-narrow-light",
+            width: 560.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Invited),
+        },
+        Scene {
+            name: "first-10-account-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                first_run(cx, model, cast, rec, win, Upto::Account);
+                type_text(cx, win, "Quentin Fakename");
+            },
+        },
+        Scene {
+            name: "first-11-account-dark",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Account),
+        },
+        Scene {
+            name: "first-12-account-taken-light",
+            width: 1200.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Taken),
+        },
+        Scene {
+            name: "first-13-account-narrow-dark",
+            width: 560.0,
+            height: 900.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Taken),
+        },
+        Scene {
+            name: "first-14-picture-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Picture),
+        },
+        Scene {
+            name: "first-15-done-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Done),
+        },
+        Scene {
+            name: "first-16-done-dark",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| first_run(cx, model, cast, rec, win, Upto::Done),
+        },
+        // The person who runs the server: the setup code, the workspace's name, the first
+        // invitation.
+        Scene {
+            name: "first-17-owner-setup-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                first_run_owner(cx, model, cast, rec, win, Upto::Invited)
+            },
+        },
+        Scene {
+            name: "first-18-owner-name-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                first_run_owner(cx, model, cast, rec, win, Upto::Naming)
+            },
+        },
+        Scene {
+            name: "first-19-owner-name-empty-dark",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                first_run_owner(cx, model, cast, rec, win, Upto::Workspace)
+            },
+        },
+        Scene {
+            name: "first-20-owner-waiting-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                first_run_owner(cx, model, cast, rec, win, Upto::Share)
+            },
+        },
+        Scene {
+            name: "first-21-owner-invite-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                first_run_owner(cx, model, cast, rec, win, Upto::Shared)
+            },
+        },
+        Scene {
+            name: "first-22-owner-invite-dark",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                first_run_owner(cx, model, cast, rec, win, Upto::Shared)
+            },
+        },
+        Scene {
+            name: "first-23-owner-invite-narrow-light",
+            width: 560.0,
+            height: 1000.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                first_run_owner(cx, model, cast, rec, win, Upto::Shared)
+            },
+        },
+        Scene {
+            name: "first-24-owner-done-light",
+            width: 1200.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                first_run_owner(cx, model, cast, rec, win, Upto::Done)
+            },
+        },
     ];
 
     for scene in scenes {
@@ -9196,7 +9642,12 @@ fn main() {
             gpui_platform::current_headless_renderer,
         );
         let cast = Cast::new();
-        cx.update(|app| lazy_ui::init(app, scene.appearance));
+        cx.update(|app| {
+            lazy_ui::init(app, scene.appearance);
+            if scene.name.starts_with("first-") {
+                lazy_ui::onboarding::enable(app);
+            }
+        });
         let recorder = Rc::new(Recorder::default());
         let model = cx.update(|app| app.new(|_| AppModel::new(recorder.clone())));
         let window = cx

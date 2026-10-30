@@ -80,6 +80,22 @@ pub enum RuntimeError {
     Runtime(std::io::Error),
 }
 
+/// What the server's refusal to say what a code is for means to the screen (D29).
+fn preview_failure(error: RequestError) -> lazy_client_core::PreviewFailure {
+    use lazy_client_core::PreviewFailure;
+    use lazy_protocol::ErrorCode;
+    match error {
+        RequestError::Rejected(rejected) => match rejected.code {
+            ErrorCode::InvitationInvalid => PreviewFailure::Invalid,
+            ErrorCode::Forbidden => PreviewFailure::Closed,
+            // No such route: a server older than the question.
+            ErrorCode::NotFound => PreviewFailure::Unsupported,
+            _ => PreviewFailure::Failed("the server answered with an error".to_owned()),
+        },
+        RequestError::Unknown(detail) => PreviewFailure::Failed(detail),
+    }
+}
+
 /// Executes the core's [`Effect`]s and reports results as [`Input`]s.
 pub struct Runtime {
     inner: Arc<Inner>,
@@ -219,6 +235,24 @@ impl Runtime {
     /// The directory holding this client's encrypted local state.
     pub fn profile_dir(&self) -> &Path {
         &self.inner.profile_dir
+    }
+
+    /// Starts checking for newer releases on this runtime's threads (D28). The receiver yields
+    /// every change of the update status; the updater stops when it is dropped.
+    pub fn start_updater(
+        &self,
+        config: crate::updates::UpdateConfig,
+    ) -> Result<
+        (
+            crate::updates::Updater,
+            async_channel::Receiver<lazy_client_core::UpdateStatus>,
+        ),
+        RuntimeError,
+    > {
+        Ok(crate::updates::Updater::start(
+            self.inner.handle.clone(),
+            config,
+        )?)
     }
 
     /// Starts the given effects. Never blocks; results arrive as inputs.
@@ -709,8 +743,39 @@ impl Inner {
                 let timeout = self.config.request_timeout.min(Duration::from_secs(8));
                 self.spawn(async move {
                     let result = crate::api::probe(&url, timeout).await;
+                    if result.is_ok() {
+                        // What the server says about taking accounts, heard just before the
+                        // answer, so the screen has both when it moves on (D29).
+                        let facts = crate::api::probe_facts(&url, timeout).await;
+                        inner
+                            .emit(Input::ServerFacts {
+                                url: url.clone(),
+                                facts,
+                            })
+                            .await;
+                    }
                     inner
                         .emit(Input::ServerChecked { generation, result })
+                        .await;
+                });
+            }
+            Effect::PreviewInvitation {
+                request,
+                generation,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: it only reads, and the person can ask again.
+                    let result = inner
+                        .api
+                        .post::<lazy_protocol::InvitationPreview, _>(
+                            paths::PREVIEW_INVITATION,
+                            &request,
+                        )
+                        .await
+                        .map_err(preview_failure);
+                    inner
+                        .emit(Input::InvitationPreviewed { generation, result })
                         .await;
                 });
             }

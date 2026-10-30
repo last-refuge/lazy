@@ -22,9 +22,13 @@ Download **Lazy 0.5.0** for your computer from the [latest release](https://gith
 
 The installers are not code-signed yet, which is why Windows and macOS ask you to confirm once. `SHA256SUMS` on the release page lists a checksum for every file.
 
-The first time Lazy starts, the sign-in screen has a **Server** row: enter the address of your team's server (whoever set it up has it), choose **Create account**, and register with the invitation code they gave you. No server yet? [Run your own](#run-your-own-server).
+The first time Lazy starts it asks for two things whoever runs your team's server gave you: the **server address** (a domain such as `chat.example.com`, or an IP) and an **invitation code**. Lazy checks both, shows you the workspace you were invited to, and walks you through choosing a name, a username and a password, and (if you like) a picture. If you already have an account, choose **I already have an account**. No server yet? [Run your own](#run-your-own-server).
+
+If you run the server: **Menu, Workspace, Invite people…** makes a code, and **Copy message to send** copies everything a new person needs (where to get Lazy, your server's address, and the code) as one message. A code looks like `K7QM-4TXD-9BWP-H2VA-ZX3C`; capitals, small letters, spaces, and dashes all work.
 
 Not there yet: desktop notifications work on Linux only. On macOS and Windows you get unread counts and the title badge, but no system notifications.
+
+**Updates.** Lazy looks for a newer release every 30 minutes while it runs, and when there is one a bar across the top of the window says so. **Update now** downloads it (checked against the release's `SHA256SUMS`) while you keep working, and **Restart to update** installs it and starts the new Lazy. **Menu, Help, Check for updates…** asks right away and has the switch for the automatic checks. Windows (installed with the setup program), macOS (in Applications), the Debian and Ubuntu package (it asks for your password), and the Linux tarball installed in your home folder update in place; a portable copy or one built from source opens the release page instead. The check talks only to GitHub. `LAZY_UPDATE_CHECK=0` switches it off, and development builds do not check. Release 0.5.0 has no updater: install the release after it by hand, once.
 
 ## Status
 

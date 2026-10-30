@@ -458,3 +458,55 @@ The sidebar had grown crowded: two stacked finder bars with their key hints, a s
 - **Code.** `SidebarEvent` lost `ManageGroups`, `ManageEmoji`, `WorkspaceSettings`, and `InvitePeople`; `SidebarView` lost the four focus handles and getters and the admin menu. A dialog opened from the Menu hands the keyboard back to the Menu button (the menu remembers where it was), as every other Menu command does.
 
 **Trade-off.** An admin now finds their commands one step deeper (Menu, Workspace) and Preferences is behind a click on one's own name (also Ctrl+, and Menu, File), in exchange for a sidebar that is the conversation list, two finders, and the person. If dogfooding shows admins looking for the links, the Menu is the place to make more visible, not the footer.
+
+## D28. Updating from inside Lazy
+
+No wire change (`PROTOCOL_VERSION` stays 14). Written under the no-local-builds rule: **none of it has been compiled or run** (`VERIFICATION.md`). Release 0.5.0 has no updater, so the first release that has one is installed by hand, once.
+
+**Finding out.** A running Lazy asks 20 seconds after it starts, and then every 30 minutes, what the newest release is. It reads `releases/latest/download/SHA256SUMS` from GitHub's download pages, not the releases API: the API allows 60 requests an hour per address, which one office of Lazy users would use up, and the download pages have no such limit. The file names in `SHA256SUMS` carry the version (`Lazy-Setup-0.6.0-windows-x64.exe`), so one small file says what the newest release is and what the file for this install must hash to; `lazy-client-core::update` holds the names (`Package`), the version rules (semantic versioning, pre-releases before their release), and the parsing, all pure and tested. `latest` skips drafts and pre-releases, so there is one channel, the stable one. `LAZY_RELEASES_URL` points the check somewhere else (a mirror, a test).
+
+**Telling the person.** Automatic checks are silent: they never show "checking" or a failure, and the screen shows nothing for "up to date". A newer release puts a bar across the top of the window, on every screen including sign-in and "can't reach the server": "Lazy 0.6.0 is available" with **Update now** and **Later**. **Later** hides the bar for that release until the next start or the next time the person asks, and a still newer release shows it again. **Help, Check for updates…** asks at once, answers either way ("You're up to date", or why it could not tell), shows the release's notes, and has the switch for the automatic checks (kept in `updates.json` in the profile folder). No operating system notification: the notifier is for messages and exists only on Linux.
+
+**Getting it.** **Update now** streams the file to `<profile>/updates/<file>.part`, checks its SHA-256 against the sum in `SHA256SUMS`, and renames it into place; a file that does not match is deleted, a copy fetched earlier is used again if it still matches, and older files are removed. The person keeps working while it comes. **Restart to update** is the step with a cost, so it is the person's: the desktop starts the installer detached and Lazy quits.
+
+- *Windows, installed with the setup program* (an uninstaller beside `lazy.exe`): the new setup runs silently (`/SILENT /CLOSEAPPLICATIONS /LAZYUPDATE=1`); it replaces Lazy, and a `[Run]` entry that only runs with `/LAZYUPDATE=1` starts the new one. An install for everyone asks for permission as Windows always does. Files Lazy fetches itself carry no "downloaded from the internet" mark, so SmartScreen does not ask again.
+- *macOS, in an app bundle:* a shell script waits for Lazy to quit, mounts the disk image, copies `Lazy.app` beside the old one, swaps them, and opens the new one; if the swap fails (no right to change the folder) the old app is put back and the disk image is opened to drag, as on first install. Run from the disk image, nothing is replaced.
+- *Linux, the `.deb` at `/usr/bin/lazy`:* after Lazy quits, `pkexec apt-get install -y` the file (the desktop's own password dialog), then Lazy starts again, the new one or the old one if that failed. Needs `pkexec` and `apt-get`.
+- *Linux, the tarball in the home folder (`~/.local/bin/lazy`):* unpack and run its `install.sh --prefix` the same prefix, then start Lazy again.
+- *Anything else* (a portable zip, a build from source, a system install by root): the button is **View release**, which opens the page.
+
+Every script writes to `update.log` beside the other logs and ends with Lazy running again, whatever happened.
+
+**Switches.** The checkbox in the dialog; `LAZY_UPDATE_CHECK=0` for a packager or an administrator; development builds (debug) do not check unless `LAZY_UPDATE_CHECK=1`.
+
+**Where it lives.** The state machine's data in `lazy-client-core` (no I/O, so a phone client could reuse the version rules); the 30-minute loop, the HTTP, and the checked download in `lazy-client-runtime` (`Updater`, started with `Runtime::start_updater`); the platform rules and the process start in `lazy-desktop` (`updater`); the model, the bar, and the dialog in `lazy-ui` (`updates`, `dialogs/updates`), talking to the desktop only through the `UpdateHost` trait, as the core talks to the runtime through `EffectSink`. The core is not involved: an update is not part of a conversation's state.
+
+**What it does not do.**
+- *It does not prove who made the file.* The checksum comes from the same place as the file, so it catches truncation and corruption, not a release published by someone who should not have. Signing the releases (the Apple and Windows secrets in `RELEASE.md`) is the answer, and until then the trust is in the GitHub repository's owner.
+- *It does not check the server.* A release that changes the wire protocol makes the updated client unable to talk to a server that has not been updated; the release notes must say so, and the server should be updated first or at the same time.
+- *macOS may ask again for the keychain.* An ad-hoc signature is different for every build, and the Keychain ties its permission to the signature; after an update the first read of the stored sign-in may prompt. Unverified; a Developer ID signature removes the question.
+- *Windows needs the person to be at the machine for an all-users install*, since Windows asks for permission.
+- *A pre-release is never offered*, and neither is a release without a file for this install.
+
+## D29. The first run: an address, a code, and an account worth meeting
+
+No `PROTOCOL_VERSION` change: two new routes, and a client falls back when a server answers 404. The plan is `ONBOARDING.md`; **nothing here has been compiled or run** (`VERIFICATION.md`).
+
+**The model.** No links and no central directory: whoever runs a server hands people its address (a domain or an IP) and an invitation code. The person installs Lazy, enters both, and Lazy checks the address, remembers it, asks the server what the code is for without using it, and walks them through creating the account. A workspace is private and invited-to, so the invitation carries the discovery; a directory would serve public communities, which this is not, and would bring hosting, moderation, and abuse with it.
+
+**The code is made to be said and typed.** A new invitation is 20 characters of Crockford's base32 (no `I`, `L`, `O`, `U`; 100 bits), shown in five groups of four. Every place that reads a code (registration, accepting, previewing, the client) first puts it in canonical form: case, spaces, dashes of every kind, zero-width characters, and `O`/`I`/`L` for `0`/`1` are forgiven *only* for a 20-character code of that alphabet, so a code pasted from a chat message works. Anything else, including the 32-character codes issued before, is only trimmed and otherwise untouched. 100 bits is what protects the code from guessing, since nothing on the server is rate-limited.
+
+**Two routes before anyone has signed in.** `GET /v1/server` says how accounts are taken (`open`, `invite_only`, `closed`) and whether the server waits for its setup code; it holds no name and no count, and says "waiting for a setup code" only when one is configured. `POST /v1/invitations/preview` says what a valid code is for (workspace name, who invited, how many people are there; or "setup") and answers every other code with the one `invitation_invalid` registration gives. A POST so that a code is never in an address or a log.
+
+**Five screens, each asking one thing:** connect (address and code), you're invited (the proof, before any password exists, that they reached the right server), let's set you up (name, a username suggested from it, password; the one request that makes the account), add a picture (optional), you're all set. A server too old to preview skips the second; a server open to anyone skips the code. The steps live in the view; the core holds only what the server said, which is what a phone client would reuse. The new screens are opt-in (`onboarding::enable`), so the sign-in card stays first for anyone who chose a server before, for the environment-fixed address, for the tests, and for developers.
+
+**The look.** A Forest panel with the logo, Moss at 288 px, and the tagline beside the step on wide windows; stacked on narrow ones. Moss changes pose with the screen (welcome, primary, celebrate), never appears in an error, and is drawn from 768 px pictures prepared at twice the size so it is as sharp as the small ones. Screens arrive in 220 ms with GPUI's animation, which it shows at once under reduced motion. Headings are Nunito Bold, sentence case, in the brand's voice.
+
+**Invite people** gains **Copy message to send**: where to get Lazy, the server's address (without `https://`), the code in groups, and for how long and how many it works.
+
+**The owner.** A code that previews as `setup` makes the person the owner, and two screens follow the picture: name the workspace (the server seeds "Lazy") and the first invitation, made by itself for 7 days and up to 25 people, shown with the whole message to send. The owner's first run ends with the thing the next person needs.
+
+**Setup codes have an invitation code's shape.** A setup code is typed into the same field, so the server refuses to start with one that is not 20 to 64 letters, digits, `-` and `_` (it was 16 characters of anything, and a short one or one with other characters could not be typed into the app), and compares it in the form the app sends (`canonical_invite_code` on both sides; padding still refused). The cost is that a server configured with an older, shorter code will not restart until the variable is fixed or, if people have signed up, removed; the message says so.
+
+**Known gaps** are listed in `ONBOARDING.md` (a warning for plain `http://`, a show/hide button for the password, and a limit on how often a stranger may ask).
+

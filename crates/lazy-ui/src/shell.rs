@@ -27,7 +27,7 @@ use crate::dialogs::{
     AddWorkspaceDialog, BrowseChannelsDialog, CreateChannelDialog, CustomEmojiDialog,
     DeleteMessageDialog, DetailsDialog, DetailsRequest, DiagnosticsDialog, GroupsDialog,
     InvitationsDialog, PeopleDialog, PeopleMode, PreferencesDialog, ProfileDialog, ProfileRequest,
-    QuickSwitcherChoice, QuickSwitcherDialog, QuickSwitcherRun, ShortcutsDialog,
+    QuickSwitcherChoice, QuickSwitcherDialog, QuickSwitcherRun, ShortcutsDialog, UpdatesDialog,
     WorkspaceSettingsDialog,
 };
 use crate::emoji_font;
@@ -126,6 +126,8 @@ pub enum ShellDialog {
     Shortcuts,
     /// Help, Diagnostics…
     Diagnostics,
+    /// Help, Check for updates…
+    Updates,
 }
 
 /// A search result being opened.
@@ -1015,6 +1017,7 @@ impl ShellView {
             AddWorkspaceDialog => CommandId::AddWorkspace,
             ShortcutsDialog => CommandId::Shortcuts,
             DiagnosticsDialog => CommandId::Diagnostics,
+            UpdatesDialog => CommandId::CheckForUpdates,
             DetailsDialog => CommandId::ConversationDetails,
         );
         let _ = cx;
@@ -1088,6 +1091,7 @@ impl ShellView {
             }
             CommandId::Shortcuts => self.open_shortcuts(window, cx),
             CommandId::Diagnostics => self.open_diagnostics(window, cx),
+            CommandId::CheckForUpdates => self.open_updates(window, cx),
             CommandId::SignOut => self
                 .model
                 .update(cx, |model, cx| model.dispatch(Input::SignOut, cx)),
@@ -1227,6 +1231,22 @@ impl ShellView {
         let model = self.model.clone();
         let dialog = cx.new(|cx| DiagnosticsDialog::new(model, window, cx));
         self.show(dialog, Vec::new(), window, cx);
+    }
+
+    /// Help, Check for updates…
+    fn open_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let dialog = cx.new(|cx| UpdatesDialog::new(window, cx));
+        self.show(dialog, Vec::new(), window, cx);
+    }
+
+    /// The updates dialog, while it is the dialog showing. For tests.
+    pub fn updates_dialog(&self) -> Option<Entity<UpdatesDialog>> {
+        self.overlay
+            .as_ref()?
+            .view
+            .clone()
+            .downcast::<UpdatesDialog>()
+            .ok()
     }
 
     /// The shortcuts dialog, while it is the dialog showing. For tests.
@@ -1706,6 +1726,7 @@ impl ShellView {
             } => self.open_delete_message(conversation, message, window, cx),
             ShellDialog::Shortcuts => self.open_shortcuts(window, cx),
             ShellDialog::Diagnostics => self.open_diagnostics(window, cx),
+            ShellDialog::Updates => self.open_updates(window, cx),
         }
     }
 
@@ -2204,12 +2225,32 @@ impl ShellView {
                 div()
                     .flex()
                     .gap_2()
-                    .child(form::button(theme, "empty-browse", "Browse channels", ButtonKind::Primary, true, &self.empty_browse_focus, move |window, cx| {
-                        browse_to.update(cx, |shell, cx| shell.open_browse(None, window, cx)).ok();
-                    }))
-                    .child(form::button(theme, "empty-message", "New message", ButtonKind::Secondary, true, &self.empty_message_focus, move |window, cx| {
-                        message_to.update(cx, |shell, cx| shell.open_new_message(window, cx)).ok();
-                    })),
+                    .child(form::button(
+                        theme,
+                        "empty-browse",
+                        "Browse channels",
+                        ButtonKind::Primary,
+                        true,
+                        &self.empty_browse_focus,
+                        move |window, cx| {
+                            browse_to
+                                .update(cx, |shell, cx| shell.open_browse(None, window, cx))
+                                .ok();
+                        },
+                    ))
+                    .child(form::button(
+                        theme,
+                        "empty-message",
+                        "New message",
+                        ButtonKind::Secondary,
+                        true,
+                        &self.empty_message_focus,
+                        move |window, cx| {
+                            message_to
+                                .update(cx, |shell, cx| shell.open_new_message(window, cx))
+                                .ok();
+                        },
+                    )),
             )
             .into_any_element()
     }

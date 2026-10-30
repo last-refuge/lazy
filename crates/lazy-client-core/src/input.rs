@@ -9,6 +9,7 @@ use lazy_domain::{
     MessageId, OperationId, Permalink, ReactionEmoji, Timestamp, UserId, WebhookId, WorkspaceId,
     WorkspaceRole,
 };
+use lazy_protocol::InvitationPreview;
 use lazy_protocol::{
     Attachment, AttachmentResponse, BootstrapResponse, BrowseChannelsResponse, ChannelSort,
     ConversationMembersResponse, ConversationNotificationPrefsResponse, ConversationResponse,
@@ -23,6 +24,8 @@ use crate::attachments::{
 };
 use crate::discovery::QuickSwitcherTarget;
 use crate::model::{ActionKind, ActionOutcome, RequestError, StartupState};
+use crate::onboarding::PreviewFailure;
+use crate::server::ServerFacts;
 
 /// Input to [`crate::ClientCore::handle`].
 #[derive(Clone)]
@@ -741,6 +744,23 @@ pub enum Input {
     ServerSwitched {
         generation: u64,
         result: Result<Box<StartupState>, String>,
+    },
+    /// What the server at `url` says about taking accounts (D29), or `None` when it says nothing
+    /// (an older server). Arrives just before the `ServerChecked` of the same check.
+    ServerFacts {
+        url: String,
+        facts: Option<ServerFacts>,
+    },
+    /// Ask the server in use what this code is for, without using it (D29). The code is read in
+    /// any of the ways a person writes it (case, groups, dashes); blank forgets the last answer.
+    /// Only while signed out and with the server settled; answered by `InvitationPreviewed`.
+    PreviewInvitation {
+        code: String,
+    },
+    /// The runtime asked (`Effect::PreviewInvitation`), echoing `generation`.
+    InvitationPreviewed {
+        generation: u64,
+        result: Result<InvitationPreview, PreviewFailure>,
     },
 }
 
