@@ -5,7 +5,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use lazy_domain::workspace::{RegistrationPolicy, canonical_invite_code, invite_code_is_wellformed};
+use lazy_domain::workspace::{
+    RegistrationPolicy, canonical_invite_code, invite_code_is_wellformed,
+};
 
 /// The secret that lets the first account be created on a server that anyone can reach: while the
 /// default workspace has no members, registration needs it (as the "invitation code"), and once it
@@ -94,8 +96,14 @@ mod setup_code_tests {
             assert!(code.matches("0123456789ABCDEF0123"), "{configured}");
             assert!(code.matches("0123-4567-89ab-cdef-0123"), "{configured}");
             assert!(!code.matches("0123456789ABCDEF0124"), "{configured}");
-            assert!(!code.matches(" 0123456789ABCDEF0123"), "padding is not forgiven");
-            assert!(!code.matches("0123456789ABCDEF0123\n"), "padding is not forgiven");
+            assert!(
+                !code.matches(" 0123456789ABCDEF0123"),
+                "padding is not forgiven"
+            );
+            assert!(
+                !code.matches("0123456789ABCDEF0123\n"),
+                "padding is not forgiven"
+            );
         }
     }
 

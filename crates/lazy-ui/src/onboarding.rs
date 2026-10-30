@@ -30,12 +30,12 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use gpui::ClipboardItem;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, Context, Div, ElementId, Entity, EventEmitter,
     FocusHandle, Focusable, FontWeight, IntoElement, ParentElement, PathPromptOptions, Render,
     Stateful, Styled, Subscription, Window, div, prelude::*, px,
 };
-use gpui::ClipboardItem;
 use jiff::tz::TimeZone;
 use lazy_client_core::{
     ActionKind, ActionState, FileSource, Input, InvitationCheck, ServerSource, SessionPhase,
@@ -115,7 +115,8 @@ pub mod copy {
     pub const SHARE_CODE_LABEL: &str = "Invitation code";
     pub const COPY_MESSAGE: &str = "Copy message to send";
     pub const COPIED: &str = "Copied. Paste it into an email or a message.";
-    pub const SHARE_MORE: &str = "This code is shown only here. You can make more any time with Invite people.";
+    pub const SHARE_MORE: &str =
+        "This code is shown only here. You can make more any time with Invite people.";
     pub const SHARE_CONTINUE: &str = "Continue";
 
     pub const DONE_SUPPORT: &str = "Find your people and say hello.";
@@ -361,7 +362,12 @@ impl OnboardingView {
         let display_name = field(copy::NAME_PLACEHOLDER, copy::NAME_LABEL, false, cx);
         let username = field(copy::USERNAME_PLACEHOLDER, copy::USERNAME_LABEL, false, cx);
         let password = field(copy::PASSWORD_LABEL, copy::PASSWORD_LABEL, true, cx);
-        let workspace = field(copy::WORKSPACE_PLACEHOLDER, copy::WORKSPACE_LABEL, false, cx);
+        let workspace = field(
+            copy::WORKSPACE_PLACEHOLDER,
+            copy::WORKSPACE_LABEL,
+            false,
+            cx,
+        );
 
         let mut subscriptions = Vec::new();
         for (input, which) in [
@@ -798,7 +804,11 @@ impl OnboardingView {
 
     /// The picture step is over (chosen or skipped): the owner goes on to name the workspace.
     fn after_picture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let next = if self.owner { Step::Workspace } else { Step::Done };
+        let next = if self.owner {
+            Step::Workspace
+        } else {
+            Step::Done
+        };
         self.go(next, window, cx);
     }
 
@@ -1059,6 +1069,8 @@ impl OnboardingView {
                 .id(id)
                 .debug_selector(move || id.to_owned())
                 .text_size(px(28.))
+                // A title that wraps (a long workspace name) keeps its lines close.
+                .line_height(px(34.))
                 .text_color(theme.colors.text)
                 .child(text),
         )
@@ -1628,7 +1640,10 @@ impl OnboardingView {
                 .flatten()
                 .collect::<Vec<_>>()
                 .join(" · ");
-                let shown_server = server.strip_prefix("https://").unwrap_or(&server).to_owned();
+                let shown_server = server
+                    .strip_prefix("https://")
+                    .unwrap_or(&server)
+                    .to_owned();
                 let releases = lazy_client_core::RELEASES_URL;
                 let releases = releases.strip_prefix("https://").unwrap_or(releases);
                 div()

@@ -171,8 +171,11 @@ async fn a_setup_code_of_twenty_hex_digits_is_matched_as_the_app_writes_it(pool:
     let app = start(pool, RegistrationPolicy::Open, Some(configured), true).await;
     // Padding is not forgiven (the app trims), and a code that is one digit off is nothing.
     for wrong in [" 0123456789ABCDEF0123", "0123456789ABCDEF0124"] {
-        let (status, error) =
-            refused(app.try_register_with("stranger", PASSWORD, Some(wrong)).await).await;
+        let (status, error) = refused(
+            app.try_register_with("stranger", PASSWORD, Some(wrong))
+                .await,
+        )
+        .await;
         assert_error(status, &error, ErrorCode::Forbidden);
         assert_eq!(error.message, SETUP_MESSAGE);
     }

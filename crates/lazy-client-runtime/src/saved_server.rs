@@ -68,7 +68,9 @@ mod tests {
         );
         let text = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let keys: Vec<&String> = value.as_object().unwrap().keys().collect();
+        let mut keys: Vec<&String> = value.as_object().unwrap().keys().collect();
+        // Sorted, or in file order, depending on a serde_json feature another crate may turn on.
+        keys.sort();
         assert_eq!(keys, ["server_url", "version"], "only the address: {text}");
     }
 

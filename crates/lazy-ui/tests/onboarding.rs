@@ -731,7 +731,10 @@ fn the_owner_names_the_workspace_and_is_handed_the_first_invitation_to_send(
         message.contains("Invitation code: K7QM-4TXD-9BWP-H2VA-ZX3C"),
         "{message}"
     );
-    assert!(message.contains(lazy_client_core::RELEASES_URL), "{message}");
+    assert!(
+        message.contains(lazy_client_core::RELEASES_URL),
+        "{message}"
+    );
     assert!(world.on_screen(cx, "onboarding-copied"));
 
     // Continue forgets the code (it is shown once) and finishes.
