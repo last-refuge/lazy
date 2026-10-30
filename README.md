@@ -1,138 +1,244 @@
 <p align="center">
   <!-- The fragments make GitHub pick by its own theme setting, not the browser's. -->
-  <img src="branding/logos/horizontal/lazy-logo-forest.svg#gh-light-mode-only" alt="Lazy" width="200">
-  <img src="branding/logos/horizontal/lazy-logo-paper.svg#gh-dark-mode-only" alt="Lazy" width="200">
+  <img src="branding/logos/horizontal/lazy-logo-forest.svg#gh-light-mode-only" alt="Lazy" width="260">
+  <img src="branding/logos/horizontal/lazy-logo-paper.svg#gh-dark-mode-only" alt="Lazy" width="260">
 </p>
 
-# Lazy
+<p align="center">
+  <strong>A native, Slack-familiar workplace chat app, written in Rust.</strong><br>
+  A desktop client, a server you run yourself, and a shared core for future phone apps.
+</p>
 
-A native, Slack-familiar workplace chat application written in Rust: a GPUI desktop client, an Axum and Postgres server, and a shared client core meant to be reused by future phone clients.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#configure">Configure</a> ·
+  <a href="#build-from-source">Build from source</a> ·
+  <a href="#if-something-goes-wrong">Troubleshooting</a> ·
+  <a href="llm-docs/DEPLOY.md">Deploy guide</a> ·
+  <a href="https://github.com/last-refuge/lazy/releases/latest">Download</a>
+</p>
 
-The product plan is in [llm-docs/PLAN.md](llm-docs/PLAN.md), the phased work breakdown is in [llm-docs/IMPLEMENTATION_PLAN.md](llm-docs/IMPLEMENTATION_PLAN.md), and recorded design decisions are in [llm-docs/DECISIONS.md](llm-docs/DECISIONS.md).
+---
 
-## Install
+Lazy has two parts, and you set each up once:
 
-Download **Lazy 0.5.0** for your computer from the [latest release](https://github.com/last-refuge/lazy/releases/latest), run the installer, and start Lazy:
-
-| Your computer | Download | Install |
+| | What it is | Who sets it up |
 | --- | --- | --- |
-| **Windows** 10 or 11 (64-bit) | `Lazy-Setup-0.5.0-windows-x64.exe` | Run it. It installs for you alone and needs no administrator. If Windows says "Windows protected your PC", choose **More info**, then **Run anyway**. A portable `lazy-0.5.0-windows-x64.zip` is there too. |
-| **macOS** 11 or later (Apple silicon or Intel) | `Lazy-0.5.0-macos-universal.dmg` | Open it and drag **Lazy** to **Applications**. The first time, if macOS says it cannot verify Lazy, open **System Settings, Privacy & Security** and choose **Open Anyway** (on macOS 14 or earlier, right-click **Lazy**, choose **Open**, then **Open**). |
-| **Linux** (64-bit Intel or AMD) | `lazy-chat_0.5.0_amd64.deb` or `lazy-0.5.0-linux-x86_64.tar.gz` | Debian and Ubuntu: `sudo apt install ./lazy-chat_0.5.0_amd64.deb`. Anything else: unpack the tarball and run `./install.sh` (`--system` for everyone on the machine, `--uninstall` to remove it). Needs a Vulkan driver and a keyring such as GNOME Keyring or KWallet. |
+| **The server** | Runs on a machine your team can reach, with a Postgres database behind it. | One person |
+| **The desktop app** | Windows, macOS, and Linux. Pointed at the server with an address and an invitation code. | Everyone |
 
-The installers are not code-signed yet, which is why Windows and macOS ask you to confirm once. `SHA256SUMS` on the release page lists a checksum for every file.
+```mermaid
+flowchart LR
+    app["Desktop app<br/>(everyone)"] -- "HTTPS and WebSocket" --> proxy["Reverse proxy<br/>(Caddy, Coolify)"]
+    proxy --> server["Lazy server<br/>port 8080"]
+    server --> db[("Postgres")]
+    server --> files["Attachments<br/>volume"]
+```
 
-The first time Lazy starts it asks for two things whoever runs your team's server gave you: the **server address** (a domain such as `chat.example.com`, or an IP) and an **invitation code**. Lazy checks both, shows you the workspace you were invited to, and walks you through choosing a name, a username and a password, and (if you like) a picture. If you already have an account, choose **I already have an account**. No server yet? [Run your own](#run-your-own-server).
+## Quick start
 
-If you run the server: **Menu, Workspace, Invite people…** makes a code, and **Copy message to send** copies everything a new person needs (where to get Lazy, your server's address, and the code) as one message. A code looks like `K7QM-4TXD-9BWP-H2VA-ZX3C`; capitals, small letters, spaces, and dashes all work.
+### Step 1: run the server
 
-Not there yet: desktop notifications work on Linux only. On macOS and Windows you get unread counts and the title badge, but no system notifications.
+You need a machine with [Docker](https://docs.docker.com/engine/install/) and its Compose plugin.
 
-**Updates.** Lazy looks for a newer release every 30 minutes while it runs, and when there is one a bar across the top of the window says so. **Update now** downloads it (checked against the release's `SHA256SUMS`) while you keep working, and **Restart to update** installs it and starts the new Lazy. **Menu, Help, Check for updates…** asks right away and has the switch for the automatic checks. Windows (installed with the setup program), macOS (in Applications), the Debian and Ubuntu package (it asks for your password), and the Linux tarball installed in your home folder update in place; a portable copy or one built from source opens the release page instead. The check talks only to GitHub. `LAZY_UPDATE_CHECK=0` switches it off, and development builds do not check. Release 0.5.0 has no updater: install the release after it by hand, once.
+```sh
+git clone https://github.com/last-refuge/lazy.git && cd lazy
+cp .env.example .env
+```
+
+Open `.env` and fill in three lines:
+
+| Setting | What to put |
+| --- | --- |
+| `POSTGRES_PASSWORD` | A random password for the database. Letters and digits only. |
+| `LAZY_SETUP_CODE` | A second random secret, 20 to 64 letters and digits. It lets you create the first account, the owner, and does nothing afterwards. |
+| `LAZY_PUBLIC_URL` | The address people will use, such as `https://chat.example.com`. To try Lazy on one machine, leave `http://localhost:8080`. |
+
+> [!TIP]
+> `openssl rand -hex 24` makes a good secret for both of the first two.
+
+Start it. The first build compiles the server and takes a few minutes:
+
+```sh
+docker compose up -d --build
+curl -s localhost:8080/healthz          # {"status":"ok","protocol_version":...}
+```
+
+> [!IMPORTANT]
+> **Put HTTPS in front of the server before anyone outside your network connects.** Sessions are bearer tokens, so plain `http://` over the internet is not safe. [Caddy](https://caddyserver.com/) does it with a two-line file and looks after the certificates:
+>
+> ```
+> chat.example.com {
+>     reverse_proxy 127.0.0.1:8080
+> }
+> ```
+>
+> Then set `LAZY_PUBLIC_URL=https://chat.example.com` to match.
+
+[llm-docs/DEPLOY.md](llm-docs/DEPLOY.md) has the details: Coolify, backups, and what to watch.
+
+### Step 2: install the app
+
+Download **Lazy 0.5.0** from the [latest release](https://github.com/last-refuge/lazy/releases/latest):
+
+| Your computer | Download |
+| --- | --- |
+| **Windows** 10 or 11 (64-bit) | `Lazy-Setup-0.5.0-windows-x64.exe`, or the portable `lazy-0.5.0-windows-x64.zip` |
+| **macOS** 11 or later (Apple silicon or Intel) | `Lazy-0.5.0-macos-universal.dmg` |
+| **Linux** (64-bit Intel or AMD) | `lazy-chat_0.5.0_amd64.deb` or `lazy-0.5.0-linux-x86_64.tar.gz` |
+
+- **Windows.** Run the setup program. It installs for you alone and needs no administrator. If Windows says "Windows protected your PC", choose **More info**, then **Run anyway**.
+- **macOS.** Open the disk image and drag **Lazy** to **Applications**. The first time, if macOS says it cannot verify Lazy, open **System Settings, Privacy & Security** and choose **Open Anyway**. On macOS 14 or earlier, right-click **Lazy**, choose **Open**, then **Open**.
+- **Linux.** On Debian and Ubuntu, `sudo apt install ./lazy-chat_0.5.0_amd64.deb`. On anything else, unpack the tarball and run `./install.sh` (`--system` for everyone on the machine, `--uninstall` to remove it). You need a Vulkan driver and a keyring such as GNOME Keyring or KWallet.
+
+The installers are not code-signed yet, which is why Windows and macOS ask you to confirm once. `SHA256SUMS` on the release page lists a checksum for every file. Desktop notifications work on Linux only for now; on macOS and Windows you get unread counts and the title badge.
+
+### Step 3: create the owner account, then invite everyone else
+
+**You, the person who set up the server.** Start Lazy and give it the server's address and your `LAZY_SETUP_CODE`. Lazy checks both, then walks you through your name, username, and password, a picture if you like, a name for the workspace, and your first invitation.
+
+> [!NOTE]
+> The first-run screens are new and come with the release after 0.5.0. Lazy 0.5.0 opens on a sign-in card instead: type the server's address in its **Server** row at the bottom, choose **Create account**, and put the setup code in the invitation field.
+
+**Everyone else.** Whoever runs the server gives them two things: the server's **address** and an **invitation code**. They install Lazy and enter both on the first screen. Lazy shows which workspace they were invited to before they choose a name and a password. Someone who already has an account chooses **I already have an account**.
+
+To make a code, open **Menu, Workspace, Invite people…**. **Copy message to send** copies everything a new person needs (where to get Lazy, your server's address, and the code) as one message:
+
+```text
+Join us on Lazy.
+
+1. Get Lazy: https://github.com/last-refuge/lazy/releases/latest
+2. Server: chat.example.com
+3. Invitation code: K7QM-4TXD-9BWP-H2VA-ZX3C
+
+The code works for up to 25 people until Nov 6 3:45 PM.
+```
+
+A code lasts from an hour to 30 days and can be used once or many times. It is shown only once, so copy it then. Capitals, small letters, spaces, and dashes all work when someone types it.
+
+### Updates
+
+Lazy looks for a newer release every 30 minutes while it runs, and a bar across the top of the window says when there is one. **Update now** downloads it (checked against the release's `SHA256SUMS`) while you keep working, and **Restart to update** installs it. **Menu, Help, Check for updates…** asks right away and has the switch for the automatic checks. A portable copy or one built from source opens the release page instead. Release 0.5.0 has no updater, so install the release after it by hand, once.
+
+To upgrade the server, back up first (migrations only go forward), then `git pull && docker compose up -d --build`.
+
+## Configure
+
+### The server
+
+Set these in `.env` (Docker Compose) or in the environment, or pass them as options (`lazy-server serve --help`).
+
+**Set these first**
+
+| Setting | Meaning |
+| --- | --- |
+| `POSTGRES_PASSWORD` | The database password (Compose). Without Compose, set `DATABASE_URL` to `postgres://user:password@host:5432/db`. |
+| `LAZY_SETUP_CODE` | Needed to create the first account: 20 to 64 letters, digits, `-` and `_`. The server refuses to start with anything else, and says why. Set it on any server people can reach, or the first stranger to register becomes the owner. |
+| `LAZY_PUBLIC_URL` | The address people reach the server at. Default `http://localhost:8080`. |
+
+**Optional**
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `LAZY_SEED_REGISTRATION` | `invite_only` in Compose | Who may create an account: `invite_only` (the owner invites people) or `open` (anyone who can reach the server). Applies only when the server first creates the workspace; change it later in **Workspace settings…**. |
+| `LAZY_PORT` | `8080` | The port published on the machine (Compose). |
+| `LAZY_EVENT_RETENTION_DAYS` | `30` | Days of history kept. `0` keeps everything. |
+| `LAZY_MAX_ATTACHMENT_BYTES` | 25 MiB | The largest upload. |
+| `LAZY_LOG`, `LAZY_LOG_FORMAT` | `info,sqlx=warn`, `text` | Logging. Passwords, codes, and message text are never logged. |
+
+Back up the database and the attachments volume together: the database says which files exist, and the volume holds their bytes. The full list of settings is in [llm-docs/DEPLOY.md](llm-docs/DEPLOY.md) and [llm-docs/SERVER.md](llm-docs/SERVER.md).
+
+### The app
+
+You normally configure nothing: Lazy remembers the server you entered. These settings are for development and unusual setups.
+
+| Setting | Meaning |
+| --- | --- |
+| `LAZY_SERVER_URL` | Fixes the server address. It can no longer be changed in the app, and the first-run screens are skipped. |
+| `LAZY_PROFILE_DIR` | Where this copy keeps its local state, so several can share one machine. The default is your user data folder; **Help, Diagnostics…** shows it. |
+| `LAZY_INSECURE_STORAGE=1` | Keeps the session in plain files inside the profile on a machine with no keyring. Development only. |
+| `LAZY_UPDATE_CHECK=0` | Turns off the update checks. |
+| `LAZY_LOG=lazy=debug` | More detail in `logs/lazy.log` in your profile. It never holds passwords, messages, names, or file names. |
+
+## Build from source
+
+**You need**
+
+- **Rust 1.99.** It is pinned in `rust-toolchain.toml`, and [`rustup`](https://rustup.rs/) installs it for you.
+- **PostgreSQL server programs on your `PATH`:** `initdb`, `pg_ctl`, `psql`, and `createdb`. The development database runs from a folder inside the project and never touches a system Postgres.
+- **On Linux, the libraries GPUI needs.** On Debian and Ubuntu:
+  ```sh
+  sudo apt install libasound2-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
+    libvulkan-dev libfontconfig-dev libssl-dev libdbus-1-dev pkg-config cmake clang
+  ```
+  You also need a Secret Service keyring (GNOME Keyring, say) for the session token.
+
+The macOS and Windows installers are built on GitHub by the `release` workflow ([llm-docs/RELEASE.md](llm-docs/RELEASE.md)). Building the client yourself is documented for Linux.
+
+### Run it on your machine
+
+The first run compiles in release mode (GPUI is large), so expect a few minutes. Later runs start quickly.
+
+```sh
+scripts/run-server.sh            # terminal 1: starts the dev Postgres on 127.0.0.1:54329, applies
+                                 #   migrations, seeds the "Lazy" workspace, serves on 127.0.0.1:8080
+scripts/run-client.sh alice      # terminal 2: a client with its own disposable profile
+scripts/run-client.sh bob        # terminal 3: a second one
+```
+
+In each window choose **Create account**. The first account becomes the workspace owner, and messages sent in one window appear in the other.
+
+To go through the first-run screens as a new person would, use a server that needs codes and a client that is not told where the server is:
+
+```sh
+# On a fresh database:
+LAZY_SETUP_CODE=$(openssl rand -hex 24) scripts/run-server.sh --seed-registration invite_only
+
+# In another terminal:
+env -u LAZY_SERVER_URL LAZY_PROFILE_DIR=.dev/profiles/newcomer cargo run -p lazy-desktop --release
+```
+
+Enter `http://127.0.0.1:8080` and the setup code. Profiles live in `.dev/profiles/<name>`: delete one to start fresh. `scripts/dev-db.sh reset` wipes the dev database.
+
+### Build the programs
+
+```sh
+cargo build --release -p lazy-server -p lazy-desktop
+# target/release/lazy-server   and   target/release/lazy-desktop
+```
+
+To run the server without Docker, give it a Postgres: `lazy-server serve --database-url postgres://user:password@host:5432/db`, with `LAZY_SETUP_CODE` and `LAZY_PUBLIC_URL` set as above. It applies its migrations and creates the workspace the first time it starts.
+
+## If something goes wrong
+
+| What you see | What to do |
+| --- | --- |
+| The server will not start and mentions the setup code | The code must be 20 to 64 letters, digits, `-` and `_`; `openssl rand -hex 24` makes one. If people have signed up already, remove `LAZY_SETUP_CODE`: it does nothing now. |
+| "Can't reach this server" | Check the address, that the server is running (`curl <address>/healthz`), and that HTTPS and any proxy are set up. If the app or the server is newer than the other, update the older one. |
+| "That invitation code isn't valid" | It may have expired, been revoked, or been used up. Ask for a new one. |
+| The app cannot store its session | Start a keyring such as GNOME Keyring, or set `LAZY_INSECURE_STORAGE=1` for development. |
+| Anything else | **Menu, Help, Diagnostics…** shows a report with no secrets. **Copy diagnostics** puts it on the clipboard for a bug report. |
 
 ## Status
 
 Phases 1 to 3 of the implementation plan are built: the MVP; channels, direct and group messages, favorites, and unread counts; formatted messages, editing, deleting, and message links; emoji, reactions, mentions, and user groups; threads; text selection and copy; incoming webhooks; attachments, custom emoji, and search; notifications; discovery; workspace administration; several workspaces and profile pictures; commands, menus, and logging. You can create an account or sign in, send messages with durable and idempotent delivery, receive messages from other clients in realtime, page older history, and recover after disconnects and restarts. What is left of Phase 3 is using it with real people ([llm-docs/DOGFOOD.md](llm-docs/DOGFOOD.md)). Huddles, and everything in Phase 4 (integrations), are later.
 
-The server, the client core and runtime, and the message-delivery guarantees are covered by automated tests, including fault injection (see [llm-docs/VERIFICATION.md](llm-docs/VERIFICATION.md)). The desktop client has been run and looked at on Linux. The macOS and Windows builds come from the same code but had never been run on those systems before this release, and input methods, screen readers, file dialogs, and different display scales have not been checked anywhere yet. Please report anything that looks or behaves wrong, with the report from **Menu, Help, Diagnostics…**.
+The server, the client core and runtime, and the message-delivery guarantees are covered by automated tests, including fault injection (see [llm-docs/VERIFICATION.md](llm-docs/VERIFICATION.md)). The desktop client has been run and looked at on Linux. The macOS and Windows builds come from the same code but had never been run on those systems before this release, and input methods, screen readers, file dialogs, and different display scales have not been checked anywhere yet. The Docker setup is new and has had little use. Please report anything that looks or behaves wrong, with the report from **Menu, Help, Diagnostics…**.
 
-## Build from source
-
-To build and run Lazy yourself you need:
-
-- Rust 1.99 (pinned in `rust-toolchain.toml`; `rustup` installs it automatically)
-- PostgreSQL server binaries on `PATH` (`initdb`, `pg_ctl`, `psql`, `createdb`); the dev database runs from a project-local directory and never touches a system instance
-- Linux with Wayland or X11, Vulkan, and ALSA development libraries for GPUI
-- A Secret Service keyring (for example GNOME Keyring) for storing the session token and local encryption key
-
-### Run it
-
-The first run compiles in release mode (GPUI is large), so expect a few minutes; later runs start quickly.
-
-Start the server in one terminal. This starts the dev Postgres on `127.0.0.1:54329`, applies migrations, and seeds the `Lazy` workspace with `#general`:
-
-```sh
-scripts/run-server.sh
-```
-
-Start two desktop clients, each with its own disposable profile, in two more terminals:
-
-```sh
-scripts/run-client.sh alice
-scripts/run-client.sh bob
-```
-
-In each window choose **Create account**, register a different name, and open `#general`. Messages sent in one window appear in the other. The first account to register becomes the workspace owner.
-
-Profiles live in `.dev/profiles/<name>`. Delete a profile directory to start fresh, and run `scripts/dev-db.sh reset` to wipe the dev database. If your machine has no Secret Service keyring, set `LAZY_INSECURE_STORAGE=1` to keep the session in plain files inside the profile (development only).
-
-## Run your own server
-
-Lazy needs a server: one container plus a Postgres, on any machine with Docker (or on Coolify).
-
-```sh
-git clone https://github.com/last-refuge/lazy.git && cd lazy
-cp .env.example .env     # set POSTGRES_PASSWORD and LAZY_SETUP_CODE (openssl rand -hex 24) and LAZY_PUBLIC_URL
-docker compose up -d --build
-```
-
-Put HTTPS in front of it before anyone outside your network connects. Then, in the app, choose your server on the sign-in screen and register the owner with the setup code typed into the invitation field; everyone else joins with an invitation from **Invite people…**. [llm-docs/DEPLOY.md](llm-docs/DEPLOY.md) covers the setup code, HTTPS, backups, and Coolify (the Docker setup is new and has had little use; that page says what has and has not been tried), [llm-docs/RELEASE.md](llm-docs/RELEASE.md) how the installers are built, and [llm-docs/DOGFOOD.md](llm-docs/DOGFOOD.md) how to start with a few people.
-
-## What to try, and what to look for
-
-New in slices 3H and 3I: the keyboard, the menu, and diagnostics. Every action has one name wherever it appears. **Ctrl+Shift+P** (or `>` in **Ctrl+K**) lists commands that can run right now, each with its shortcut; **Ctrl+/** lists the shortcuts: Ctrl+K quick switcher, Ctrl+F search, Ctrl+N new message, Ctrl+, Preferences, Ctrl+Shift+T / S / E / L for Threads / Saved / People / Browse channels, Alt+Up and Alt+Down for the previous and next conversation, Alt+Shift+Up and Alt+Shift+Down for the previous and next unread one, Ctrl+1 to Ctrl+9 for workspaces (Cmd instead of Ctrl on a Mac). A **Menu** button at the top of the sidebar opens the same commands grouped (File, Go, View, Workspace, Help); an unavailable one says why. The window reopens at the size and maximized state you left it (position too, except on Wayland). **Help, Diagnostics…** shows a report with no secrets (versions, connection state, counts, the folders) and **Copy diagnostics** puts it on the clipboard for a bug report. Logs are in `logs/lazy.log` in your profile (about 5 MiB each, three kept) and on the server's terminal, and contain no passwords, messages, names, or file names; `LAZY_LOG=lazy=debug` shows more, `LAZY_LOG_FORMAT=json` makes the server's JSON lines. Please try the shortcuts on your keyboard layout and with an input method editor, and read `llm-docs/DOGFOOD.md` before inviting anyone: those are what has not been verified.
-
-New in slice 3G: more than one workspace, and you. The slim column at the left edge is the **rail**: one square per workspace you belong to (with a number when something there needs you and a dot when there is unread chatter), the **+** at the end adds one (create your own, or join with an invitation code from someone else), and **Ctrl+1** to **Ctrl+9** (Cmd on a Mac) jump between them. Each workspace keeps its own channels, people, settings, and saved messages, and a workspace you are not looking at still notifies you (the title starts with its name). In **Preferences…** the Profile section changes your display name and picture, and Appearance chooses light, dark, or the system theme and turns animation off; both are kept on this device only. Please try several workspaces with two accounts, a picture from your real file dialog, and an input method editor in the new fields, which are what has not been verified.
-
-New in slice 3F: running a workspace. The first person to register owns it. Owners and admins find **Workspace settings…** and **Invite people…** under **Menu**, **Workspace**. Settings has the workspace's name, who can create accounts (anyone, or by invitation only) and who can create channels (everyone, or admins only). **Invite people…** makes an invitation code that lasts from an hour to 30 days and can be used once or many times; the code is shown only once, so copy it then, and share it; the person types it into the **Invitation code** field when creating their account. Open someone's profile (People, or their name in a message) to change their role or deactivate them; a deactivated person cannot sign in to the workspace and receives nothing, but their old messages stay, and an owner can reactivate them. Please try these with two accounts, and the keyboard alone, which is what has not been verified.
-
-New in slice 3E: finding things. **Ctrl+K** opens the quick switcher: type a few letters of a channel, a person, or `threads`, `saved`, or `search`, and Enter goes there (with no text it lists the places you were most recently, and choosing a person you have no conversation with opens one). **People** in the sidebar lists everyone in the workspace with a search box; click a person (or a name in the timeline) for their profile, with a Message button. **Browse channels** now has a search box, an All / Not joined filter, a Name / Members sort, and Load more. In a message's menu, **Save for later** keeps it; saved messages show a star, and **Saved** in the sidebar lists them, newest first, and takes you to the message. Please try the switcher and the lists by keyboard alone and with an input method editor, which are what have not been verified.
-
-New in slice 3D: desktop notifications and a thread inbox. By default you are notified for direct messages, for being @mentioned or named through a group, for `@channel`, and for replies in threads you follow; other channel messages do not notify (change this with the bell button in a channel's header, or **Preferences…** (click your name at the bottom of the sidebar), which also has pause, quiet hours, and your status). Muting a channel dims it and silences it. Notifications are grouped per conversation, show the sender and text unless you turn that off, and clicking one opens the message. The window title shows a count like `(3) Lazy` of what needs you (mentions, direct messages, and followed threads). **Threads** in the sidebar lists the threads you follow, most recently active first, with a count of unread replies and **Mark all read**. A status (an emoji and a few words, optionally clearing itself) shows beside your name. Please check the notifications on your real desktop: whether they appear, are replaced rather than piled up, and open the right message when clicked, are exactly what has not been verified.
-
-New in slice 3C: press **Ctrl+F** (or use **Search** at the top of the sidebar) and type. Words match as prefixes (`deplo` finds `deploy`), `"quotes"` find a phrase, `-word` excludes one, and `from:alice`, `in:design`, `after:2026-09-01`, `before:2026-10-01`, and `has:file` or `has:image` narrow it; the filters appear as chips you can remove. Search finds messages and file names in conversations you are in and in public channels, never in private ones you are not in. Up and Down move through the results, Enter opens one (a reply opens its thread), and Escape closes search. There is no accent folding yet (`cafe` does not find `café`).
-
-New in slice 3B: workspace admins and owners can add their own emoji with **Custom emoji…** under **Menu**, **Workspace** (choose an image of up to 512 KiB, give it a name such as `party_parrot`). Everyone can then type `:party_parrot:` in a message (suggestions appear after `:`), react with it, and find it in a **Custom** section of the emoji picker. Renaming an emoji changes how it reads everywhere; deleting one leaves its name in old messages and reactions as muted `:name:` text. Names cannot be a standard emoji name such as `tada`. Animated images show only their first frame for now.
-
-New in slice 3A: attach files to a message with the paperclip beside the emoji button, by dropping them on the window, or by pasting an image (or, on Wayland, copied files). Each file appears as a chip above the message box with its progress; Enter sends, even with no text. Images show a preview in the timeline and open in a viewer on click or Enter (Left and Right move between a message's pictures, Escape closes it); other files show a chip with **Download**, which asks where to save and checks the file against its checksum. The server keeps the files in `.dev/attachments` (set `LAZY_ATTACHMENTS_DIR` to move them), up to 25 MiB each and ten per message, and decides what each file is from its contents, so a file named like a picture that is not one is only offered as a download. Please try drag and drop, pasting, and the file dialogs on your real desktop: those are exactly what has not been verified yet.
-
-New in slice 2E: you can now select text in the timeline with the mouse, across messages and past the edges of the window (drag near the top or bottom to scroll), then copy it; double-click selects a word, triple-click a message, Shift+click extends, Ctrl+A selects everything loaded, and with the keyboard Shift+Up and Shift+Down extend by message and Ctrl+C copies. The app reopens on the conversation you last had open, with the cursor where you left it in each draft. Admins and owners can open **Details** in a channel and use **Integrations** to make an incoming webhook: it shows an address once, and anything that can send an HTTP POST with `{"text": "..."}` to it posts into the channel as an app (for example `curl -X POST -H 'Content-Type: application/json' -d '{"text":"*deploy* finished :tada:"}' <address>`; run the server with `LAZY_PUBLIC_URL` set if clients reach it by another address). Empty screens and failures now say what happened and what to do, with a **Try again** where one helps.
-
-New in slice 2D: reply to a message in a thread with the **Reply** button on hover (or Enter on a message, then **Reply in thread**). The thread opens in a pane beside the conversation, which you can drag wider or narrower (or focus its handle and use Left and Right); in a narrow window it replaces the conversation and **Back** returns. The root shows "N replies" with the repliers' avatars, and a dot when you follow the thread and it has replies you have not read. You follow a thread when you reply to it, when you started it and someone else replies, or when someone mentions you in it, and **Unfollow thread** is in the pane's header. Tick **Also send to #channel** to show a reply in the conversation too. If a message with replies is deleted it stays as "This message was deleted" with its replies until the last reply is deleted.
-
-New in slice 2C: react to a message with the **React** button on hover (or Enter on a message, then **Add reaction…**), and click a chip to add or remove your own reaction. The picker has search, group tabs, skin tones, and recently used emoji, and the smiley beside **Send** opens it for the composer; typing `:tada:` or starting `:tad` in the composer converts or suggests the emoji. Type `@` followed by the start of a name to mention someone (Enter or Tab accepts the suggestion); `@channel` mentions everyone in a channel (in `#general` only workspace admins may use it). A message that mentions you is tinted with a bar at its left edge and counts as `@N` next to the conversation until you read it. Workspace admins and owners find **User groups…** under **Menu**, **Workspace**, to make groups such as `@design-team` that mention several people at once. Emoji are drawn in colour by a bundled font, so please look at the ones that used to show as grey outlines (❤️, ☕, ☀️, family sequences).
-
-New in slice 2B: messages are formatted with Slack-style text, and the composer sends it as you type it: `*bold*`, `_italic_`, `~strike~`, `` `code` ``, `[text](https://example.com)` or a bare web address, a fenced code block (three backticks, optionally followed by a language), `> ` for a quote, `- ` for a bulleted list, `1. ` for a numbered one, and a backslash to keep a character literal. Ctrl+B, Ctrl+I, and Ctrl+Shift+X wrap the selection. Hover a message for **Edit**, **Delete**, **Copy link**, and **Copy** (you can edit your own messages, delete your own, and workspace admins can delete anyone's); with the keyboard, Tab into the timeline, use the arrow keys to move between messages, and press Enter for the same actions. Up arrow in an empty composer edits your latest message. An edited message shows "(edited)", and if someone changed a message while you were editing it you are shown their version with your text kept. A link of the form `lazy://workspace/conversation/message` (**Copy link**) opens that message, loading older history if needed.
-
-New in slice 2A: create a channel from the **+** next to Channels, browse and join channels from the same menu, start a direct or group message from the **+** next to Direct messages, star a conversation to pin it under Favorites, and use **Details** in a channel's header to set its topic, add people, leave, or archive it. Unread conversations are bold with a count, and a "New messages" line marks where you left off. Removing someone else from a channel has no button yet; it is covered by the automated tests.
-
-Covered by automated tests, so surprises here are bugs worth reporting:
-
-- Send a message in one window and watch it arrive in the other. Send several quickly: they arrive in the order you sent them.
-- Stop the server (Ctrl-C) and send a message: it stays in the timeline marked as sending or being checked, and the connection banner shows reconnecting. Start the server again and the message is delivered once.
-- Quit a client right after sending, reopen it with the same profile: you are still signed in, cached history appears immediately, and nothing is duplicated.
-- Scroll up in a long conversation: older messages load before you reach the top, and your reading position holds when they arrive.
-
-Looked at in offscreen renders (see `llm-docs/VERIFICATION.md`), but not yet on a real display, so please look closely:
-
-- Overall look, spacing, and both light and dark themes (the app follows the system appearance).
-- Typing with an input method (Japanese, Chinese, Korean): pressing Enter while composing should commit the composition and not send, and the candidate window should appear at the caret. This has only been tested on GPUI's test platform.
-- Resizing the window down to its minimum size, and scrolling smoothness with a few hundred messages.
-- Text selection with the mouse and keyboard in the composer, and the hover **Copy** button on messages.
-- Keyboard-only use: Tab and Shift+Tab move between the channels, the timeline, the composer, Send, and Sign out; Enter or Space activates the focused control. Check that the focus ring is visible where you expect it.
-- Some emoji (❤️, ☕, and family sequences) show as small monochrome glyphs; most others render in color.
-
-Known gaps (by design for this MVP) are listed at the end of [llm-docs/VERIFICATION.md](llm-docs/VERIFICATION.md).
+A tour of what each part of the app does, with what to try on a real desktop, is in [llm-docs/TOUR.md](llm-docs/TOUR.md). Known gaps are at the end of [llm-docs/VERIFICATION.md](llm-docs/VERIFICATION.md).
 
 ## Development
 
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets
+scripts/check-core-deps.sh        # the shared crates must not depend on the UI, an async runtime, HTTP, or SQL
 scripts/test.sh                   # runs the workspace tests on a separate Postgres (port 54330),
-                                  # so a server you are running by hand is never disturbed
+                                  #   so a server you are running by hand is never disturbed
 cargo run -p lazy-ui --example screens -- .dev/screens   # render the real views offscreen to PNGs
 ```
+
+The GitHub workflows (`ci`, `release`, `server`, `screens`) run only when you start them: **Actions, the workflow, Run workflow**, or `gh workflow run ci`.
 
 | Crate | Responsibility |
 | --- | --- |
@@ -144,3 +250,5 @@ cargo run -p lazy-ui --example screens -- .dev/screens   # render the real views
 | `lazy-ui` | GPUI views, theme, and the message composer |
 | `lazy-desktop` | The desktop application binary |
 | `lazy-e2e` | End-to-end tests: real client stacks against a real server and Postgres, with fault injection |
+
+The product plan is in [llm-docs/PLAN.md](llm-docs/PLAN.md), the phased work breakdown in [llm-docs/IMPLEMENTATION_PLAN.md](llm-docs/IMPLEMENTATION_PLAN.md), and recorded design decisions in [llm-docs/DECISIONS.md](llm-docs/DECISIONS.md).
