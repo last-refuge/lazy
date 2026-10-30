@@ -40,7 +40,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets
-      - run: cargo test --workspace
+      # Every test binary runs even after one fails, so a run lists all the failures.
+      - run: cargo test --workspace --no-fail-fast
 
   shared-core-mobile:
     # The shared crates must stay free of desktop-only dependencies (plan task 0.8).
