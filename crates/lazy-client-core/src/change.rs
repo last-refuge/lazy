@@ -1,6 +1,8 @@
 //! Notifications describing what changed in the read model.
 
-use lazy_domain::{AttachmentId, ConversationId, EmojiId, MessageId, UserId};
+use lazy_domain::{
+    AttachmentId, ConversationId, EmojiId, MessageId, UserId, WebhookId, WorkspaceId,
+};
 
 use crate::{ActionKind, ComposerTarget, Effect};
 
@@ -103,6 +105,14 @@ pub enum Change {
     /// `ClientCore::webhooks` of this conversation changed.
     WebhooksChanged {
         conversation: ConversationId,
+    },
+    /// `ClientCore::workspace_webhooks` of this workspace changed.
+    WorkspaceWebhooksChanged {
+        workspace: WorkspaceId,
+    },
+    /// `ClientCore::webhook_deliveries` of this webhook changed.
+    WebhookDeliveriesChanged {
+        webhook: WebhookId,
     },
     /// `ClientCore::composer_attachments` of this composer changed (a chip was added, removed,
     /// or moved on). Sent messages still uploading change through `TimelineItemUpdated` and

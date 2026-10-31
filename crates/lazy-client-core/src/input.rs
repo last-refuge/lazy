@@ -256,6 +256,15 @@ pub enum Input {
     DeleteWebhook(WebhookId),
     /// Load a conversation's webhooks into `ClientCore::webhooks`.
     LoadWebhooks(ConversationId),
+    /// Load every webhook of a workspace that the person can see, with how each is doing, into
+    /// `ClientCore::workspace_webhooks` (admins and owners).
+    LoadWorkspaceWebhooks(WorkspaceId),
+    /// Load a webhook's delivery log into `ClientCore::webhook_deliveries`.
+    LoadWebhookDeliveries(WebhookId),
+    /// Give a webhook a new address. The old one stops working at once; the new one arrives in
+    /// `ClientCore::created_webhook`, to be shown once. Progress is
+    /// `action(ActionKind::NewWebhookAddress(webhook))`.
+    NewWebhookAddress(WebhookId),
     /// Forget the address shown after creating a webhook (when its dialog is closed).
     DismissCreatedWebhook,
     /// The caret or selection in a conversation's composer moved. Saved with the draft.

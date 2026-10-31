@@ -51,6 +51,7 @@ pub enum CommandId {
     InvitePeople,
     UserGroups,
     CustomEmoji,
+    Integrations,
     ConversationDetails,
     ToggleFavorite,
     Shortcuts,
@@ -243,6 +244,7 @@ const REGISTRY: &[Command] = &[
     command(C::InvitePeople, G::Workspace, "Invite people…", None),
     command(C::UserGroups, G::Workspace, "User groups…", None),
     command(C::CustomEmoji, G::Workspace, "Custom emoji…", None),
+    command(C::Integrations, G::Workspace, "Integrations…", None),
     // Help
     command(
         C::Shortcuts,
@@ -490,7 +492,7 @@ pub fn availability(id: CommandId, snapshot: &AppSnapshot) -> Availability {
         CommandId::CreateChannel if !snapshot.can_create_channel => {
             Disabled(crate::states::CHANNELS_ADMINS_ONLY_NOTE)
         }
-        CommandId::WorkspaceSettings | CommandId::InvitePeople
+        CommandId::WorkspaceSettings | CommandId::InvitePeople | CommandId::Integrations
             if !snapshot.can_manage_workspace =>
         {
             Disabled("Only admins and owners can do this.")
@@ -807,6 +809,7 @@ mod tests {
             CommandId::CreateChannel,
             CommandId::WorkspaceSettings,
             CommandId::InvitePeople,
+            CommandId::Integrations,
             CommandId::UserGroups,
             CommandId::CustomEmoji,
         ] {

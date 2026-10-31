@@ -1701,6 +1701,121 @@ fn invitations_list(cast: &Cast) -> Vec<lazy_protocol::Invitation> {
     ]
 }
 
+/// The workspace's webhooks for the Integrations dialog: one posting fine, one failing, and one
+/// that has never been used.
+fn workspace_webhooks(cast: &Cast) -> Vec<lazy_protocol::WorkspaceWebhook> {
+    let hook = |name: &str, channel: ConversationId, minutes_ago: i64| lazy_protocol::Webhook {
+        id: lazy_domain::WebhookId::generate(),
+        conversation_id: channel,
+        name: DisplayName::parse(name).unwrap(),
+        bot_user_id: UserId::generate(),
+        created_by: cast.me.id,
+        created_at: Timestamp::from(
+            time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes_ago),
+        ),
+    };
+    let delivery = |outcome, minutes_ago: i64| lazy_protocol::WebhookDelivery {
+        received_at: Timestamp::from(
+            time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes_ago),
+        ),
+        outcome,
+        message_id: None,
+        body_bytes: 212,
+        idempotency_key: true,
+    };
+    vec![
+        lazy_protocol::WorkspaceWebhook {
+            webhook: hook("Deploy bot", cast.engineering, 60 * 24 * 12),
+            channel_name: ChannelName::parse("engineering").unwrap(),
+            last_delivery: Some(delivery(lazy_protocol::WebhookDeliveryOutcome::Posted, 4)),
+            recent_failures: 0,
+        },
+        lazy_protocol::WorkspaceWebhook {
+            webhook: hook("Uptime alerts", cast.general, 60 * 24 * 3),
+            channel_name: ChannelName::parse("general").unwrap(),
+            last_delivery: Some(delivery(lazy_protocol::WebhookDeliveryOutcome::Invalid, 37)),
+            recent_failures: 6,
+        },
+        lazy_protocol::WorkspaceWebhook {
+            webhook: hook("Release notes", cast.design, 90),
+            channel_name: ChannelName::parse("design").unwrap(),
+            last_delivery: None,
+            recent_failures: 0,
+        },
+    ]
+}
+
+/// A delivery log with one of each kind of thing that happens.
+fn webhook_log() -> Vec<lazy_protocol::WebhookDelivery> {
+    use lazy_protocol::WebhookDeliveryOutcome as O;
+    [
+        (O::Invalid, 37, 18, false),
+        (O::Posted, 52, 640, true),
+        (O::Duplicate, 53, 640, true),
+        (O::RateLimited, 70, 0, false),
+        (O::TooLarge, 95, 70_000, false),
+        (O::Archived, 60 * 5, 120, false),
+        (O::Posted, 60 * 26, 1_900, true),
+    ]
+    .into_iter()
+    .map(
+        |(outcome, minutes_ago, body_bytes, idempotency_key)| lazy_protocol::WebhookDelivery {
+            received_at: Timestamp::from(
+                time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes_ago),
+            ),
+            outcome,
+            message_id: outcome.posted().then(MessageId::generate),
+            body_bytes,
+            idempotency_key,
+        },
+    )
+    .collect()
+}
+
+/// Opens the Integrations dialog and answers its list with `list` (or leaves it loading).
+fn integrations_scene(
+    cx: &mut HeadlessAppContext,
+    model: &Entity<AppModel>,
+    cast: &Cast,
+    win: &WindowHandle<RootView>,
+    list: Option<Vec<lazy_protocol::WorkspaceWebhook>>,
+) {
+    open_dialog(cx, win, ShellDialog::Integrations);
+    if let Some(list) = list {
+        dispatch(
+            cx,
+            model,
+            Input::ActionResult {
+                kind: ActionKind::LoadWorkspaceWebhooks(cast.workspace),
+                result: Ok(ActionOutcome::WorkspaceWebhooks(list)),
+            },
+        );
+    }
+    draw(cx, win);
+}
+
+/// Runs `act` on the open Integrations dialog.
+fn with_integrations(
+    cx: &mut HeadlessAppContext,
+    win: &WindowHandle<RootView>,
+    act: impl FnOnce(
+        &mut lazy_ui::dialogs::IntegrationsDialog,
+        &mut Window,
+        &mut gpui::Context<lazy_ui::dialogs::IntegrationsDialog>,
+    ),
+) {
+    win.update(cx, |root, window, app| {
+        let shell = root.shell().expect("the shell is showing").clone();
+        let dialog = shell
+            .read(app)
+            .integrations_dialog()
+            .expect("the integrations are open");
+        dialog.update(app, |dialog, cx| act(dialog, window, cx));
+    })
+    .expect("the integrations dialog");
+    draw(cx, win);
+}
+
 /// Opens the invitations dialog and answers its request with `result`.
 fn invitations_scene(
     cx: &mut HeadlessAppContext,
@@ -8237,6 +8352,105 @@ fn main() {
                     },
                 );
                 draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4a-01-integrations-light",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                integrations_scene(cx, model, cast, win, Some(workspace_webhooks(cast)));
+            },
+        },
+        Scene {
+            name: "4a-02-integrations-log-dark",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                let list = workspace_webhooks(cast);
+                let id = list[1].webhook.id;
+                integrations_scene(cx, model, cast, win, Some(list));
+                with_integrations(cx, win, |dialog, window, cx| {
+                    dialog.open_details(id, window, cx)
+                });
+                dispatch(
+                    cx,
+                    model,
+                    Input::ActionResult {
+                        kind: ActionKind::LoadWebhookDeliveries(id),
+                        result: Ok(ActionOutcome::WebhookDeliveries(webhook_log())),
+                    },
+                );
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4a-03-integrations-adding-light",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                integrations_scene(cx, model, cast, win, Some(workspace_webhooks(cast)));
+                with_integrations(cx, win, |dialog, window, cx| {
+                    dialog.start_adding(window, cx);
+                    dialog
+                        .name_input()
+                        .update(cx, |input, cx| input.set_text("Build status", cx));
+                });
+            },
+        },
+        Scene {
+            name: "4a-04-integrations-new-address-dark",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                let list = workspace_webhooks(cast);
+                let webhook = list[0].webhook.clone();
+                let id = webhook.id;
+                integrations_scene(cx, model, cast, win, Some(list));
+                with_integrations(cx, win, |dialog, window, cx| {
+                    dialog.open_details(id, window, cx)
+                });
+                // Yes to the confirmation, then the server's answer.
+                with_integrations(cx, win, |dialog, window, cx| {
+                    dialog.show_confirm_new_address(id, window, cx)
+                });
+                dispatch(cx, model, Input::NewWebhookAddress(id));
+                dispatch(
+                    cx,
+                    model,
+                    Input::ActionResult {
+                        kind: ActionKind::NewWebhookAddress(id),
+                        result: Ok(ActionOutcome::WebhookCreated(
+                            lazy_client_core::CreatedWebhook {
+                                webhook,
+                                url: lazy_client_core::SecretUrl::new(
+                                    "https://chat.example.com/hooks/0192f1d2-77aa-7c3e-9a51-2b6c4f0e8d13/\
+                                     5f2a9c0e7b4d16a8c3e9f0b2d7a64e1c9b8f3a2d5e6c7b8a9f0e1d2c3b4a5f6e"
+                                        .to_owned(),
+                                ),
+                            },
+                        )),
+                    },
+                );
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4a-05-integrations-empty-narrow-light",
+            width: 560.0,
+            height: 760.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                integrations_scene(cx, model, cast, win, Some(Vec::new()));
             },
         },
         Scene {

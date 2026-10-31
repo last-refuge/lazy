@@ -193,6 +193,22 @@ pub enum Effect {
     LoadWebhooks {
         conversation: ConversationId,
     },
+    /// List a workspace's webhooks. Answered by `ActionResult { kind: LoadWorkspaceWebhooks }`
+    /// with `ActionOutcome::WorkspaceWebhooks`. Idempotent; the runtime may retry it.
+    LoadWorkspaceWebhooks {
+        workspace: WorkspaceId,
+    },
+    /// Read a webhook's delivery log. Answered by `ActionResult { kind: LoadWebhookDeliveries }`
+    /// with `ActionOutcome::WebhookDeliveries`. Idempotent; the runtime may retry it.
+    LoadWebhookDeliveries {
+        webhook: WebhookId,
+    },
+    /// Give a webhook a new secret. Answered by `ActionResult { kind: NewWebhookAddress }` with
+    /// `ActionOutcome::WebhookCreated`. Never repeated by the runtime: the answer holds the only
+    /// copy of the new address, and asking again after a lost answer is the person's choice.
+    NewWebhookAddress {
+        webhook: WebhookId,
+    },
     /// Save what the person was looking at, replacing the previous save. The runtime may
     /// debounce.
     PersistView(ViewState),

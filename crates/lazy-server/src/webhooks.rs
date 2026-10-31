@@ -34,18 +34,20 @@ use std::time::{Duration, Instant};
 
 use lazy_domain::emoji::replace_shortcodes;
 use lazy_domain::{
-    ConversationId, ConversationKind, DisplayName, MAX_WEBHOOKS_PER_CONVERSATION, MessageDocument,
-    MessageId, OperationId, Timestamp, UserId, WebhookId,
+    ChannelName, ConversationId, ConversationKind, DisplayName, MAX_WEBHOOK_DELIVERIES_KEPT,
+    MAX_WEBHOOKS_PER_CONVERSATION, MessageDocument, MessageId, OperationId, Timestamp, UserId,
+    WebhookId, WorkspaceId,
 };
 use lazy_protocol::{
     CreateWebhookRequest, CreatedWebhook, ErrorCode, Event, SendMessageRequest, User, Webhook,
-    api::paths,
+    WebhookDelivery, WebhookDeliveryOutcome, WorkspaceWebhook, api::paths,
 };
 use sqlx::PgPool;
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::access;
 use crate::app::AppState;
 use crate::config::WebhookRate;
 use crate::conversations::{self, Lock};
@@ -53,6 +55,7 @@ use crate::crypto;
 use crate::error::AppError;
 use crate::events::{self, Audience, PendingEvent};
 use crate::groups;
+use crate::logging::Describe;
 use crate::messages;
 
 /// How many times creating a webhook tries a new id when the bot's generated username is taken.
@@ -85,6 +88,18 @@ fn bot_username(id: WebhookId) -> String {
 struct Bucket {
     tokens: f64,
     updated: Instant,
+    /// The last request was refused: the next refusal continues the same run.
+    refusing: bool,
+}
+
+/// A request the limiter refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Refused {
+    /// How long until there is a token.
+    pub wait: Duration,
+    /// Whether this is the first refusal since the webhook's last accepted request, so that a
+    /// flood of refusals makes one entry in the delivery log, not one each.
+    pub first: bool,
 }
 
 /// A token bucket per webhook, in memory: `burst` deliveries at once, then one more per
@@ -103,8 +118,8 @@ impl WebhookLimiter {
         }
     }
 
-    /// Takes one token for `id`, or returns how long until there is one.
-    pub fn take(&self, id: WebhookId) -> Result<(), Duration> {
+    /// Takes one token for `id`, or says how long until there is one.
+    pub fn take(&self, id: WebhookId) -> Result<(), Refused> {
         self.take_at(id, Instant::now())
     }
 
@@ -114,7 +129,7 @@ impl WebhookLimiter {
         (bucket.tokens + gained).min(f64::from(self.rate.burst))
     }
 
-    fn take_at(&self, id: WebhookId, now: Instant) -> Result<(), Duration> {
+    fn take_at(&self, id: WebhookId, now: Instant) -> Result<(), Refused> {
         let mut buckets = self
             .buckets
             .lock()
@@ -132,16 +147,23 @@ impl WebhookLimiter {
         let bucket = buckets.entry(id).or_insert(Bucket {
             tokens: f64::from(self.rate.burst),
             updated: now,
+            refusing: false,
         });
         let tokens = self.refilled(bucket, now);
         bucket.updated = now;
         if tokens >= 1.0 {
             bucket.tokens = tokens - 1.0;
+            bucket.refusing = false;
             Ok(())
         } else {
             bucket.tokens = tokens;
+            let first = !bucket.refusing;
+            bucket.refusing = true;
             let missing = 1.0 - tokens;
-            Err(self.rate.refill_every.mul_f64(missing))
+            Err(Refused {
+                wait: self.rate.refill_every.mul_f64(missing),
+                first,
+            })
         }
     }
 }
@@ -462,6 +484,42 @@ fn operation_id(webhook: WebhookId, key: Option<&str>) -> OperationId {
     }
 }
 
+/// A delivery that posted, or answered a message posted before under the same `Idempotency-Key`.
+#[derive(Debug, Clone, Copy)]
+pub struct Delivered {
+    pub message_id: MessageId,
+    pub duplicate: bool,
+}
+
+/// A delivery that did not post: the refusal to answer with, and what the delivery log records
+/// (`None` when there is nothing to record it under: the webhook was revoked meanwhile).
+#[derive(Debug)]
+pub struct Undelivered {
+    pub error: AppError,
+    pub outcome: Option<WebhookDeliveryOutcome>,
+}
+
+impl From<AppError> for Undelivered {
+    /// The log's word for a refusal, by its code. An archived channel is classified where it is
+    /// found ([`explain_refusal`]); any other `conflict` is an `Idempotency-Key` used again with
+    /// different text, which is the sender's mistake, like any unreadable request.
+    fn from(error: AppError) -> Self {
+        let outcome = match &error {
+            AppError::Api(api) => match api.code {
+                ErrorCode::InvalidRequest | ErrorCode::Conflict => {
+                    Some(WebhookDeliveryOutcome::Invalid)
+                }
+                ErrorCode::PayloadTooLarge => Some(WebhookDeliveryOutcome::TooLarge),
+                ErrorCode::RateLimited => Some(WebhookDeliveryOutcome::RateLimited),
+                ErrorCode::NotFound => None,
+                _ => Some(WebhookDeliveryOutcome::Failed),
+            },
+            AppError::Database(_) | AppError::Internal(_) => Some(WebhookDeliveryOutcome::Failed),
+        };
+        Self { error, outcome }
+    }
+}
+
 /// Posts `text` into the webhook's conversation as its bot, through the ordinary send.
 ///
 /// The text is composer source: `:shortcode:` emoji are replaced and the rest is parsed as
@@ -469,20 +527,37 @@ fn operation_id(webhook: WebhookId, key: Option<&str>) -> OperationId {
 /// is `invalid_request`. The refusals of the send (the bot is no longer a member because the
 /// webhook was revoked a moment ago; the conversation was archived) are reported as what they
 /// mean to the caller of the address: `not_found` and `conflict`.
+///
+/// A key that already has a receipt is a duplicate: the send answers the earlier message and
+/// posts nothing. (Two requests with a new key at the same moment both count as posted; one of
+/// them waits for the other's receipt and answers its message.)
 pub async fn deliver(
     pool: &PgPool,
     webhook: ActiveWebhook,
     key: Option<&str>,
     text: &str,
-) -> Result<MessageId, AppError> {
+) -> Result<Delivered, Undelivered> {
     if text.trim().is_empty() {
-        return Err(AppError::invalid("text must not be empty"));
+        return Err(AppError::invalid("text must not be empty").into());
     }
     let source = replace_shortcodes(text);
     let document = MessageDocument::from_markdown(&source)
         .map_err(|e| AppError::invalid(format!("the text cannot be sent: {e}")))?;
+    let operation_id = operation_id(webhook.id, key);
+    let duplicate = match key {
+        Some(_) => sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM operation_receipts \
+             WHERE user_id = $1 AND operation_id = $2)",
+        )
+        .bind(webhook.bot_user_id.as_uuid())
+        .bind(operation_id.as_uuid())
+        .fetch_one(pool)
+        .await
+        .map_err(AppError::from)?,
+        None => false,
+    };
     let request = SendMessageRequest {
-        operation_id: operation_id(webhook.id, key),
+        operation_id,
         document,
         thread_root: None,
         also_in_channel: false,
@@ -491,13 +566,16 @@ pub async fn deliver(
     };
     match messages::send_message(pool, webhook.bot_user_id, webhook.conversation_id, request).await
     {
-        Ok(message) => Ok(message.id),
+        Ok(message) => Ok(Delivered {
+            message_id: message.id,
+            duplicate,
+        }),
         Err(AppError::Api(api))
             if matches!(api.code, ErrorCode::Forbidden | ErrorCode::NotFound) =>
         {
             Err(explain_refusal(pool, webhook, AppError::Api(api)).await?)
         }
-        Err(other) => Err(other),
+        Err(other) => Err(other.into()),
     }
 }
 
@@ -507,7 +585,7 @@ async fn explain_refusal(
     pool: &PgPool,
     webhook: ActiveWebhook,
     refusal: AppError,
-) -> Result<AppError, AppError> {
+) -> Result<Undelivered, AppError> {
     let state: Option<(bool, bool)> = sqlx::query_as(
         "SELECT w.revoked_at IS NOT NULL, c.archived FROM webhooks w \
          JOIN conversations c ON c.id = w.conversation_id WHERE w.id = $1",
@@ -516,10 +594,288 @@ async fn explain_refusal(
     .fetch_optional(pool)
     .await?;
     Ok(match state {
-        None | Some((true, _)) => webhook_not_found(),
-        Some((false, true)) => AppError::conflict("this channel is archived"),
-        Some((false, false)) => refusal,
+        None | Some((true, _)) => Undelivered {
+            error: webhook_not_found(),
+            outcome: None,
+        },
+        Some((false, true)) => Undelivered {
+            error: AppError::conflict("this channel is archived"),
+            outcome: Some(WebhookDeliveryOutcome::Archived),
+        },
+        Some((false, false)) => Undelivered {
+            error: refusal,
+            outcome: Some(WebhookDeliveryOutcome::Failed),
+        },
     })
+}
+
+// --- The delivery log ------------------------------------------------------------------------
+
+/// The stored word for an outcome. `Unknown` is never recorded (it is only what a client reads
+/// from a newer server).
+fn outcome_to_db(outcome: WebhookDeliveryOutcome) -> &'static str {
+    match outcome {
+        WebhookDeliveryOutcome::Posted => "posted",
+        WebhookDeliveryOutcome::Duplicate => "duplicate",
+        WebhookDeliveryOutcome::RateLimited => "rate_limited",
+        WebhookDeliveryOutcome::TooLarge => "too_large",
+        WebhookDeliveryOutcome::Invalid => "invalid",
+        WebhookDeliveryOutcome::Archived => "archived",
+        WebhookDeliveryOutcome::Failed | WebhookDeliveryOutcome::Unknown => "failed",
+    }
+}
+
+fn outcome_from_db(text: &str) -> WebhookDeliveryOutcome {
+    match text {
+        "posted" => WebhookDeliveryOutcome::Posted,
+        "duplicate" => WebhookDeliveryOutcome::Duplicate,
+        "rate_limited" => WebhookDeliveryOutcome::RateLimited,
+        "too_large" => WebhookDeliveryOutcome::TooLarge,
+        "invalid" => WebhookDeliveryOutcome::Invalid,
+        "archived" => WebhookDeliveryOutcome::Archived,
+        "failed" => WebhookDeliveryOutcome::Failed,
+        _ => WebhookDeliveryOutcome::Unknown,
+    }
+}
+
+/// One request to record in a webhook's log.
+#[derive(Debug, Clone, Copy)]
+pub struct DeliveryRecord {
+    pub outcome: WebhookDeliveryOutcome,
+    pub message_id: Option<MessageId>,
+    pub body_bytes: usize,
+    pub idempotency_key: bool,
+}
+
+/// Adds an entry to the webhook's delivery log and trims the log to its newest
+/// [`MAX_WEBHOOK_DELIVERIES_KEPT`]. Best effort: the request has already been answered for, so a
+/// failure here is logged (without anything from the request) and not reported to the sender.
+pub async fn record(pool: &PgPool, webhook: WebhookId, entry: DeliveryRecord) {
+    if let Err(error) = try_record(pool, webhook, entry).await {
+        tracing::warn!(
+            webhook_id = %webhook,
+            error = %error.describe(),
+            "could not record a webhook delivery"
+        );
+    }
+}
+
+async fn try_record(
+    pool: &PgPool,
+    webhook: WebhookId,
+    entry: DeliveryRecord,
+) -> Result<(), AppError> {
+    let posted = entry.outcome.posted();
+    sqlx::query(
+        "INSERT INTO webhook_deliveries (webhook_id, outcome, message_id, body_bytes, idempotency_key) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(webhook.as_uuid())
+    .bind(outcome_to_db(entry.outcome))
+    .bind(entry.message_id.filter(|_| posted).map(|id| id.as_uuid()))
+    .bind(i32::try_from(entry.body_bytes).unwrap_or(i32::MAX))
+    .bind(entry.idempotency_key)
+    .execute(pool)
+    .await?;
+    let keep = i64::try_from(MAX_WEBHOOK_DELIVERIES_KEPT).unwrap_or(i64::MAX);
+    sqlx::query(
+        "DELETE FROM webhook_deliveries WHERE webhook_id = $1 AND id < \
+         (SELECT id FROM webhook_deliveries WHERE webhook_id = $1 \
+          ORDER BY id DESC OFFSET $2 - 1 LIMIT 1)",
+    )
+    .bind(webhook.as_uuid())
+    .bind(keep)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[derive(sqlx::FromRow)]
+struct DeliveryRow {
+    received_at: OffsetDateTime,
+    outcome: String,
+    message_id: Option<Uuid>,
+    body_bytes: i32,
+    idempotency_key: bool,
+}
+
+impl DeliveryRow {
+    fn into_delivery(self) -> WebhookDelivery {
+        WebhookDelivery {
+            received_at: Timestamp::from(self.received_at),
+            outcome: outcome_from_db(&self.outcome),
+            message_id: self.message_id.map(MessageId::from_uuid),
+            body_bytes: u32::try_from(self.body_bytes).unwrap_or(0),
+            idempotency_key: self.idempotency_key,
+        }
+    }
+}
+
+/// A webhook's delivery log, newest first. Admins and owners who can read its channel; a revoked
+/// webhook keeps its log. A webhook that does not exist, or is in a channel the caller cannot
+/// read, is `not_found`.
+pub async fn deliveries(
+    pool: &PgPool,
+    actor: UserId,
+    id: WebhookId,
+) -> Result<Vec<WebhookDelivery>, AppError> {
+    let mut conn = pool.acquire().await?;
+    let found: Option<Uuid> =
+        sqlx::query_scalar("SELECT conversation_id FROM webhooks WHERE id = $1")
+            .bind(id.as_uuid())
+            .fetch_optional(&mut *conn)
+            .await?;
+    let conversation = found
+        .map(ConversationId::from_uuid)
+        .ok_or_else(webhook_not_found)?;
+    let loaded = conversations::load(&mut conn, actor, conversation)
+        .await?
+        .filter(conversations::Loaded::can_read)
+        .ok_or_else(webhook_not_found)?;
+    if !loaded
+        .facts
+        .workspace_role
+        .is_some_and(|role| role.can_manage_integrations())
+    {
+        return Err(manage_error());
+    }
+    let keep = i64::try_from(MAX_WEBHOOK_DELIVERIES_KEPT).unwrap_or(i64::MAX);
+    let rows: Vec<DeliveryRow> = sqlx::query_as(
+        "SELECT received_at, outcome, message_id, body_bytes, idempotency_key \
+         FROM webhook_deliveries WHERE webhook_id = $1 ORDER BY id DESC LIMIT $2",
+    )
+    .bind(id.as_uuid())
+    .bind(keep)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows.into_iter().map(DeliveryRow::into_delivery).collect())
+}
+
+#[derive(sqlx::FromRow)]
+struct WorkspaceWebhookRow {
+    #[sqlx(flatten)]
+    webhook: WebhookRow,
+    channel_name: Option<String>,
+    received_at: Option<OffsetDateTime>,
+    outcome: Option<String>,
+    message_id: Option<Uuid>,
+    body_bytes: Option<i32>,
+    idempotency_key: Option<bool>,
+    recent_failures: i64,
+}
+
+/// The webhooks in use in every channel of the workspace that the caller can read, oldest first,
+/// each with its latest delivery and how many of its requests in the last day did not post.
+/// Admins and owners only: `forbidden` for other members, `not_found` for anyone else.
+pub async fn list_workspace(
+    pool: &PgPool,
+    actor: UserId,
+    workspace: WorkspaceId,
+) -> Result<Vec<WorkspaceWebhook>, AppError> {
+    let mut conn = pool.acquire().await?;
+    let role = access::require_member(&mut conn, workspace, actor).await?;
+    if !role.can_manage_integrations() {
+        return Err(manage_error());
+    }
+    let rows: Vec<WorkspaceWebhookRow> = sqlx::query_as(
+        "SELECT w.id, w.conversation_id, w.name, w.bot_user_id, w.created_by, w.created_at, \
+                c.name AS channel_name, d.received_at, d.outcome, d.message_id, d.body_bytes, d.idempotency_key, \
+                (SELECT count(*) FROM webhook_deliveries f WHERE f.webhook_id = w.id \
+                   AND f.received_at > now() - interval '24 hours' \
+                   AND f.outcome NOT IN ('posted', 'duplicate')) AS recent_failures \
+         FROM webhooks w \
+         JOIN conversations c ON c.id = w.conversation_id \
+         LEFT JOIN LATERAL (SELECT received_at, outcome, message_id, body_bytes, idempotency_key \
+                            FROM webhook_deliveries WHERE webhook_id = w.id \
+                            ORDER BY id DESC LIMIT 1) d ON true \
+         WHERE w.workspace_id = $1 AND w.revoked_at IS NULL \
+           AND ((c.kind = 'channel' AND c.visibility = 'public') OR EXISTS \
+                (SELECT 1 FROM conversation_members cm \
+                 WHERE cm.conversation_id = c.id AND cm.user_id = $2)) \
+         ORDER BY w.created_at, w.id",
+    )
+    .bind(workspace.as_uuid())
+    .bind(actor.as_uuid())
+    .fetch_all(&mut *conn)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let last_delivery = match (row.received_at, row.outcome) {
+                (Some(received_at), Some(outcome)) => Some(
+                    DeliveryRow {
+                        received_at,
+                        outcome,
+                        message_id: row.message_id,
+                        body_bytes: row.body_bytes.unwrap_or(0),
+                        idempotency_key: row.idempotency_key.unwrap_or(false),
+                    }
+                    .into_delivery(),
+                ),
+                _ => None,
+            };
+            let channel_name = row
+                .channel_name
+                .as_deref()
+                .and_then(|name| ChannelName::parse(name).ok())
+                .ok_or_else(|| AppError::internal("a webhook's channel has no valid name"))?;
+            Ok(WorkspaceWebhook {
+                webhook: row.webhook.into_webhook()?,
+                channel_name,
+                last_delivery,
+                recent_failures: u32::try_from(row.recent_failures).unwrap_or(u32::MAX),
+            })
+        })
+        .collect()
+}
+
+/// Gives a webhook a new secret and returns its new address (the only time it is shown). The old
+/// address is `not_found` from the moment this commits; the bot, the channel, and the log stay.
+/// Admins and owners who can read the channel; a revoked or unknown webhook is `not_found`. An
+/// archived channel may still get a new address (deliveries stay refused until it is unarchived).
+pub async fn new_address(
+    state: &AppState,
+    actor: UserId,
+    id: WebhookId,
+) -> Result<CreatedWebhook, AppError> {
+    let found: Option<Uuid> =
+        sqlx::query_scalar("SELECT conversation_id FROM webhooks WHERE id = $1")
+            .bind(id.as_uuid())
+            .fetch_optional(&state.pool)
+            .await?;
+    let conversation = found
+        .map(ConversationId::from_uuid)
+        .ok_or_else(webhook_not_found)?;
+    let (mut tx, loaded) =
+        conversations::begin_visible(&state.pool, actor, conversation, Lock::Shared)
+            .await
+            .map_err(|error| match error {
+                AppError::Api(api) if api.code == ErrorCode::NotFound => webhook_not_found(),
+                other => other,
+            })?;
+    if !loaded
+        .facts
+        .workspace_role
+        .is_some_and(|role| role.can_manage_integrations())
+    {
+        return Err(manage_error());
+    }
+    let (secret, hash) = crypto::new_webhook_secret()?;
+    let row: Option<WebhookRow> = sqlx::query_as(
+        "UPDATE webhooks SET secret_hash = $2 WHERE id = $1 AND revoked_at IS NULL \
+         RETURNING id, conversation_id, name, bot_user_id, created_by, created_at",
+    )
+    .bind(id.as_uuid())
+    .bind(&hash[..])
+    .fetch_optional(&mut *tx)
+    .await?;
+    let webhook = row.ok_or_else(webhook_not_found)?.into_webhook()?;
+    tx.commit().await?;
+    let url = format!(
+        "{}{}",
+        state.integrations.public_url,
+        paths::hook(id, &secret)
+    );
+    Ok(CreatedWebhook { webhook, url })
 }
 
 #[cfg(test)]
@@ -588,15 +944,23 @@ mod tests {
         for _ in 0..3 {
             assert!(limiter.take_at(id, start).is_ok());
         }
-        let wait = limiter.take_at(id, start).unwrap_err();
-        assert_eq!(wait, Duration::from_secs(2));
+        let refused = limiter.take_at(id, start).unwrap_err();
+        assert_eq!(refused.wait, Duration::from_secs(2));
+        assert!(refused.first, "the first refusal of a run is marked");
         // Half an interval later there is half a token: still refused, and the wait is shorter.
-        let wait = limiter
+        let refused = limiter
             .take_at(id, start + Duration::from_secs(1))
             .unwrap_err();
-        assert_eq!(wait, Duration::from_secs(1));
+        assert_eq!(refused.wait, Duration::from_secs(1));
+        assert!(!refused.first, "the run of refusals continues");
         assert!(limiter.take_at(id, start + Duration::from_secs(2)).is_ok());
-        assert!(limiter.take_at(id, start + Duration::from_secs(2)).is_err());
+        // An accepted request ends the run, so the next refusal starts a new one.
+        assert!(
+            limiter
+                .take_at(id, start + Duration::from_secs(2))
+                .unwrap_err()
+                .first
+        );
         // Another webhook has its own allowance; a long quiet spell refills only up to the burst.
         assert!(limiter.take_at(WebhookId::generate(), start).is_ok());
         let later = start + Duration::from_secs(600);

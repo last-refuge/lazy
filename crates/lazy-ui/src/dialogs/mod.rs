@@ -19,6 +19,7 @@ mod profile;
 mod quick_switcher;
 mod shortcuts;
 mod updates;
+mod workspace_integrations;
 mod workspace_settings;
 
 pub use add_workspace::{AddWorkspaceDialog, Way};
@@ -43,6 +44,7 @@ pub use quick_switcher::{
 };
 pub use shortcuts::ShortcutsDialog;
 pub use updates::UpdatesDialog;
+pub use workspace_integrations::{IntegrationsDialog, IntegrationsView, outcome_words};
 pub use workspace_settings::WorkspaceSettingsDialog;
 
 use gpui::{App, AppContext as _, Context, Entity};

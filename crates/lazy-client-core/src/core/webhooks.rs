@@ -7,8 +7,8 @@
 //! are never offered as people to message, mention, or put in a group, and nobody is the author
 //! of their messages, so those cannot be edited (a moderator deletes them).
 
-use lazy_domain::{MAX_WEBHOOKS_PER_CONVERSATION, WebhookId, WorkspaceRole};
-use lazy_protocol::{CreateWebhookRequest, Webhook};
+use lazy_domain::{MAX_WEBHOOKS_PER_CONVERSATION, WebhookId, WorkspaceId, WorkspaceRole};
+use lazy_protocol::{CreateWebhookRequest, Webhook, WebhookDelivery, WorkspaceWebhook};
 
 use super::conversations::readable_error;
 use super::*;
@@ -40,6 +40,55 @@ impl ClientCore {
         self.webhook_lists
             .get(&conversation)
             .map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether to offer the workspace's list of integrations: its admins and owners. The server
+    /// decides.
+    pub fn can_manage_workspace_webhooks(&self, workspace: WorkspaceId) -> bool {
+        self.role_in(workspace)
+            .is_some_and(|role| role >= WorkspaceRole::Admin)
+    }
+
+    /// Every webhook of a workspace that the person can see, oldest first, each with its latest
+    /// delivery, as last loaded (`Input::LoadWorkspaceWebhooks`) and kept current by this
+    /// client's own creations, new addresses and deletions. Empty for anyone who cannot manage
+    /// them.
+    pub fn workspace_webhooks(&self, workspace: WorkspaceId) -> &[WorkspaceWebhook] {
+        if !self.can_manage_workspace_webhooks(workspace) {
+            return &[];
+        }
+        self.workspace_webhooks
+            .get(&workspace)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// A webhook's delivery log, newest first, as last loaded (`Input::LoadWebhookDeliveries`),
+    /// or `None` if it has not been loaded (or the person cannot manage it).
+    pub fn webhook_deliveries(&self, webhook: WebhookId) -> Option<&[WebhookDelivery]> {
+        if !self.can_manage_webhook(webhook) {
+            return None;
+        }
+        self.webhook_deliveries.get(&webhook).map(Vec::as_slice)
+    }
+
+    /// The workspace a loaded webhook belongs to, from whichever list holds it.
+    fn webhook_workspace(&self, webhook: WebhookId) -> Option<WorkspaceId> {
+        self.workspace_webhooks
+            .iter()
+            .find(|(_, list)| list.iter().any(|held| held.webhook.id == webhook))
+            .map(|(workspace, _)| *workspace)
+            .or_else(|| {
+                self.webhook_conversation(webhook)
+                    .and_then(|conversation| self.conversation(conversation))
+                    .map(|info| info.workspace_id)
+            })
+    }
+
+    /// Whether the person may manage a webhook this client has loaded: an admin or owner of its
+    /// workspace. The server decides.
+    fn can_manage_webhook(&self, webhook: WebhookId) -> bool {
+        self.webhook_workspace(webhook)
+            .is_some_and(|workspace| self.can_manage_workspace_webhooks(workspace))
     }
 
     /// The webhook just created, with the address it can be posted to. The address is shown
@@ -114,14 +163,70 @@ impl ClientCore {
         {
             return;
         }
-        let Some(conversation) = self.webhook_conversation(webhook) else {
+        if self.webhook_workspace(webhook).is_none() {
             return;
-        };
-        if !self.can_manage_webhooks(conversation) {
+        }
+        if !self.can_manage_webhook(webhook) {
             return self.fail_action(kind, "Only admins and owners can manage webhooks.", out);
         }
         if self.begin_action(kind, out) {
             out.effects.push(Effect::DeleteWebhook { webhook });
+        }
+    }
+
+    pub(super) fn load_workspace_webhooks(&mut self, workspace: WorkspaceId, out: &mut Output) {
+        let kind = ActionKind::LoadWorkspaceWebhooks(workspace);
+        if !matches!(self.phase, SessionPhase::Ready)
+            || !self.can_manage_workspace_webhooks(workspace)
+        {
+            return;
+        }
+        if self.begin_action(kind, out) {
+            out.effects
+                .push(Effect::LoadWorkspaceWebhooks { workspace });
+        }
+    }
+
+    pub(super) fn load_webhook_deliveries(&mut self, webhook: WebhookId, out: &mut Output) {
+        let kind = ActionKind::LoadWebhookDeliveries(webhook);
+        if !matches!(self.phase, SessionPhase::Ready) || !self.can_manage_webhook(webhook) {
+            return;
+        }
+        if self.begin_action(kind, out) {
+            out.effects.push(Effect::LoadWebhookDeliveries { webhook });
+        }
+    }
+
+    pub(super) fn new_webhook_address(&mut self, webhook: WebhookId, out: &mut Output) {
+        let kind = ActionKind::NewWebhookAddress(webhook);
+        if !matches!(self.phase, SessionPhase::Ready) || self.action(kind) == &ActionState::InFlight
+        {
+            return;
+        }
+        if self.webhook_workspace(webhook).is_none() {
+            return;
+        }
+        if !self.can_manage_webhook(webhook) {
+            return self.fail_action(kind, "Only admins and owners can manage webhooks.", out);
+        }
+        if self.begin_action(kind, out) {
+            out.effects.push(Effect::NewWebhookAddress { webhook });
+        }
+    }
+
+    /// Asks again for a workspace's list, if it was ever loaded, after something changed it
+    /// that this client cannot fill in by itself (a new webhook's latest delivery, or one whose
+    /// creation may or may not have happened).
+    pub(super) fn reload_workspace_webhooks_of(
+        &mut self,
+        conversation: ConversationId,
+        out: &mut Output,
+    ) {
+        let workspace = self
+            .conversation(conversation)
+            .map(|info| info.workspace_id);
+        if let Some(workspace) = workspace.filter(|w| self.workspace_webhooks.contains_key(w)) {
+            self.load_workspace_webhooks(workspace, out);
         }
     }
 
@@ -155,6 +260,8 @@ impl ClientCore {
     /// Forgets everything held about webhooks (the session ended).
     pub(super) fn clear_webhooks(&mut self) {
         self.webhook_lists.clear();
+        self.workspace_webhooks.clear();
+        self.webhook_deliveries.clear();
         self.created_webhook = None;
     }
 
@@ -188,6 +295,26 @@ impl ClientCore {
                 self.webhook_lists.insert(conversation, list);
                 out.changes.push(Change::WebhooksChanged { conversation });
             }
+            (
+                ActionKind::LoadWorkspaceWebhooks(workspace),
+                ActionOutcome::WorkspaceWebhooks(list),
+            ) => {
+                self.workspace_webhooks.insert(workspace, list);
+                out.changes
+                    .push(Change::WorkspaceWebhooksChanged { workspace });
+            }
+            (ActionKind::LoadWebhookDeliveries(webhook), ActionOutcome::WebhookDeliveries(log)) => {
+                self.webhook_deliveries.insert(webhook, log);
+                out.changes
+                    .push(Change::WebhookDeliveriesChanged { webhook });
+            }
+            (ActionKind::NewWebhookAddress(webhook), ActionOutcome::WebhookCreated(created)) => {
+                if created.webhook.id != webhook {
+                    return;
+                }
+                self.created_webhook = Some(created);
+                out.changes.push(Change::CreatedWebhookChanged);
+            }
             (ActionKind::CreateWebhook(conversation), ActionOutcome::WebhookCreated(created)) => {
                 if created.webhook.conversation_id != conversation {
                     return;
@@ -195,6 +322,7 @@ impl ClientCore {
                 let webhook = created.webhook.clone();
                 self.created_webhook = Some(created);
                 out.changes.push(Change::CreatedWebhookChanged);
+                self.reload_workspace_webhooks_of(conversation, out);
                 match self.webhook_lists.get_mut(&conversation) {
                     Some(list) => {
                         if !list.iter().any(|held| held.id == webhook.id) {
@@ -214,11 +342,17 @@ impl ClientCore {
     /// A webhook is gone (deleted, or already was): off its list, and off the screen if its
     /// address was still shown.
     pub(super) fn webhook_deleted(&mut self, webhook: WebhookId, out: &mut Output) {
-        let Some(conversation) = self.webhook_conversation(webhook) else {
-            return;
-        };
-        if let Some(list) = self.webhook_lists.get_mut(&conversation) {
-            list.retain(|held| held.id != webhook);
+        let mut changed = Vec::new();
+        for (workspace, list) in &mut self.workspace_webhooks {
+            let before = list.len();
+            list.retain(|held| held.webhook.id != webhook);
+            if list.len() != before {
+                changed.push(*workspace);
+            }
+        }
+        for workspace in changed {
+            out.changes
+                .push(Change::WorkspaceWebhooksChanged { workspace });
         }
         if self
             .created_webhook
@@ -228,6 +362,12 @@ impl ClientCore {
             self.created_webhook = None;
             out.changes.push(Change::CreatedWebhookChanged);
         }
+        let Some(conversation) = self.webhook_conversation(webhook) else {
+            return;
+        };
+        if let Some(list) = self.webhook_lists.get_mut(&conversation) {
+            list.retain(|held| held.id != webhook);
+        }
         out.changes.push(Change::WebhooksChanged { conversation });
     }
 }
@@ -235,6 +375,11 @@ impl ClientCore {
 /// Words for a person about why a webhook request failed.
 pub(super) fn webhook_error(kind: ActionKind, error: &RequestError) -> String {
     match error {
+        RequestError::Unknown(_) if matches!(kind, ActionKind::NewWebhookAddress(_)) => {
+            "Couldn't reach the server, so it isn't known whether the address was changed. \
+             Ask for a new address again: the old one may already have stopped working."
+                .to_owned()
+        }
         RequestError::Unknown(_) if matches!(kind, ActionKind::CreateWebhook(_)) => {
             "Couldn't reach the server, so it isn't known whether the webhook was created. \
              Look at the list: one that you have no address for can be deleted."

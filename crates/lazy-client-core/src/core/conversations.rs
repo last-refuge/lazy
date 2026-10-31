@@ -385,7 +385,10 @@ impl ClientCore {
                 | ActionKind::DeleteGroup(_) => super::groups::group_error(error),
                 ActionKind::CreateWebhook(_)
                 | ActionKind::DeleteWebhook(_)
-                | ActionKind::LoadWebhooks(_) => super::webhooks::webhook_error(kind, error),
+                | ActionKind::LoadWebhooks(_)
+                | ActionKind::LoadWorkspaceWebhooks(_)
+                | ActionKind::LoadWebhookDeliveries(_)
+                | ActionKind::NewWebhookAddress(_) => super::webhooks::webhook_error(kind, error),
                 ActionKind::AddCustomEmoji
                 | ActionKind::RenameCustomEmoji(_)
                 | ActionKind::DeleteCustomEmoji(_) => super::emoji::emoji_error(error),
@@ -921,6 +924,13 @@ impl ClientCore {
                     self.webhook_deleted(webhook, out);
                     return self.set_action(kind, ActionState::Idle, out);
                 }
+                // A webhook that is gone cannot have a new address; it leaves the lists, and
+                // the person is told why.
+                if let ActionKind::NewWebhookAddress(webhook) = kind
+                    && matches!(&error, RequestError::Rejected(api) if api.code == ErrorCode::NotFound)
+                {
+                    self.webhook_deleted(webhook, out);
+                }
                 // An emoji that is already gone is what a delete wanted.
                 if let ActionKind::DeleteCustomEmoji(emoji) = kind
                     && matches!(&error, RequestError::Rejected(api) if api.code == ErrorCode::NotFound)
@@ -937,6 +947,7 @@ impl ClientCore {
                 self.fail_request(kind, &error, out);
                 if let (true, ActionKind::CreateWebhook(conversation)) = (lost_create, kind) {
                     self.load_webhooks(conversation, out);
+                    self.reload_workspace_webhooks_of(conversation, out);
                 }
                 // The same for an invitation: its code cannot be shown again, so the list shows
                 // whether it was made.
@@ -994,7 +1005,10 @@ impl ClientCore {
             (
                 ActionKind::CreateWebhook(_)
                 | ActionKind::DeleteWebhook(_)
-                | ActionKind::LoadWebhooks(_),
+                | ActionKind::LoadWebhooks(_)
+                | ActionKind::LoadWorkspaceWebhooks(_)
+                | ActionKind::LoadWebhookDeliveries(_)
+                | ActionKind::NewWebhookAddress(_),
                 outcome,
             ) => self.webhook_action_result(kind, outcome, out),
             (ActionKind::RenameCustomEmoji(_) | ActionKind::DeleteCustomEmoji(_), outcome) => {

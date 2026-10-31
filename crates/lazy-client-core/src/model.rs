@@ -415,6 +415,12 @@ pub enum ActionKind {
     DeleteWebhook(WebhookId),
     /// Loading a conversation's webhooks.
     LoadWebhooks(ConversationId),
+    /// Loading every webhook of a workspace, with how each is doing.
+    LoadWorkspaceWebhooks(WorkspaceId),
+    /// Loading a webhook's delivery log.
+    LoadWebhookDeliveries(WebhookId),
+    /// Giving a webhook a new address (the old one stops working).
+    NewWebhookAddress(WebhookId),
     /// Adding a custom emoji (one at a time).
     AddCustomEmoji,
     RenameCustomEmoji(EmojiId),
@@ -581,8 +587,12 @@ pub enum ActionOutcome {
     Group(UserGroup),
     /// A conversation's webhooks.
     Webhooks(Vec<Webhook>),
-    /// A webhook that was just created, with its one-time address.
+    /// A webhook that was just created, or given a new address, with its one-time address.
     WebhookCreated(CreatedWebhook),
+    /// A workspace's webhooks, with how each is doing.
+    WorkspaceWebhooks(Vec<lazy_protocol::WorkspaceWebhook>),
+    /// A webhook's delivery log, newest first.
+    WebhookDeliveries(Vec<lazy_protocol::WebhookDelivery>),
     /// A custom emoji after it was renamed.
     CustomEmoji(CustomEmoji),
     /// The workspace after its name or settings were changed.

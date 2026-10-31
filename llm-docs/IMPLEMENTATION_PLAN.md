@@ -301,8 +301,8 @@ Goal: dogfood users can do normal work without developer assistance.
 - [ ] 3.8 Dogfooding
   - [X] Structured logging with no credentials or message content
   - [X] Dogfood guide (`llm-docs/DOGFOOD.md`) and issue template (`.github/ISSUE_TEMPLATE/dogfood.md`)
-  - [ ] Server container, Docker Compose, and Coolify deployment (written: Dockerfile, compose files, smoke test, `llm-docs/DEPLOY.md`; the `server` workflow has passed: image build, compose stack on a fresh database, smoke test, and data kept across restarts, run 41155102683; still never run: Coolify itself and pushing to ghcr.io)
-  - [ ] Client installers for Linux, macOS, and Windows from the manual `release` workflow (written: `.deb`, tarball, `.dmg`, Windows installer and zip, `llm-docs/RELEASE.md`; the Linux packages were assembled and inspected here, the macOS and Windows builds and the workflow have never run)
+  - [X] Server container, Docker Compose, and Coolify deployment (the `server` workflow passed image build, fresh-database smoke test, and restart persistence, run 41155102683; user confirmed on 2026-10-31 that the server is running successfully on Coolify and the Windows client connects to it; pushing to ghcr.io remains unverified)
+  - [ ] Client installers for Linux, macOS, and Windows from the manual `release` workflow (written: `.deb`, tarball, `.dmg`, Windows installer and zip, `llm-docs/RELEASE.md`; the rebuilt 0.6.0 draft passed builds on all three platforms and checksum inspection, run 41161781734; user confirmed Windows client use against the Coolify server on 2026-10-31; macOS installation is next, Linux installation outside CI remains unverified)
   - [X] Choose the server in the app, so installed clients need no environment variable (tested in CI on Linux, `ci` run on `1f99b8f`; not tried on an installed app)
   - [ ] First run: address and invitation code, then a short, branded account creation (plan in `llm-docs/ONBOARDING.md`, D29; the invitee's and the owner's paths are written and tested in CI on Linux; the first walkthrough on real machines is still to do)
     - [X] Server: public server info, previewing an invitation without using it, a readable invitation code, Copy message to send (tested in CI against a real Postgres, `ci` run on `1f99b8f`)
@@ -335,10 +335,10 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [ ] Bounded retries with visible failures
   - [ ] Worker process mode for isolation
 - [ ] 4.3 Incoming webhooks
-  - [ ] Per-channel webhook endpoints with secrets
+  - [X] Per-channel webhook endpoints with secrets (built in 2.9, D16; a new secret on request, D30)
   - [ ] Signature verification, timestamp checks, and replay protection
-  - [ ] Payload size bounds and rate limits
-  - [ ] Duplicate-event handling
+  - [X] Payload size bounds and rate limits (built in 2.9, D16)
+  - [X] Duplicate-event handling (`Idempotency-Key`, D16; duplicates are recorded as such in the delivery log, D30)
 - [ ] 4.4 Rich messages and actions
   - [ ] Versioned declarative block schema rendered with native components
   - [ ] No arbitrary remote HTML
@@ -360,10 +360,10 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [ ] Authorization recheck and size, time, and redirect bounds
   - [ ] Cached previews that respect conversation access
 - [ ] 4.8 Administration UI
-  - [ ] Install and configure integrations
+  - [ ] Install and configure integrations (incoming webhooks: workspace Integrations dialog with add, list, and health, D30; provider installs still to do)
   - [ ] Manage channel subscriptions
-  - [ ] View deliveries and failures, and retry
-  - [ ] Rotate and revoke credentials
+  - [ ] View deliveries and failures, and retry (incoming webhooks: delivery log and recent failures, D30; there is nothing to retry for them because Lazy keeps no payload; retry comes with the job system)
+  - [ ] Rotate and revoke credentials (incoming webhooks: new address and delete, D30; provider credentials still to do)
 - [ ] 4.9 Tests
   - [ ] Duplicate provider events
   - [ ] Permission changes and credential revocation

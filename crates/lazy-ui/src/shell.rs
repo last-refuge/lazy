@@ -26,9 +26,9 @@ use crate::composer::{Composer, ComposerEvent};
 use crate::dialogs::{
     AddWorkspaceDialog, BrowseChannelsDialog, CreateChannelDialog, CustomEmojiDialog,
     DeleteMessageDialog, DetailsDialog, DetailsRequest, DiagnosticsDialog, GroupsDialog,
-    InvitationsDialog, PeopleDialog, PeopleMode, PreferencesDialog, ProfileDialog, ProfileRequest,
-    QuickSwitcherChoice, QuickSwitcherDialog, QuickSwitcherRun, ShortcutsDialog, UpdatesDialog,
-    WorkspaceSettingsDialog,
+    IntegrationsDialog, InvitationsDialog, PeopleDialog, PeopleMode, PreferencesDialog,
+    ProfileDialog, ProfileRequest, QuickSwitcherChoice, QuickSwitcherDialog, QuickSwitcherRun,
+    ShortcutsDialog, UpdatesDialog, WorkspaceSettingsDialog,
 };
 use crate::emoji_font;
 use crate::emoji_picker::{EmojiPicker, EmojiPickerEvent, PickerPrefs};
@@ -115,6 +115,8 @@ pub enum ShellDialog {
     WorkspaceSettings,
     /// The workspace's invitations (admins and owners).
     Invitations,
+    /// The workspace's integrations (admins and owners).
+    Integrations,
     /// Create a workspace or join one with a code (the rail's "+").
     AddWorkspace,
     /// Confirm deleting a message.
@@ -1010,6 +1012,7 @@ impl ShellView {
             PreferencesDialog => CommandId::Preferences,
             WorkspaceSettingsDialog => CommandId::WorkspaceSettings,
             InvitationsDialog => CommandId::InvitePeople,
+            IntegrationsDialog => CommandId::Integrations,
             GroupsDialog => CommandId::UserGroups,
             CustomEmojiDialog => CommandId::CustomEmoji,
             BrowseChannelsDialog => CommandId::BrowseChannels,
@@ -1063,6 +1066,7 @@ impl ShellView {
             CommandId::Preferences => self.open_preferences(window, cx),
             CommandId::WorkspaceSettings => self.open_workspace_settings(window, cx),
             CommandId::InvitePeople => self.open_invitations(window, cx),
+            CommandId::Integrations => self.open_integrations(window, cx),
             CommandId::UserGroups => self.open_groups(window, cx),
             CommandId::CustomEmoji => self.open_custom_emoji(window, cx),
             CommandId::ConversationDetails => {
@@ -1305,6 +1309,26 @@ impl ShellView {
         let model = self.model.clone();
         let dialog = cx.new(|cx| InvitationsDialog::new(model, window, cx));
         self.show(dialog, Vec::new(), window, cx);
+    }
+
+    /// Opens the workspace's integrations (admins and owners).
+    fn open_integrations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.model.read(cx).core().can_manage_workspace() {
+            return;
+        }
+        let model = self.model.clone();
+        let dialog = cx.new(|cx| IntegrationsDialog::new(model, window, cx));
+        self.show(dialog, Vec::new(), window, cx);
+    }
+
+    /// The integrations, while they are the dialog showing. For tests.
+    pub fn integrations_dialog(&self) -> Option<Entity<IntegrationsDialog>> {
+        self.overlay
+            .as_ref()?
+            .view
+            .clone()
+            .downcast::<IntegrationsDialog>()
+            .ok()
     }
 
     /// The workspace settings, while it is the dialog showing. For tests.
@@ -1711,6 +1735,7 @@ impl ShellView {
             ShellDialog::Profile(user) => self.open_profile(user, window, cx),
             ShellDialog::WorkspaceSettings => self.open_workspace_settings(window, cx),
             ShellDialog::Invitations => self.open_invitations(window, cx),
+            ShellDialog::Integrations => self.open_integrations(window, cx),
             ShellDialog::AddWorkspace => self.open_add_workspace(window, cx),
             ShellDialog::NewMessage => self.open_new_message(window, cx),
             ShellDialog::Groups => self.open_groups(window, cx),

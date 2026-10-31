@@ -1233,6 +1233,59 @@ impl Inner {
                     inner.emit(Input::ActionResult { kind, result }).await;
                 });
             }
+            Effect::LoadWorkspaceWebhooks { workspace } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::workspace_webhooks(workspace);
+                    let result = inner
+                        .retry_read(|| {
+                            inner
+                                .api
+                                .get::<lazy_protocol::WorkspaceWebhooksResponse>(&path)
+                        })
+                        .await
+                        .map(|response| ActionOutcome::WorkspaceWebhooks(response.webhooks));
+                    let kind = ActionKind::LoadWorkspaceWebhooks(workspace);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::LoadWebhookDeliveries { webhook } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::webhook_deliveries(webhook);
+                    let result = inner
+                        .retry_read(|| {
+                            inner
+                                .api
+                                .get::<lazy_protocol::WebhookDeliveriesResponse>(&path)
+                        })
+                        .await
+                        .map(|response| ActionOutcome::WebhookDeliveries(response.deliveries));
+                    let kind = ActionKind::LoadWebhookDeliveries(webhook);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::NewWebhookAddress { webhook } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: each answer holds a different address, and only the last one
+                    // works, so a repeat the person did not ask for would throw one away.
+                    let result = inner
+                        .api
+                        .post_empty::<lazy_protocol::CreatedWebhook>(&paths::webhook_address(
+                            webhook,
+                        ))
+                        .await
+                        .map(|created| {
+                            ActionOutcome::WebhookCreated(CreatedWebhook {
+                                webhook: created.webhook,
+                                url: SecretUrl::new(created.url),
+                            })
+                        });
+                    let kind = ActionKind::NewWebhookAddress(webhook);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
             Effect::PersistView(view) => {
                 if let Some(persistence) = self.persistence() {
                     persistence.queue_view(view);

@@ -684,3 +684,236 @@ fn a_bot_that_joins_is_flagged_from_the_start() {
     assert!(driver.core.members().iter().all(|u| u.id != b.id));
     let _ = seq(1);
 }
+
+// ----- The workspace's integrations (D30) -----
+
+fn summary(world: &World, webhook: &Webhook) -> lazy_protocol::WorkspaceWebhook {
+    let _ = world;
+    lazy_protocol::WorkspaceWebhook {
+        webhook: webhook.clone(),
+        channel_name: lazy_domain::ChannelName::parse("general").unwrap(),
+        last_delivery: None,
+        recent_failures: 0,
+    }
+}
+
+/// Loads `list` as the workspace's webhooks.
+fn load_workspace(driver: &mut Driver, world: &World, list: Vec<lazy_protocol::WorkspaceWebhook>) {
+    let workspace = world.workspace.id;
+    driver.send(Input::LoadWorkspaceWebhooks(workspace));
+    driver.send(answer(
+        ActionKind::LoadWorkspaceWebhooks(workspace),
+        Ok(ActionOutcome::WorkspaceWebhooks(list)),
+    ));
+}
+
+fn new_effects(driver: &Driver) -> Vec<Effect> {
+    driver
+        .effects
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Effect::LoadWorkspaceWebhooks { .. }
+                    | Effect::LoadWebhookDeliveries { .. }
+                    | Effect::NewWebhookAddress { .. }
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn only_admins_and_owners_see_the_workspace_integrations() {
+    let mut world = World::new();
+    world.role = WorkspaceRole::Member;
+    let mut driver = Driver::ready(&world);
+    let workspace = world.workspace.id;
+    assert!(!driver.core.can_manage_workspace_webhooks(workspace));
+    driver.send(Input::LoadWorkspaceWebhooks(workspace));
+    assert!(new_effects(&driver).is_empty(), "nothing is asked");
+    assert!(driver.core.workspace_webhooks(workspace).is_empty());
+
+    let (world, mut driver) = admin_world();
+    let workspace = world.workspace.id;
+    assert!(driver.core.can_manage_workspace_webhooks(workspace));
+    driver.send(Input::LoadWorkspaceWebhooks(workspace));
+    assert!(matches!(
+        new_effects(&driver).as_slice(),
+        [Effect::LoadWorkspaceWebhooks { workspace: w }] if *w == workspace
+    ));
+    assert_eq!(
+        driver
+            .core
+            .action(ActionKind::LoadWorkspaceWebhooks(workspace)),
+        &ActionState::InFlight
+    );
+}
+
+#[test]
+fn the_workspace_list_and_a_delivery_log_are_held_until_sign_out() {
+    let (world, mut driver) = admin_world();
+    let workspace = world.workspace.id;
+    let b = bot("Deploys");
+    let hook = webhook_for(&world, world.channel.id, "Deploys", &b);
+    load_workspace(&mut driver, &world, vec![summary(&world, &hook)]);
+    assert!(
+        driver
+            .changes
+            .contains(&Change::WorkspaceWebhooksChanged { workspace })
+    );
+    assert_eq!(driver.core.workspace_webhooks(workspace).len(), 1);
+
+    assert!(
+        driver.core.webhook_deliveries(hook.id).is_none(),
+        "not loaded yet"
+    );
+    driver.send(Input::LoadWebhookDeliveries(hook.id));
+    assert!(
+        new_effects(&driver)
+            .iter()
+            .any(|e| matches!(e, Effect::LoadWebhookDeliveries { webhook } if *webhook == hook.id))
+    );
+    let entry = lazy_protocol::WebhookDelivery {
+        received_at: Timestamp::now(),
+        outcome: lazy_protocol::WebhookDeliveryOutcome::Posted,
+        message_id: Some(lazy_domain::MessageId::generate()),
+        body_bytes: 20,
+        idempotency_key: false,
+    };
+    driver.send(answer(
+        ActionKind::LoadWebhookDeliveries(hook.id),
+        Ok(ActionOutcome::WebhookDeliveries(vec![entry.clone()])),
+    ));
+    assert!(
+        driver
+            .changes
+            .contains(&Change::WebhookDeliveriesChanged { webhook: hook.id })
+    );
+    assert_eq!(driver.core.webhook_deliveries(hook.id), Some(&[entry][..]));
+
+    driver.send(Input::SignOut);
+    assert!(driver.core.workspace_webhooks(workspace).is_empty());
+    assert!(driver.core.webhook_deliveries(hook.id).is_none());
+}
+
+#[test]
+fn a_webhook_in_a_channel_the_admin_has_not_joined_can_be_managed_from_the_workspace_list() {
+    let (world, mut driver) = admin_world();
+    let workspace = world.workspace.id;
+    let b = bot("Elsewhere");
+    // A public channel this client has never heard of.
+    let hook = webhook_for(&world, ConversationId::generate(), "Elsewhere", &b);
+    load_workspace(&mut driver, &world, vec![summary(&world, &hook)]);
+
+    driver.send(Input::NewWebhookAddress(hook.id));
+    assert!(
+        new_effects(&driver)
+            .iter()
+            .any(|e| matches!(e, Effect::NewWebhookAddress { webhook } if *webhook == hook.id))
+    );
+    driver.send(answer(
+        ActionKind::NewWebhookAddress(hook.id),
+        Ok(ActionOutcome::WebhookCreated(created(&hook))),
+    ));
+    assert_eq!(
+        driver.core.created_webhook().map(|c| c.webhook.id),
+        Some(hook.id),
+        "the new address is shown once"
+    );
+    assert_eq!(
+        driver.core.action(ActionKind::NewWebhookAddress(hook.id)),
+        &ActionState::Idle
+    );
+
+    driver.send(Input::DeleteWebhook(hook.id));
+    assert!(
+        webhook_effects(&driver)
+            .iter()
+            .any(|e| matches!(e, Effect::DeleteWebhook { webhook } if *webhook == hook.id))
+    );
+    driver.send(answer(
+        ActionKind::DeleteWebhook(hook.id),
+        Ok(ActionOutcome::Done),
+    ));
+    assert!(driver.core.workspace_webhooks(workspace).is_empty());
+    assert!(
+        driver.core.created_webhook().is_none(),
+        "the address of a deleted webhook is gone too"
+    );
+}
+
+#[test]
+fn a_new_address_whose_answer_is_lost_is_not_asked_for_again_by_itself() {
+    let (world, mut driver) = admin_world();
+    let b = bot("Deploys");
+    let hook = webhook_for(&world, world.channel.id, "Deploys", &b);
+    load_workspace(&mut driver, &world, vec![summary(&world, &hook)]);
+    driver.send(Input::NewWebhookAddress(hook.id));
+    driver.effects.clear();
+    driver.send(answer(ActionKind::NewWebhookAddress(hook.id), Err(lost())));
+    assert!(new_effects(&driver).is_empty(), "never repeated by itself");
+    let text = failed_text(&driver, ActionKind::NewWebhookAddress(hook.id));
+    assert!(
+        text.contains("isn't known") && text.contains("again"),
+        "{text}"
+    );
+    assert!(driver.core.created_webhook().is_none());
+}
+
+#[test]
+fn a_new_address_for_a_webhook_someone_deleted_takes_it_off_the_list() {
+    let (world, mut driver) = admin_world();
+    let workspace = world.workspace.id;
+    let b = bot("Deploys");
+    let hook = webhook_for(&world, world.channel.id, "Deploys", &b);
+    load_workspace(&mut driver, &world, vec![summary(&world, &hook)]);
+    driver.send(Input::NewWebhookAddress(hook.id));
+    driver.send(answer(
+        ActionKind::NewWebhookAddress(hook.id),
+        Err(rejected(ErrorCode::NotFound)),
+    ));
+    assert!(driver.core.workspace_webhooks(workspace).is_empty());
+    assert!(
+        failed_text(&driver, ActionKind::NewWebhookAddress(hook.id)).contains("no longer exists")
+    );
+}
+
+#[test]
+fn creating_a_webhook_refreshes_a_loaded_workspace_list() {
+    let (world, mut driver) = admin_world();
+    let general = world.channel.id;
+    load_workspace(&mut driver, &world, vec![]);
+    load(&mut driver, general, vec![]);
+    driver.effects.clear();
+    let b = bot("Deploys");
+    let hook = webhook_for(&world, general, "Deploys", &b);
+    driver.send(create_input(general, "Deploys"));
+    driver.send(answer(
+        ActionKind::CreateWebhook(general),
+        Ok(ActionOutcome::WebhookCreated(created(&hook))),
+    ));
+    assert!(new_effects(&driver).iter().any(
+        |e| matches!(e, Effect::LoadWorkspaceWebhooks { workspace } if *workspace == world.workspace.id)
+    ));
+}
+
+#[test]
+fn the_new_requests_print_no_address() {
+    let (world, mut driver) = admin_world();
+    let b = bot("Deploys");
+    let hook = webhook_for(&world, world.channel.id, "Deploys", &b);
+    load_workspace(&mut driver, &world, vec![summary(&world, &hook)]);
+    let out = driver.send(answer(
+        ActionKind::NewWebhookAddress(hook.id),
+        Ok(ActionOutcome::WebhookCreated(created(&hook))),
+    ));
+    for text in [
+        format!("{out:?}"),
+        format!("{:?}", Input::NewWebhookAddress(hook.id)),
+        format!("{:?}", Effect::NewWebhookAddress { webhook: hook.id }),
+        format!("{:?}", driver.core.created_webhook()),
+    ] {
+        assert!(!text.contains("s3cr3t"), "{text}");
+    }
+}

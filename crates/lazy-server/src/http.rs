@@ -38,7 +38,8 @@ use lazy_protocol::{
     SetConversationNotificationPrefsRequest, SetDeactivatedRequest, SetFavoriteRequest,
     SetReactionRequest, SetRoleRequest, SetSavedRequest, SetStatusRequest, SetThreadFollowRequest,
     StatusResponse, ThreadStateResponse, UpdateConversationRequest, UpdateGroupRequest,
-    UpdateWorkspaceRequest, UserStateResponse, WebhooksResponse, WorkspaceResponse,
+    UpdateWorkspaceRequest, UserStateResponse, WebhookDeliveriesResponse, WebhookDeliveryOutcome,
+    WebhooksResponse, WorkspaceResponse, WorkspaceWebhooksResponse,
 };
 use serde::de::DeserializeOwned;
 use tower_http::timeout::TimeoutLayer;
@@ -101,6 +102,12 @@ pub fn router(state: AppState) -> Router {
             post(create_webhook).get(list_webhooks),
         )
         .route(paths::WEBHOOK_ROUTE, delete(delete_webhook))
+        .route(
+            paths::WORKSPACE_WEBHOOKS_ROUTE,
+            get(list_workspace_webhooks),
+        )
+        .route(paths::WEBHOOK_DELIVERIES_ROUTE, get(webhook_deliveries))
+        .route(paths::WEBHOOK_ADDRESS_ROUTE, post(new_webhook_address))
         .route(paths::HOOK_ROUTE, post(incoming_webhook))
         .route(
             paths::EMOJI_ROUTE,
@@ -342,6 +349,34 @@ async fn delete_webhook(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn list_workspace_webhooks(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(workspace_id): ApiPath<WorkspaceId>,
+) -> Result<Json<WorkspaceWebhooksResponse>, AppError> {
+    let webhooks = webhooks::list_workspace(&state.pool, principal.user_id, workspace_id).await?;
+    Ok(Json(WorkspaceWebhooksResponse { webhooks }))
+}
+
+async fn webhook_deliveries(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(webhook_id): ApiPath<WebhookId>,
+) -> Result<Json<WebhookDeliveriesResponse>, AppError> {
+    let deliveries = webhooks::deliveries(&state.pool, principal.user_id, webhook_id).await?;
+    Ok(Json(WebhookDeliveriesResponse { deliveries }))
+}
+
+async fn new_webhook_address(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(webhook_id): ApiPath<WebhookId>,
+) -> Result<Json<CreatedWebhook>, AppError> {
+    webhooks::new_address(&state, principal.user_id, webhook_id)
+        .await
+        .map(Json)
+}
+
 /// Why a delivery was not made: a refusal like any other, or the webhook is posting too fast.
 enum HookFailure {
     Refused(AppError),
@@ -378,6 +413,10 @@ impl IntoResponse for HookFailure {
 /// `POST /hooks/{id}/{secret}`: public, no `Authorization`; the address is the credential. The
 /// address is checked first (a wrong one is `not_found` whatever else is wrong with the request),
 /// then the webhook's rate, then the body, which is read only once it is known to be wanted.
+///
+/// Every request whose address was right goes into the webhook's delivery log
+/// ([`webhooks::record`]) with what became of it, except that a run of rate-limited requests is
+/// one entry and a webhook revoked during the request has nothing to record under.
 async fn incoming_webhook(
     State(state): State<AppState>,
     path: Result<Path<(String, String)>, PathRejection>,
@@ -390,12 +429,59 @@ async fn incoming_webhook(
         Err(_) => (String::new(), String::new()),
     };
     let webhook = webhooks::authenticate(&state.pool, &id, &secret).await?;
-    state
-        .integrations
-        .limiter
-        .take(webhook.id)
-        .map_err(HookFailure::RateLimited)?;
+    let has_key = headers.contains_key("idempotency-key");
+    if let Err(refused) = state.integrations.limiter.take(webhook.id) {
+        if refused.first {
+            let entry = webhooks::DeliveryRecord {
+                outcome: WebhookDeliveryOutcome::RateLimited,
+                message_id: None,
+                body_bytes: 0,
+                idempotency_key: has_key,
+            };
+            webhooks::record(&state.pool, webhook.id, entry).await;
+        }
+        return Err(HookFailure::RateLimited(refused.wait));
+    }
 
+    let mut body_bytes = 0;
+    let result = receive(&state, webhook, &headers, body, &mut body_bytes).await;
+    let (outcome, message_id) = match &result {
+        Ok(delivered) if delivered.duplicate => (
+            Some(WebhookDeliveryOutcome::Duplicate),
+            Some(delivered.message_id),
+        ),
+        Ok(delivered) => (
+            Some(WebhookDeliveryOutcome::Posted),
+            Some(delivered.message_id),
+        ),
+        Err(undelivered) => (undelivered.outcome, None),
+    };
+    if let Some(outcome) = outcome {
+        let entry = webhooks::DeliveryRecord {
+            outcome,
+            message_id,
+            body_bytes,
+            idempotency_key: has_key,
+        };
+        webhooks::record(&state.pool, webhook.id, entry).await;
+    }
+    match result {
+        Ok(delivered) => Ok(Json(IncomingWebhookResponse {
+            message_id: delivered.message_id,
+        })),
+        Err(undelivered) => Err(HookFailure::Refused(undelivered.error)),
+    }
+}
+
+/// The part of a delivery after the address and the rate: the key, the body, and the post.
+/// `body_bytes` is set to the size of the body once it is known.
+async fn receive(
+    state: &AppState,
+    webhook: webhooks::ActiveWebhook,
+    headers: &HeaderMap,
+    body: axum::body::Body,
+    body_bytes: &mut usize,
+) -> Result<webhooks::Delivered, webhooks::Undelivered> {
     let key = match headers.get("idempotency-key") {
         Some(value) => Some(webhooks::check_idempotency_key(value.as_bytes())?),
         None => None,
@@ -410,17 +496,20 @@ async fn incoming_webhook(
         .get(axum::http::header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<usize>().ok());
-    if declared.is_some_and(|length| length > MAX_WEBHOOK_BODY_BYTES) {
+    if let Some(length) = declared.filter(|length| *length > MAX_WEBHOOK_BODY_BYTES) {
+        *body_bytes = length;
         return Err(too_large().into());
     }
     let bytes = axum::body::to_bytes(body, MAX_WEBHOOK_BODY_BYTES)
         .await
-        .map_err(|_| too_large())?;
+        .map_err(|_| {
+            *body_bytes = MAX_WEBHOOK_BODY_BYTES + 1;
+            too_large()
+        })?;
+    *body_bytes = bytes.len();
     let request: IncomingWebhookRequest = serde_json::from_slice(&bytes)
         .map_err(|_| AppError::invalid("the body must be JSON like {\"text\": \"...\"}"))?;
-
-    let message_id = webhooks::deliver(&state.pool, webhook, key, &request.text).await?;
-    Ok(Json(IncomingWebhookResponse { message_id }))
+    webhooks::deliver(&state.pool, webhook, key, &request.text).await
 }
 
 async fn upload_attachment(

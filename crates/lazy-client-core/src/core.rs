@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use lazy_domain::{
     AttachmentId, ConversationId, DisplayName, DocumentError, EventSeq, MessageDocument, MessageId,
-    OperationId, Permalink, ReactionEmoji, Timestamp, UserId, Username, WorkspaceId,
+    OperationId, Permalink, ReactionEmoji, Timestamp, UserId, Username, WebhookId, WorkspaceId,
     workspace::{canonical_invite_code, invite_code_is_wellformed},
 };
 use lazy_protocol::{
@@ -241,6 +241,10 @@ pub struct ClientCore {
     // ----- Webhooks and what the person was looking at -----
     /// The webhooks of each conversation, as last loaded.
     webhook_lists: HashMap<ConversationId, Vec<lazy_protocol::Webhook>>,
+    /// The webhooks of each workspace, with how each is doing, as last loaded.
+    workspace_webhooks: HashMap<WorkspaceId, Vec<lazy_protocol::WorkspaceWebhook>>,
+    /// The delivery log of each webhook looked at, as last loaded.
+    webhook_deliveries: HashMap<WebhookId, Vec<lazy_protocol::WebhookDelivery>>,
     /// The webhook just created, with its one-time address. Never cached or saved.
     created_webhook: Option<crate::model::CreatedWebhook>,
     /// Where the caret and selection of each conversation's draft were, as reported.
@@ -379,6 +383,8 @@ impl ClientCore {
             held_text: Vec::new(),
             next_replies_fetch: 0,
             webhook_lists: HashMap::new(),
+            workspace_webhooks: HashMap::new(),
+            webhook_deliveries: HashMap::new(),
             created_webhook: None,
             draft_selections: HashMap::new(),
             thread_selections: HashMap::new(),
@@ -638,6 +644,13 @@ impl ClientCore {
             }
             Input::DeleteWebhook(webhook) => self.delete_webhook(webhook, &mut out),
             Input::LoadWebhooks(conversation) => self.load_webhooks(conversation, &mut out),
+            Input::LoadWorkspaceWebhooks(workspace) => {
+                self.load_workspace_webhooks(workspace, &mut out)
+            }
+            Input::LoadWebhookDeliveries(webhook) => {
+                self.load_webhook_deliveries(webhook, &mut out)
+            }
+            Input::NewWebhookAddress(webhook) => self.new_webhook_address(webhook, &mut out),
             Input::DismissCreatedWebhook => self.dismiss_created_webhook(&mut out),
             Input::SetDraftSelection {
                 conversation,

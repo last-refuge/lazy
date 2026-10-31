@@ -13,6 +13,7 @@ const ALLOWED_FIELDS: &[&str] = &[
     "general_id",
     "request_id",
     "user_id",
+    "webhook_id",
     // counters, sizes, durations
     "seq",
     "deleted",
