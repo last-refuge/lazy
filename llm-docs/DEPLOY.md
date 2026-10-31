@@ -44,7 +44,7 @@ cp .env.example .env
 # fill in POSTGRES_PASSWORD and LAZY_SETUP_CODE:  openssl rand -hex 24   (and set LAZY_PUBLIC_URL)
 docker compose up -d --build
 docker compose ps                    # both healthy
-curl -s localhost:8080/healthz       # {"status":"ok","protocol_version":...}
+curl -s localhost:8080/healthz       # {"protocol_version":...}
 deploy/smoke-test.sh http://localhost:8080 "$(grep ^LAZY_SETUP_CODE .env | cut -d= -f2)"   # optional; creates a throwaway owner, so only on a fresh server
 ```
 

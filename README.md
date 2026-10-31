@@ -61,7 +61,7 @@ Start it. The first build compiles the server and takes a few minutes:
 
 ```sh
 docker compose up -d --build
-curl -s localhost:8080/healthz          # {"status":"ok","protocol_version":...}
+curl -s localhost:8080/healthz          # {"protocol_version":...}
 ```
 
 > [!IMPORTANT]
