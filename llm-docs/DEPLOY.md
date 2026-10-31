@@ -3,11 +3,13 @@
 The server is one container plus a Postgres. This page covers Docker Compose on any machine, and
 Coolify. For the options in detail see `SERVER.md`; for what to try once it is up see `DOGFOOD.md`.
 
-**Status.** The image's build, the compose files, and the smoke test were written to run in CI
-(`.github/workflows/server.yml`, started by hand) and have been checked here only in pieces: the
-server was built from exactly the files the image contains, and the smoke test script was run
-against a locally started server. A real image build and a real Coolify deployment have not been
-exercised by the author yet. Treat the first deployment as the test of this page, and fix the page.
+**Status.** The `server` workflow (`.github/workflows/server.yml`, started by hand) has passed on
+GitHub's runners: it builds the image, starts the compose stack on a fresh database, runs the smoke
+test from outside, and checks that the owner survives a restart of the container and of the whole
+stack (run 41155102683, 2026-10-30; see `VERIFICATION.md`). That was plain `http://localhost` on
+Linux. Not yet exercised: pushing the image to `ghcr.io`, a real Coolify deployment, an `https://`
+address behind a proxy, and a deployment on anyone's own machine. Treat the first real deployment
+as the test of this page, and fix the page.
 
 ## What runs and what to keep
 

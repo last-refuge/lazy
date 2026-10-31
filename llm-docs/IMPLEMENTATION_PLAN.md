@@ -301,7 +301,7 @@ Goal: dogfood users can do normal work without developer assistance.
 - [ ] 3.8 Dogfooding
   - [X] Structured logging with no credentials or message content
   - [X] Dogfood guide (`llm-docs/DOGFOOD.md`) and issue template (`.github/ISSUE_TEMPLATE/dogfood.md`)
-  - [ ] Server container, Docker Compose, and Coolify deployment (written: Dockerfile, compose files, smoke test, `llm-docs/DEPLOY.md`; the smoke test passed against a locally started server, but the image build, the compose stack, and Coolify have never run)
+  - [ ] Server container, Docker Compose, and Coolify deployment (written: Dockerfile, compose files, smoke test, `llm-docs/DEPLOY.md`; the `server` workflow has passed: image build, compose stack on a fresh database, smoke test, and data kept across restarts, run 41155102683; still never run: Coolify itself and pushing to ghcr.io)
   - [ ] Client installers for Linux, macOS, and Windows from the manual `release` workflow (written: `.deb`, tarball, `.dmg`, Windows installer and zip, `llm-docs/RELEASE.md`; the Linux packages were assembled and inspected here, the macOS and Windows builds and the workflow have never run)
   - [X] Choose the server in the app, so installed clients need no environment variable (tested in CI on Linux, `ci` run on `1f99b8f`; not tried on an installed app)
   - [ ] First run: address and invitation code, then a short, branded account creation (plan in `llm-docs/ONBOARDING.md`, D29; the invitee's and the owner's paths are written and tested in CI on Linux; the first walkthrough on real machines is still to do)
