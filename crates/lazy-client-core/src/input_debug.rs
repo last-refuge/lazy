@@ -196,6 +196,13 @@ impl fmt::Debug for Input {
                 .finish(),
             Input::DeleteWebhook(v0) => f.debug_tuple("DeleteWebhook").field(v0).finish(),
             Input::LoadWebhooks(v0) => f.debug_tuple("LoadWebhooks").field(v0).finish(),
+            Input::LoadWorkspaceWebhooks(v0) => {
+                f.debug_tuple("LoadWorkspaceWebhooks").field(v0).finish()
+            }
+            Input::LoadWebhookDeliveries(v0) => {
+                f.debug_tuple("LoadWebhookDeliveries").field(v0).finish()
+            }
+            Input::NewWebhookAddress(v0) => f.debug_tuple("NewWebhookAddress").field(v0).finish(),
             Input::DismissCreatedWebhook => f.write_str("DismissCreatedWebhook"),
             Input::SetDraftSelection {
                 conversation,

@@ -40,6 +40,8 @@ impl WorkspaceRole {
 pub const MAX_WEBHOOKS_PER_CONVERSATION: usize = 10;
 /// Largest body an incoming webhook accepts, in bytes.
 pub const MAX_WEBHOOK_BODY_BYTES: usize = 65_536;
+/// How many of a webhook's most recent deliveries the server keeps for its delivery log.
+pub const MAX_WEBHOOK_DELIVERIES_KEPT: usize = 100;
 
 /// Most user groups in one workspace.
 pub const MAX_GROUPS_PER_WORKSPACE: usize = 100;

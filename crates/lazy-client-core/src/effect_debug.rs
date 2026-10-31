@@ -191,6 +191,18 @@ impl fmt::Debug for Effect {
                 .debug_struct("LoadWebhooks")
                 .field("conversation", conversation)
                 .finish(),
+            Effect::LoadWorkspaceWebhooks { workspace } => f
+                .debug_struct("LoadWorkspaceWebhooks")
+                .field("workspace", workspace)
+                .finish(),
+            Effect::LoadWebhookDeliveries { webhook } => f
+                .debug_struct("LoadWebhookDeliveries")
+                .field("webhook", webhook)
+                .finish(),
+            Effect::NewWebhookAddress { webhook } => f
+                .debug_struct("NewWebhookAddress")
+                .field("webhook", webhook)
+                .finish(),
             Effect::PersistView(v0) => f.debug_tuple("PersistView").field(v0).finish(),
             Effect::PersistThreadDrafts(v0) => f
                 .debug_tuple("PersistThreadDrafts")

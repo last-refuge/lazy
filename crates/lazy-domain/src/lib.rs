@@ -21,7 +21,8 @@ pub mod workspace;
 
 pub use authz::{
     ChannelAccess, ChannelVisibility, MAX_GROUP_MEMBERS, MAX_GROUPS_PER_WORKSPACE,
-    MAX_WEBHOOK_BODY_BYTES, MAX_WEBHOOKS_PER_CONVERSATION, WorkspaceRole,
+    MAX_WEBHOOK_BODY_BYTES, MAX_WEBHOOK_DELIVERIES_KEPT, MAX_WEBHOOKS_PER_CONVERSATION,
+    WorkspaceRole,
 };
 pub use conversation::{ConversationFacts, ConversationKind, ParticipantError, ParticipantSet};
 pub use document::{Block, DocumentError, Inline, Marks, MessageDocument};

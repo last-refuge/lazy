@@ -99,6 +99,14 @@ pub mod paths {
     pub const WEBHOOKS_ROUTE: &str = "/v1/conversations/{conversation_id}/webhooks";
     /// `DELETE` removes an incoming webhook.
     pub const WEBHOOK_ROUTE: &str = "/v1/webhooks/{webhook_id}";
+    /// `GET` lists the incoming webhooks of every channel in the workspace the caller can read,
+    /// each with its latest delivery. Admins and owners only.
+    pub const WORKSPACE_WEBHOOKS_ROUTE: &str = "/v1/workspaces/{workspace_id}/webhooks";
+    /// `GET` lists a webhook's most recent deliveries, newest first.
+    pub const WEBHOOK_DELIVERIES_ROUTE: &str = "/v1/webhooks/{webhook_id}/deliveries";
+    /// `POST` gives a webhook a new secret: the old address stops working at once and the new one
+    /// is shown once.
+    pub const WEBHOOK_ADDRESS_ROUTE: &str = "/v1/webhooks/{webhook_id}/address";
     /// `POST` delivers a message through an incoming webhook. Public: the secret in the path is
     /// the only credential, so it carries no `Authorization` header.
     pub const HOOK_ROUTE: &str = "/hooks/{webhook_id}/{secret}";
@@ -238,6 +246,18 @@ pub mod paths {
 
     pub fn webhook(webhook_id: WebhookId) -> String {
         format!("/v1/webhooks/{webhook_id}")
+    }
+
+    pub fn workspace_webhooks(workspace_id: WorkspaceId) -> String {
+        format!("/v1/workspaces/{workspace_id}/webhooks")
+    }
+
+    pub fn webhook_deliveries(webhook_id: WebhookId) -> String {
+        format!("/v1/webhooks/{webhook_id}/deliveries")
+    }
+
+    pub fn webhook_address(webhook_id: WebhookId) -> String {
+        format!("/v1/webhooks/{webhook_id}/address")
     }
 
     pub fn hook(webhook_id: WebhookId, secret: &str) -> String {
@@ -946,7 +966,10 @@ pub struct CreateWebhookRequest {
     pub name: DisplayName,
 }
 
-/// Response of creating a webhook: the only time its address is shown.
+/// Response of creating a webhook, and of `POST /v1/webhooks/{id}/address` (a new secret, with
+/// no body): the only time an address is shown. A new secret makes the old address `not_found` at
+/// once; the bot, its channel, and its delivery log stay. Like creating, it carries no operation
+/// id: if the answer is lost, ask for a new address again (the one lost is already dead).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreatedWebhook {
     pub webhook: Webhook,
@@ -959,6 +982,84 @@ pub struct CreatedWebhook {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebhooksResponse {
     pub webhooks: Vec<Webhook>,
+}
+
+/// What became of one request to a webhook's address, as its delivery log records it.
+///
+/// Only requests whose address was right are recorded: a wrong address belongs to no webhook. The
+/// log holds no content (no text, no `Idempotency-Key`), only what happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebhookDeliveryOutcome {
+    /// A message was posted.
+    Posted,
+    /// The `Idempotency-Key` had been used before: the earlier message was answered again and
+    /// nothing new was posted.
+    Duplicate,
+    /// The webhook was posting too fast (`rate_limited`). Recorded once per run of refusals, not
+    /// once per refused request.
+    RateLimited,
+    /// The body was over [`lazy_domain::MAX_WEBHOOK_BODY_BYTES`] (`payload_too_large`).
+    TooLarge,
+    /// The request could not be read: not JSON like `{"text": "..."}`, empty text, text that
+    /// cannot be sent, or a malformed `Idempotency-Key` (`invalid_request`).
+    Invalid,
+    /// The channel is archived (`conflict`).
+    Archived,
+    /// The server failed while posting (`internal`); the sender may retry.
+    Failed,
+    /// An outcome this client does not know (sent by a newer server).
+    #[serde(other)]
+    Unknown,
+}
+
+impl WebhookDeliveryOutcome {
+    /// Whether a message is in the channel because of this request.
+    pub fn posted(self) -> bool {
+        matches!(self, Self::Posted | Self::Duplicate)
+    }
+}
+
+/// One entry of a webhook's delivery log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebhookDelivery {
+    pub received_at: Timestamp,
+    pub outcome: WebhookDeliveryOutcome,
+    /// The message posted (or answered again, for a duplicate).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<MessageId>,
+    /// The size of the body in bytes, as far as it was read (0 when it was refused before reading).
+    pub body_bytes: u32,
+    /// Whether the request carried an `Idempotency-Key`.
+    pub idempotency_key: bool,
+}
+
+/// Response of `GET /v1/webhooks/{id}/deliveries`: the newest first, at most
+/// [`lazy_domain::MAX_WEBHOOK_DELIVERIES_KEPT`] (the server keeps no more). Admins and owners who
+/// can read the webhook's channel; a webhook that was deleted keeps its log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebhookDeliveriesResponse {
+    pub deliveries: Vec<WebhookDelivery>,
+}
+
+/// A webhook in the workspace's list of integrations, with how it is doing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceWebhook {
+    pub webhook: Webhook,
+    /// The name of the webhook's channel, which the caller can read but may not have joined.
+    pub channel_name: ChannelName,
+    /// The most recent entry of its delivery log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_delivery: Option<WebhookDelivery>,
+    /// How many of its logged requests in the last 24 hours did not post a message.
+    pub recent_failures: u32,
+}
+
+/// Response of `GET /v1/workspaces/{id}/webhooks`: every webhook in use in a channel the caller
+/// can read, oldest first. Admins and owners only (`forbidden`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceWebhooksResponse {
+    pub webhooks: Vec<WorkspaceWebhook>,
 }
 
 /// Body of `POST /hooks/{id}/{secret}`. `text` is composer source: formatting and `:shortcode:`
@@ -1819,6 +1920,30 @@ mod tests {
         assert!(json.contains(r#""is_bot":true"#));
         assert_eq!(serde_json::from_str::<User>(&json).unwrap(), bot);
         assert!(serde_json::from_str::<CreateWebhookRequest>(r#"{"name":""}"#).is_err());
+        let workspace = WorkspaceId::generate();
+        assert_eq!(
+            paths::workspace_webhooks(workspace),
+            paths::WORKSPACE_WEBHOOKS_ROUTE.replace("{workspace_id}", &workspace.to_string())
+        );
+        assert_eq!(
+            paths::webhook_deliveries(webhook),
+            paths::WEBHOOK_DELIVERIES_ROUTE.replace("{webhook_id}", &webhook.to_string())
+        );
+        assert_eq!(
+            paths::webhook_address(webhook),
+            paths::WEBHOOK_ADDRESS_ROUTE.replace("{webhook_id}", &webhook.to_string())
+        );
+        // Outcomes are snake_case, and one a newer server adds is read as `Unknown`.
+        assert_eq!(
+            serde_json::to_string(&WebhookDeliveryOutcome::RateLimited).unwrap(),
+            r#""rate_limited""#
+        );
+        assert_eq!(
+            serde_json::from_str::<WebhookDeliveryOutcome>(r#""bounced""#).unwrap(),
+            WebhookDeliveryOutcome::Unknown
+        );
+        assert!(WebhookDeliveryOutcome::Duplicate.posted());
+        assert!(!WebhookDeliveryOutcome::Archived.posted());
         assert!(
             serde_json::from_str::<IncomingWebhookRequest>(r#"{"text":"deploy done"}"#).is_ok()
         );

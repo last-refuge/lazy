@@ -564,6 +564,7 @@ struct Things {
     emoji: lazy_domain::EmojiId,
     group: lazy_domain::GroupId,
     invitation: InvitationId,
+    webhook: lazy_domain::WebhookId,
 }
 
 /// Every family of endpoint, asked by `who`. Each is something a workspace member could do or read;
@@ -810,6 +811,42 @@ async fn ask_everything(app: &App, who: &Account, things: &Things, peer: &Accoun
         app.list_webhooks_raw(who, c).await,
     )
     .await;
+    answer(
+        &mut out,
+        "workspace webhooks",
+        app.call(
+            reqwest::Method::GET,
+            &paths::workspace_webhooks(ws),
+            who,
+            None,
+        )
+        .await,
+    )
+    .await;
+    answer(
+        &mut out,
+        "webhook deliveries",
+        app.call(
+            reqwest::Method::GET,
+            &paths::webhook_deliveries(things.webhook),
+            who,
+            None,
+        )
+        .await,
+    )
+    .await;
+    answer(
+        &mut out,
+        "new webhook address",
+        app.call(
+            reqwest::Method::POST,
+            &paths::webhook_address(things.webhook),
+            who,
+            None,
+        )
+        .await,
+    )
+    .await;
     // Administration.
     answer(
         &mut out,
@@ -899,6 +936,11 @@ async fn a_deactivated_person_gets_what_a_stranger_gets_from_every_family_of_end
         .await;
     let group = app.create_group(&w.owner, "team", &[&w.bob]).await;
     let invitation = app.create_invitation(&w.owner, json!({})).await.invitation;
+    let webhook = app
+        .create_webhook(&w.owner, app.general, "Watched")
+        .await
+        .webhook
+        .id;
     let things = Things {
         conversation: app.general,
         private: private.id,
@@ -909,6 +951,7 @@ async fn a_deactivated_person_gets_what_a_stranger_gets_from_every_family_of_end
         emoji: emoji.id,
         group: group.id,
         invitation: invitation.id,
+        webhook,
     };
     // Before: Dave, a member, gets answers a stranger does not (so the comparison means something).
     let active = ask_everything(app, &w.dave, &things, &w.carol).await;
