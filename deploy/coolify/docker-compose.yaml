@@ -20,7 +20,9 @@ services:
 
   lazy:
     build:
-      context: ../..
+      # Coolify runs compose from the base directory ("/", the repository root), and relative paths
+      # resolve from there, not from this file's folder.
+      context: .
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:

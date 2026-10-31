@@ -80,7 +80,8 @@ Based on Coolify's documented conventions for Docker Compose applications (the `
 1. **New Resource**, choose the repository (public: `https://github.com/last-refuge/lazy`, or your
    fork or private copy with a deploy key), branch `main`.
 2. **Build Pack: Docker Compose.** Base directory `/`, Docker Compose location
-   `/deploy/coolify/docker-compose.yaml`.
+   `/deploy/coolify/docker-compose.yaml`. Keep the base directory `/`: Coolify resolves the compose
+   file's relative paths from it, and the file's build context `.` is the repository root only then.
 3. Coolify reads the file and shows the `lazy` service. Set its **domain** (it proposes one; use
    your own, for example `https://chat.example.com`). HTTPS certificates and the proxy's WebSocket
    support are Coolify's; the file routes the domain to port 8080.
