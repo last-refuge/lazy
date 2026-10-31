@@ -14,9 +14,9 @@ guide: please report it.
   KeePassXC) to keep your sign-in. Desktop notifications work on Linux only so far.
 - **A server.** One person runs it, on a machine everyone can reach, with Docker Compose or Coolify
   (`DEPLOY.md`); it must be on HTTPS if it is reachable from the internet. They give you its address.
-  On the client's sign-in screen, choose that address under **Server** (it is remembered).
+  Lazy's first screen asks for it (it is remembered).
 - **An account.** The person who set up the server creates the owner account first, with the server's
-  setup code typed into the **Invitation or setup code** field. Everyone else joins with an
+  setup code typed into the **Invitation code** field of the first screen. Everyone else joins with an
   **invitation code**: the owner opens **Invite people…** under **Menu**, **Workspace**, creates an
   invitation (an hour to 30 days, one use or many), and sends the code, which is shown once.
 

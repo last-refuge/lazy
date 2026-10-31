@@ -9,7 +9,7 @@
 //! or the new one. Loading never silently discards data: a file that cannot be read is renamed
 //! aside and reported, and a file written by a newer version is left untouched.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -115,7 +115,7 @@ pub(crate) fn write_atomic(
 
 #[cfg(unix)]
 fn sync_dir(dir: &Path) -> io::Result<()> {
-    File::open(dir)?.sync_all()
+    fs::File::open(dir)?.sync_all()
 }
 
 #[cfg(not(unix))]

@@ -41,7 +41,8 @@ Install for everyone:   sudo ./install.sh --system
 Remove again:           ./install.sh --uninstall   (add --system if you installed that way)
 
 Lazy needs a Vulkan driver, a Secret Service keyring (for example GNOME Keyring or KWallet) to keep
-your sign-in, and X11 or Wayland. Choose your server on the sign-in screen.
+your sign-in, and X11 or Wayland. Lazy's first screen asks for your server's address and an
+invitation code.
 TXT
 tar -C "$WORK" -czf "$OUT/$NAME.tar.gz" "$NAME"
 echo "wrote $OUT/$NAME.tar.gz"
@@ -82,7 +83,8 @@ Depends: libc6 (>= 2.35), libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland
 Recommends: mesa-vulkan-drivers | nvidia-vulkan-icd, gnome-keyring | kwalletmanager | keepassxc
 Description: A native place for channels, messages and the people you work with
  Lazy is a desktop chat client for a self-hosted Lazy server: channels, direct messages,
- threads, search, files, and notifications. Choose your server on the sign-in screen.
+ threads, search, files, and notifications. Its first screen asks for your server's address
+ and an invitation code.
 TXT
 ( cd "$D" && find . -type f -printf '%P\0' | sort -z | xargs -0 md5sum > "$C/md5sums" )
 tar --owner=0 --group=0 --numeric-owner --format=gnu -C "$D" -czf "$WORK/deb/data.tar.gz" .

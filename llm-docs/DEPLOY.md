@@ -27,7 +27,8 @@ if there is none. Migrations only go forward: back up before upgrading.
 Whoever registers first on a new server becomes the owner of its workspace. On a server that
 strangers can reach, that must not be a race. So the deployment files require a **setup code**
 (`LAZY_SETUP_CODE`, 20 to 64 letters, digits, `-` and `_`; `openssl rand -hex 24` makes one): until the first account exists, registration needs
-the code, typed into the **Invitation or setup code** field of the create-account form. Once the
+the code, typed into the **Invitation code** field of Lazy's first screen (or the **Invitation or
+setup code** field of the sign-in card in 0.5.0). Once the
 owner exists the code does nothing. The files also seed the workspace as **invitation only**
 (`LAZY_SEED_REGISTRATION=invite_only`): everyone after the owner joins with an invitation code from
 **Invite people…**. Change either in `.env` (Compose) or the environment variables (Coolify).
@@ -47,9 +48,8 @@ curl -s localhost:8080/healthz       # {"status":"ok","protocol_version":...}
 deploy/smoke-test.sh http://localhost:8080 "$(grep ^LAZY_SETUP_CODE .env | cut -d= -f2)"   # optional; creates a throwaway owner, so only on a fresh server
 ```
 
-Then install the client (`RELEASE.md`), choose the server's address on the sign-in screen, choose
-**Create account**, and register with the setup code in the invitation field. That account is the
-owner. Open **Invite people…** to bring in everyone else.
+Then install the client (`RELEASE.md`), enter the server's address and the setup code on its first
+screen, and follow the steps. That account is the owner. Open **Invite people…** to bring in everyone else.
 
 To use a prebuilt image instead of building (see `RELEASE.md`, the `server` workflow):
 `LAZY_IMAGE=ghcr.io/last-refuge/lazy/server:<tag> docker compose pull && docker compose up -d --no-build`.

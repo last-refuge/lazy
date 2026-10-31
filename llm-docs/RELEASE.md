@@ -23,6 +23,10 @@ the macOS app and the Windows installer on a real machine (that they start, show
 Gatekeeper and SmartScreen say), and the Linux package outside CI. Treat the first install on each
 system as their test and fix this page.
 
+Release 0.6.0 (2026-10-30) was built by the same workflow on its first run, for all three platforms
+(`VERIFICATION.md`). The downloaded files' checksums match and their contents are as expected; no
+install has been tried on a real Mac or Windows machine yet.
+
 ## What you get
 
 | Platform | Files | Install |
@@ -32,7 +36,7 @@ system as their test and fix this page.
 | Windows 10/11 x64 | `Lazy-Setup-<version>-windows-x64.exe`, `lazy-<version>-windows-x64.zip` | run the installer (per user, no administrator needed) or unpack the zip |
 
 Linux needs a Vulkan driver, a Secret Service keyring (GNOME Keyring, KWallet, KeePassXC) for the
-stored sign-in, and X11 or Wayland. The client's sign-in screen has the server address (D25); it is
+stored sign-in, and X11 or Wayland. The client's first screen asks for the server address (D25, D29); it is
 also settable with `LAZY_SERVER_URL`.
 
 ## What a running Lazy needs from a release (D28)
