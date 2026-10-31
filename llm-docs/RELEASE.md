@@ -4,7 +4,7 @@ The desktop client ships as installers for Linux, macOS, and Windows, built by a
 by hand (like CI, it never runs on a push): **Actions, release, Run workflow**, or
 
 ```sh
-gh workflow run release -f version=0.6.0 -f publish=true
+gh workflow run release -f version=0.7.0 -f publish=true
 ```
 
 `version` is stamped into the apps (Help, Diagnostics shows it) and into the file names;
@@ -27,6 +27,11 @@ Release 0.6.0 (2026-10-30) was built by the same workflow for all three platform
 and again after two small fixes (`VERIFICATION.md`). The second build's files are the draft: their
 checksums match and their contents are as expected; no install has been tried on a real Mac or
 Windows machine yet.
+
+Release 0.7.0 (2026-10-31) adds the workspace Integrations dialog (D30). It needs no server change
+to run (the protocol is still 14), but the Integrations dialog needs a server with migration 0016;
+`chat.lazyto.day` was updated first. It is the first release a running copy (0.6.0) can update to
+from inside Lazy, which makes it the first real test of the updater.
 
 ## What you get
 

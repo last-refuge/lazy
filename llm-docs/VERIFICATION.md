@@ -391,3 +391,8 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
 - *Observed:* a first full run at the default 48 test threads had 21 `408 Request Timeout`s in `lazy-server/tests/administration.rs` while registering accounts. The file passes alone, and the whole suite passes at 12 threads. This host is also running the production server on Coolify, so the timeouts were load, not a defect.
 - *Observed in offscreen renders* (`.dev/screens/4a-01` to `4a-05`, light, dark, and 560 px wide): the list with health lines, the delivery log, adding with the channel choice, a new address shown once, and the empty state.
 - *Not checked by anyone:* the dialog on a real display or a real Windows or macOS window; a screen reader; IME in the name field; a real server answering the new endpoints from an installed client (the Coolify server still runs 0.6.0 and does not have them yet); migration 0016 on the production database.
+
+## The D30 server on Coolify, with clients connected (2026-10-31)
+
+- *Observed by the user:* `chat.lazyto.day` was redeployed from `main` at `b5570dc` (migration 0016) with two 0.6.0 clients connected. The update went well, and the clients disconnected and reconnected without trouble. This was the first real redeploy with clients connected; the graceful shutdown and the clients' reconnect and catch-up had only been tested automatically before.
+- *Not checked by anyone:* the Integrations dialog against the real server. It needs a 0.7.0 client.
