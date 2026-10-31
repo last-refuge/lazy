@@ -4,7 +4,7 @@ The desktop client ships as installers for Linux, macOS, and Windows, built by a
 by hand (like CI, it never runs on a push): **Actions, release, Run workflow**, or
 
 ```sh
-gh workflow run release -f version=0.5.0 -f publish=true
+gh workflow run release -f version=0.6.0 -f publish=true
 ```
 
 `version` is stamped into the apps (Help, Diagnostics shows it) and into the file names;
@@ -102,8 +102,9 @@ you work with."
 - **Desktop notifications exist only on Linux.** On macOS and Windows the app runs, shows unread
   counts and the window title badge, but sends no operating system notifications (the platform
   notifier there is a stub). This matters for dogfooding on those systems.
-- Updating from inside Lazy (D28) exists from the first release after 0.5.0, which has no updater
-  and is replaced by hand once. Nothing about it has been run (`VERIFICATION.md`).
+- Updating from inside Lazy (D28) exists from 0.6.0, the first release after 0.5.0, which has no
+  updater and is replaced by hand once. Its tests pass in CI, but it has never updated a real
+  install: that needs a release newer than 0.6.0 (`VERIFICATION.md`).
 - The window position cannot be restored on Wayland (compositors decide).
 - Only x86_64 on Linux and Windows; no ARM builds.
 - The licenses of bundled fonts (DM Sans, Nunito, Lilex, Noto Color Emoji) are shipped in every package;

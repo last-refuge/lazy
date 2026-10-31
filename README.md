@@ -79,17 +79,17 @@ curl -s localhost:8080/healthz          # {"status":"ok","protocol_version":...}
 
 ### Step 2: install the app
 
-Download **Lazy 0.5.0** from the [latest release](https://github.com/last-refuge/lazy/releases/latest):
+Download **Lazy 0.6.0** from the [latest release](https://github.com/last-refuge/lazy/releases/latest):
 
 | Your computer | Download |
 | --- | --- |
-| **Windows** 10 or 11 (64-bit) | `Lazy-Setup-0.5.0-windows-x64.exe`, or the portable `lazy-0.5.0-windows-x64.zip` |
-| **macOS** 11 or later (Apple silicon or Intel) | `Lazy-0.5.0-macos-universal.dmg` |
-| **Linux** (64-bit Intel or AMD) | `lazy-chat_0.5.0_amd64.deb` or `lazy-0.5.0-linux-x86_64.tar.gz` |
+| **Windows** 10 or 11 (64-bit) | `Lazy-Setup-0.6.0-windows-x64.exe`, or the portable `lazy-0.6.0-windows-x64.zip` |
+| **macOS** 11 or later (Apple silicon or Intel) | `Lazy-0.6.0-macos-universal.dmg` |
+| **Linux** (64-bit Intel or AMD) | `lazy-chat_0.6.0_amd64.deb` or `lazy-0.6.0-linux-x86_64.tar.gz` |
 
 - **Windows.** Run the setup program. It installs for you alone and needs no administrator. If Windows says "Windows protected your PC", choose **More info**, then **Run anyway**.
 - **macOS.** Open the disk image and drag **Lazy** to **Applications**. The first time, if macOS says it cannot verify Lazy, open **System Settings, Privacy & Security** and choose **Open Anyway**. On macOS 14 or earlier, right-click **Lazy**, choose **Open**, then **Open**.
-- **Linux.** On Debian and Ubuntu, `sudo apt install ./lazy-chat_0.5.0_amd64.deb`. On anything else, unpack the tarball and run `./install.sh` (`--system` for everyone on the machine, `--uninstall` to remove it). You need a Vulkan driver and a keyring such as GNOME Keyring or KWallet.
+- **Linux.** On Debian and Ubuntu, `sudo apt install ./lazy-chat_0.6.0_amd64.deb`. On anything else, unpack the tarball and run `./install.sh` (`--system` for everyone on the machine, `--uninstall` to remove it). You need a Vulkan driver and a keyring such as GNOME Keyring or KWallet.
 
 The installers are not code-signed yet, which is why Windows and macOS ask you to confirm once. `SHA256SUMS` on the release page lists a checksum for every file. Desktop notifications work on Linux only for now; on macOS and Windows you get unread counts and the title badge.
 
@@ -98,7 +98,7 @@ The installers are not code-signed yet, which is why Windows and macOS ask you t
 **You, the person who set up the server.** Start Lazy and give it the server's address and your `LAZY_SETUP_CODE`. Lazy checks both, then walks you through your name, username, and password, a picture if you like, a name for the workspace, and your first invitation.
 
 > [!NOTE]
-> The first-run screens are new and come with the release after 0.5.0. Lazy 0.5.0 opens on a sign-in card instead: type the server's address in its **Server** row at the bottom, choose **Create account**, and put the setup code in the invitation field.
+> The first-run screens came with 0.6.0. If you are still on Lazy 0.5.0, it opens on a sign-in card instead: type the server's address in its **Server** row at the bottom, choose **Create account**, and put the setup code in the invitation field.
 
 **Everyone else.** Whoever runs the server gives them two things: the server's **address** and an **invitation code**. They install Lazy and enter both on the first screen. Lazy shows which workspace they were invited to before they choose a name and a password. Someone who already has an account chooses **I already have an account**.
 
@@ -118,7 +118,7 @@ A code lasts from an hour to 30 days and can be used once or many times. It is s
 
 ### Updates
 
-Lazy looks for a newer release every 30 minutes while it runs, and a bar across the top of the window says when there is one. **Update now** downloads it (checked against the release's `SHA256SUMS`) while you keep working, and **Restart to update** installs it. **Menu, Help, Check for updates…** asks right away and has the switch for the automatic checks. A portable copy or one built from source opens the release page instead. Release 0.5.0 has no updater, so install the release after it by hand, once.
+Lazy looks for a newer release every 30 minutes while it runs, and a bar across the top of the window says when there is one. **Update now** downloads it (checked against the release's `SHA256SUMS`) while you keep working, and **Restart to update** installs it. **Menu, Help, Check for updates…** asks right away and has the switch for the automatic checks. A portable copy or one built from source opens the release page instead. Release 0.5.0 has no updater, so if you have it, install 0.6.0 by hand, once.
 
 To upgrade the server, back up first (migrations only go forward), then `git pull && docker compose up -d --build`.
 
