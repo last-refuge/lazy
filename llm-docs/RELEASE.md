@@ -23,9 +23,10 @@ the macOS app and the Windows installer on a real machine (that they start, show
 Gatekeeper and SmartScreen say), and the Linux package outside CI. Treat the first install on each
 system as their test and fix this page.
 
-Release 0.6.0 (2026-10-30) was built by the same workflow on its first run, for all three platforms
-(`VERIFICATION.md`). The downloaded files' checksums match and their contents are as expected; no
-install has been tried on a real Mac or Windows machine yet.
+Release 0.6.0 (2026-10-30) was built by the same workflow for all three platforms, on its first run
+and again after two small fixes (`VERIFICATION.md`). The second build's files are the draft: their
+checksums match and their contents are as expected; no install has been tried on a real Mac or
+Windows machine yet.
 
 ## What you get
 
