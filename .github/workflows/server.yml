@@ -26,8 +26,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
 
-      - name: Check the Coolify compose file is valid
+      - name: Check the compose files are valid
         run: |
+          POSTGRES_PASSWORD=x LAZY_SETUP_CODE=0123456789abcdef0123 \
+            docker compose -f docker-compose.yml config --quiet
           SERVICE_PASSWORD_POSTGRES=x SERVICE_PASSWORD_SETUPCODE=y SERVICE_URL_LAZY=https://lazy.example.com \
             docker compose -f deploy/coolify/docker-compose.yaml config --quiet
 
