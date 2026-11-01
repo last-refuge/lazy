@@ -42,6 +42,32 @@ impl ClientCore {
         self.app_token.as_ref().map(|(app, _)| *app)
     }
 
+    /// An app's signing secret, once loaded for its admin.
+    pub fn app_signing_secret(&self, app: AppId) -> Option<&SecretUrl> {
+        self.app_signing_secret
+            .as_ref()
+            .filter(|(of, _)| *of == app)
+            .map(|(_, secret)| secret)
+    }
+
+    /// The slash commands members can use in a workspace, as last loaded.
+    pub fn commands(&self, workspace: WorkspaceId) -> Option<&[lazy_protocol::WorkspaceCommand]> {
+        self.slash_commands.get(&workspace).map(Vec::as_slice)
+    }
+
+    /// The command being run (or last failed) in a conversation, as typed.
+    pub fn last_command(&self, conversation: ConversationId) -> Option<&str> {
+        self.last_command.get(&conversation).map(String::as_str)
+    }
+
+    /// The private reply to the last command run in a conversation, until dismissed.
+    pub fn command_reply(
+        &self,
+        conversation: ConversationId,
+    ) -> Option<&crate::model::CommandReply> {
+        self.command_replies.get(&conversation)
+    }
+
     fn app_workspace(&self, app: AppId) -> Option<WorkspaceId> {
         self.apps
             .iter()
@@ -169,6 +195,153 @@ impl ClientCore {
         }
     }
 
+    pub(super) fn load_app_signing_secret(&mut self, app: AppId, out: &mut Output) {
+        if !matches!(self.phase, SessionPhase::Ready) {
+            return;
+        }
+        if self.begin_action(ActionKind::LoadAppSigningSecret(app), out) {
+            out.effects.push(Effect::LoadAppSigningSecret { app });
+        }
+    }
+
+    pub(super) fn add_app_command(
+        &mut self,
+        app: AppId,
+        name: &str,
+        url: &str,
+        description: &str,
+        usage_hint: &str,
+        out: &mut Output,
+    ) {
+        let kind = ActionKind::AppCommand(app);
+        if !matches!(self.phase, SessionPhase::Ready) || self.action(kind) == &ActionState::InFlight
+        {
+            return;
+        }
+        let name = name.trim().trim_start_matches('/').to_ascii_lowercase();
+        if !lazy_domain::app::is_command_name(&name) {
+            return self.fail_action(
+                kind,
+                "A command's name is 1 to 32 lower-case letters, digits, - and _.",
+                out,
+            );
+        }
+        let url = url.trim();
+        if !(url.starts_with("https://")
+            || url.starts_with("http://localhost")
+            || url.starts_with("http://127.0.0.1"))
+        {
+            return self.fail_action(kind, "The address must start with https://.", out);
+        }
+        if self.begin_action(kind, out) {
+            out.effects.push(Effect::AddAppCommand {
+                app,
+                request: lazy_protocol::CreateAppCommandRequest {
+                    name,
+                    url: url.to_owned(),
+                    description: description.trim().to_owned(),
+                    usage_hint: usage_hint.trim().to_owned(),
+                },
+            });
+        }
+    }
+
+    pub(super) fn remove_app_command(
+        &mut self,
+        app: AppId,
+        command: lazy_domain::AppCommandId,
+        out: &mut Output,
+    ) {
+        if !matches!(self.phase, SessionPhase::Ready) {
+            return;
+        }
+        if self.begin_action(ActionKind::RemoveAppCommand(command), out) {
+            // Shown at once; the list is loaded again when the removal is answered.
+            if let Some(workspace) = self.app_workspace(app)
+                && let Some(entry) = self
+                    .apps
+                    .get_mut(&workspace)
+                    .and_then(|apps| apps.iter_mut().find(|a| a.id == app))
+            {
+                entry.commands.retain(|c| c.id != command);
+                out.changes.push(Change::AppsChanged { workspace });
+            }
+            out.effects.push(Effect::RemoveAppCommand { command });
+        }
+    }
+
+    pub(super) fn load_commands(&mut self, workspace: WorkspaceId, out: &mut Output) {
+        if !matches!(self.phase, SessionPhase::Ready) || self.role_in(workspace).is_none() {
+            return;
+        }
+        if self.begin_action(ActionKind::LoadCommands(workspace), out) {
+            out.effects.push(Effect::LoadCommands { workspace });
+        }
+    }
+
+    /// Loads the commands of `conversation`'s workspace if they are not loaded yet.
+    pub(super) fn prefetch_commands(&mut self, conversation: ConversationId, out: &mut Output) {
+        let Some(workspace) = self.conversation(conversation).map(|c| c.workspace_id) else {
+            return;
+        };
+        if !self.slash_commands.contains_key(&workspace)
+            && self.action(ActionKind::LoadCommands(workspace)) != &ActionState::InFlight
+        {
+            self.load_commands(workspace, out);
+        }
+    }
+
+    /// If `text` names a command of the conversation's workspace, runs it and says so. A text that
+    /// only looks like one (`/shrug`, or the commands are not loaded yet) is a message.
+    pub(super) fn run_command_text(
+        &mut self,
+        conversation: ConversationId,
+        text: &str,
+        out: &mut Output,
+    ) -> bool {
+        let Some((name, rest)) = lazy_domain::app::parse_command(text) else {
+            return false;
+        };
+        let Some(workspace) = self.conversation(conversation).map(|c| c.workspace_id) else {
+            return false;
+        };
+        let known = self
+            .slash_commands
+            .get(&workspace)
+            .is_some_and(|commands| commands.iter().any(|c| c.name == name));
+        if !known {
+            return false;
+        }
+        let kind = ActionKind::RunCommand(conversation);
+        if self.action(kind) == &ActionState::InFlight {
+            return true;
+        }
+        if self.command_replies.remove(&conversation).is_some() {
+            out.changes
+                .push(Change::CommandReplyChanged { conversation });
+        }
+        self.last_command
+            .insert(conversation, text.trim().to_owned());
+        if self.begin_action(kind, out) {
+            out.effects.push(Effect::RunCommand {
+                conversation,
+                request: lazy_protocol::RunCommandRequest {
+                    command: name,
+                    text: rest,
+                },
+            });
+        }
+        true
+    }
+
+    pub(super) fn dismiss_command_reply(&mut self, conversation: ConversationId, out: &mut Output) {
+        if self.command_replies.remove(&conversation).is_some() {
+            out.changes
+                .push(Change::CommandReplyChanged { conversation });
+        }
+        self.dismiss_action(ActionKind::RunCommand(conversation), out);
+    }
+
     pub(super) fn dismiss_app_token(&mut self, out: &mut Output) {
         if self.app_token.take().is_some() {
             out.changes.push(Change::AppTokenChanged);
@@ -217,6 +390,44 @@ impl ClientCore {
                     self.put_app(workspace, *app, out);
                 }
             }
+            (ActionKind::LoadAppSigningSecret(app), ActionOutcome::AppSigningSecret(secret)) => {
+                self.app_signing_secret = Some((app, secret));
+                out.changes.push(Change::AppSigningSecretChanged);
+            }
+            (ActionKind::AppCommand(id), ActionOutcome::App(app)) => {
+                if let Some(workspace) = self.app_workspace(id) {
+                    self.put_app(workspace, *app, out);
+                    // Members' list of commands changed too.
+                    self.slash_commands.remove(&workspace);
+                    out.changes.push(Change::CommandsChanged { workspace });
+                }
+            }
+            (ActionKind::RemoveAppCommand(_), _) => {
+                let loaded: Vec<WorkspaceId> = self.apps.keys().copied().collect();
+                for workspace in loaded {
+                    self.slash_commands.remove(&workspace);
+                    out.changes.push(Change::CommandsChanged { workspace });
+                }
+            }
+            (ActionKind::LoadCommands(workspace), ActionOutcome::Commands(commands)) => {
+                self.slash_commands.insert(workspace, commands);
+                out.changes.push(Change::CommandsChanged { workspace });
+            }
+            (ActionKind::RunCommand(conversation), ActionOutcome::CommandRan(ran)) => {
+                let command = self.last_command.remove(&conversation).unwrap_or_default();
+                if let Some(document) = ran.reply {
+                    self.command_replies.insert(
+                        conversation,
+                        crate::model::CommandReply {
+                            command,
+                            app_name: ran.app_name,
+                            document,
+                        },
+                    );
+                    out.changes
+                        .push(Change::CommandReplyChanged { conversation });
+                }
+            }
             (ActionKind::DeleteApp(id), _) => {
                 if let Some(workspace) = self.app_workspace(id) {
                     if let Some(list) = self.apps.get_mut(&workspace) {
@@ -233,8 +444,35 @@ impl ClientCore {
     }
 }
 
+/// The server's words, as a sentence.
+fn sentence(message: &str) -> String {
+    let mut text = message.to_owned();
+    if let Some(first) = text.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    if !text.ends_with('.') {
+        text.push('.');
+    }
+    text
+}
+
 /// Words for a person about why an app request failed.
 pub(super) fn app_error(kind: ActionKind, error: &RequestError) -> String {
+    // A command's failure is the server's to explain: which app, and what to do.
+    if let (
+        ActionKind::RunCommand(_) | ActionKind::LoadAppSigningSecret(_),
+        RequestError::Rejected(api),
+    ) = (kind, error)
+        && matches!(
+            api.code,
+            lazy_protocol::ErrorCode::Unavailable
+                | lazy_protocol::ErrorCode::NotFound
+                | lazy_protocol::ErrorCode::Forbidden
+                | lazy_protocol::ErrorCode::InvalidRequest
+        )
+    {
+        return sentence(&api.message);
+    }
     match error {
         RequestError::Rejected(api) => match api.code {
             lazy_protocol::ErrorCode::Forbidden => {

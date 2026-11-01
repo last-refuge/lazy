@@ -265,6 +265,9 @@ impl ClientCore {
         self.connector_secret = None;
         self.apps.clear();
         self.app_token = None;
+        self.app_signing_secret = None;
+        self.slash_commands.clear();
+        self.command_replies.clear();
         self.webhook_lists.clear();
         self.workspace_webhooks.clear();
         self.webhook_deliveries.clear();

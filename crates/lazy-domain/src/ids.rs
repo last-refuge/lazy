@@ -95,6 +95,11 @@ uuid_id!(
     Uuid::now_v7()
 );
 uuid_id!(
+    /// A slash command an app answers (D36).
+    AppCommandId,
+    Uuid::now_v7()
+);
+uuid_id!(
     /// A webhook connector's subscription: one team's or project's activity followed in one
     /// channel (D34).
     ConnectorSubscriptionId,

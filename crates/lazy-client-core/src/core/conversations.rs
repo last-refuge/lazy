@@ -409,7 +409,12 @@ impl ClientCore {
                 | ActionKind::NewAppToken(_)
                 | ActionKind::UpdateAppScopes(_)
                 | ActionKind::AppChannel(..)
-                | ActionKind::DeleteApp(_) => super::apps::app_error(kind, error),
+                | ActionKind::DeleteApp(_)
+                | ActionKind::LoadAppSigningSecret(_)
+                | ActionKind::AppCommand(_)
+                | ActionKind::RemoveAppCommand(_)
+                | ActionKind::LoadCommands(_)
+                | ActionKind::RunCommand(_) => super::apps::app_error(kind, error),
                 ActionKind::AddCustomEmoji
                 | ActionKind::RenameCustomEmoji(_)
                 | ActionKind::DeleteCustomEmoji(_) => super::emoji::emoji_error(error),
@@ -1057,7 +1062,12 @@ impl ClientCore {
                 | ActionKind::NewAppToken(_)
                 | ActionKind::UpdateAppScopes(_)
                 | ActionKind::AppChannel(..)
-                | ActionKind::DeleteApp(_),
+                | ActionKind::DeleteApp(_)
+                | ActionKind::LoadAppSigningSecret(_)
+                | ActionKind::AppCommand(_)
+                | ActionKind::RemoveAppCommand(_)
+                | ActionKind::LoadCommands(_)
+                | ActionKind::RunCommand(_),
                 outcome,
             ) => self.app_action_result(kind, outcome, out),
             (ActionKind::RenameCustomEmoji(_) | ActionKind::DeleteCustomEmoji(_), outcome) => {

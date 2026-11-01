@@ -224,6 +224,7 @@ async fn app_dto(conn: &mut PgConnection, row: AppRow, viewer: UserId) -> Result
         created_by: UserId::from_uuid(row.created_by),
         created_at: Timestamp::from(row.created_at),
         last_used_at: row.last_used_at.map(Timestamp::from),
+        commands: crate::commands::commands_of(conn, row.id).await?,
     })
 }
 
@@ -253,6 +254,45 @@ async fn managed_app(
             other => other,
         })?;
     Ok(row)
+}
+
+/// One app, as its admin sees it.
+pub async fn get(state: &AppState, actor: UserId, app: AppId) -> Result<App, AppError> {
+    let mut conn = state.pool.acquire().await?;
+    let row = managed_app(&mut conn, actor, app, false).await?;
+    app_dto(&mut conn, row, actor).await
+}
+
+/// Adds an app's bot to a conversation `actor` is in (a command's answer posted there).
+pub async fn add_bot_member(
+    pool: &PgPool,
+    actor: UserId,
+    bot: UserId,
+    conversation: ConversationId,
+) -> Result<(), AppError> {
+    let (mut tx, loaded) =
+        conversations::begin_visible(pool, actor, conversation, Lock::Exclusive).await?;
+    let added = conversations::add_members(&mut tx, conversation, &[bot]).await?;
+    if !added.is_empty() {
+        let dto = conversations::conversation_dto(&mut tx, conversation).await?;
+        events::append_all(
+            &mut tx,
+            loaded.workspace_id,
+            vec![PendingEvent {
+                kind: "member_added",
+                conversation_id: Some(conversation),
+                operation_id: None,
+                audience: Audience::Members,
+                event: Event::MemberAdded {
+                    conversation: dto,
+                    user_id: bot,
+                },
+            }],
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// The workspace's apps, oldest first. Admins and owners.
@@ -486,6 +526,7 @@ pub async fn delete(state: &AppState, actor: UserId, app: AppId) -> Result<(), A
             Err(AppError::Api(api)) if api.code == ErrorCode::NotFound => return Ok(()),
             Err(other) => return Err(other),
         };
+        crate::commands::forget_app(&mut tx, app).await?;
         sqlx::query(
             "UPDATE apps SET deleted_at = now(), token_hash = NULL, token_hint = '' WHERE id = $1",
         )

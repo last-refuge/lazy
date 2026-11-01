@@ -309,6 +309,29 @@ pub enum Effect {
     DeleteApp {
         app: lazy_domain::AppId,
     },
+    /// Answered with `ActionOutcome::AppSigningSecret`. Idempotent.
+    LoadAppSigningSecret {
+        app: lazy_domain::AppId,
+    },
+    /// Answered with `ActionOutcome::App`. Idempotent (the same name replaces).
+    AddAppCommand {
+        app: lazy_domain::AppId,
+        request: lazy_protocol::CreateAppCommandRequest,
+    },
+    /// Idempotent.
+    RemoveAppCommand {
+        command: lazy_domain::AppCommandId,
+    },
+    /// Answered with `ActionOutcome::Commands`. Idempotent.
+    LoadCommands {
+        workspace: WorkspaceId,
+    },
+    /// Run a command. Answered with `ActionOutcome::CommandRan`. One attempt: the app acts on
+    /// each request.
+    RunCommand {
+        conversation: ConversationId,
+        request: lazy_protocol::RunCommandRequest,
+    },
     /// Save what the person was looking at, replacing the previous save. The runtime may
     /// debounce.
     PersistView(ViewState),

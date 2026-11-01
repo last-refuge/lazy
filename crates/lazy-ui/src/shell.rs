@@ -192,6 +192,8 @@ pub struct ShellView {
     star_focus: FocusHandle,
     join_focus: FocusHandle,
     dismiss_notice_focus: FocusHandle,
+    /// The Dismiss button of a command's private reply (D36).
+    dismiss_reply_focus: FocusHandle,
     dismiss_favorite_focus: FocusHandle,
     details_focus: FocusHandle,
     empty_browse_focus: FocusHandle,
@@ -508,6 +510,7 @@ impl ShellView {
             star_focus: cx.focus_handle().tab_stop(true),
             join_focus: cx.focus_handle().tab_stop(true),
             dismiss_notice_focus: cx.focus_handle().tab_stop(true),
+            dismiss_reply_focus: cx.focus_handle().tab_stop(true),
             dismiss_favorite_focus: cx.focus_handle().tab_stop(true),
             details_focus: cx.focus_handle().tab_stop(true),
             empty_browse_focus: cx.focus_handle().tab_stop(true),
@@ -1895,6 +1898,115 @@ impl ShellView {
 
     // ----- Pieces -----
 
+    /// A slash command in this conversation (D36): running, its private reply, or why it failed.
+    /// Only the person who ran it sees this, until they dismiss it.
+    fn command_reply(
+        &self,
+        theme: &Theme,
+        conversation: ConversationId,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let core = self.model.read(cx).core();
+        let state = core.action(ActionKind::RunCommand(conversation)).clone();
+        let reply = core.command_reply(conversation).cloned();
+        let typed = core.last_command(conversation).map(str::to_owned);
+        let colors = theme.colors;
+        let (heading, body): (String, AnyElement) = match (&state, reply) {
+            (ActionState::InFlight, _) => (
+                format!("Running {}…", typed.unwrap_or_default()),
+                div().into_any_element(),
+            ),
+            (ActionState::Failed(message), _) => (
+                typed.unwrap_or_else(|| "The command".to_owned()),
+                div()
+                    .debug_selector(|| "command-error".into())
+                    .text_color(colors.danger)
+                    .child(message.clone())
+                    .into_any_element(),
+            ),
+            (_, Some(reply)) => {
+                let document = crate::rich_text::render_document(crate::rich_text::DocumentProps {
+                    document: &reply.document,
+                    theme,
+                    id: "command-reply-document".into(),
+                    on_link: crate::rich_text::open_external_only(),
+                    mentions: &crate::rich_text::HandlesOnly,
+                    color: colors.text,
+                    select: None,
+                });
+                (
+                    format!("{} · {}", reply.app_name, reply.command),
+                    div()
+                        .debug_selector(|| "command-reply-text".into())
+                        .child(document)
+                        .into_any_element(),
+                )
+            }
+            _ => return None,
+        };
+        let dismiss_to = self.model.downgrade();
+        let running = state == ActionState::InFlight;
+        Some(
+            div()
+                .debug_selector(|| "command-reply".into())
+                .mx_4()
+                .mb_2()
+                .px_3()
+                .py_2()
+                .rounded(theme.radii.medium)
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.code_surface)
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(theme.type_scale.small)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(colors.text_muted)
+                                .child(heading),
+                        )
+                        .child(
+                            div()
+                                .text_size(theme.type_scale.small)
+                                .text_color(colors.text_muted)
+                                .child("Only visible to you"),
+                        )
+                        .when(!running, |row| {
+                            row.child(form::button(
+                                theme,
+                                "command-reply-dismiss",
+                                "Dismiss",
+                                ButtonKind::Secondary,
+                                true,
+                                &self.dismiss_reply_focus,
+                                move |_, cx| {
+                                    dismiss_to
+                                        .update(cx, |model, cx| {
+                                            model.dispatch(
+                                                Input::DismissCommandReply(conversation),
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
+                                },
+                            ))
+                        }),
+                )
+                .child(body)
+                .into_any_element(),
+        )
+    }
+
     fn banner(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let core = self.model.read(cx).core();
         // The banner is about the workspace on screen: another workspace's connection trouble is
@@ -2333,6 +2445,7 @@ impl Render for ShellView {
                 }
                 main = main
                     .child(div().flex_1().min_h_0().child(self.timeline.clone()))
+                    .children(self.command_reply(&theme, id, cx))
                     .child(self.composer.clone());
             }
             None => {

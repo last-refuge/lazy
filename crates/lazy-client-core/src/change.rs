@@ -129,6 +129,16 @@ pub enum Change {
     },
     /// `ClientCore::app_token` was set or cleared.
     AppTokenChanged,
+    /// `ClientCore::app_signing_secret` was set or cleared.
+    AppSigningSecretChanged,
+    /// `ClientCore::commands` of this workspace changed.
+    CommandsChanged {
+        workspace: WorkspaceId,
+    },
+    /// `ClientCore::command_reply` of this conversation was set or cleared.
+    CommandReplyChanged {
+        conversation: ConversationId,
+    },
     /// `ClientCore::webhook_deliveries` of this webhook changed.
     WebhookDeliveriesChanged {
         webhook: WebhookId,

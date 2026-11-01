@@ -49,6 +49,8 @@ pub enum AppsView {
     Details(AppId),
     ConfirmNewToken(AppId),
     ConfirmDelete(AppId),
+    /// Adding a slash command to an app (D36).
+    AddingCommand(AppId),
 }
 
 pub struct AppsPanel {
@@ -56,7 +58,14 @@ pub struct AppsPanel {
     workspace: WorkspaceId,
     view: AppsView,
     name: Entity<TextInput>,
+    command_name: Entity<TextInput>,
+    command_url: Entity<TextInput>,
+    command_description: Entity<TextInput>,
+    command_usage: Entity<TextInput>,
     scopes: Vec<AppScope>,
+    /// The signing secret is showing (it was asked for).
+    secret_shown: bool,
+    secret_copied: bool,
     copied: bool,
     /// A request whose end moves the view, and whether it has been seen starting.
     waiting: Option<(ActionKind, bool)>,
@@ -67,7 +76,10 @@ pub struct AppsPanel {
     copy_focus: FocusHandle,
     new_token_focus: FocusHandle,
     delete_focus: FocusHandle,
+    add_command_focus: FocusHandle,
+    secret_focus: FocusHandle,
     manage_focus: HashMap<AppId, FocusHandle>,
+    remove_command_focus: HashMap<lazy_domain::AppCommandId, FocusHandle>,
     scope_focus: HashMap<AppScope, FocusHandle>,
     channel_focus: HashMap<ConversationId, FocusHandle>,
     _subscriptions: Vec<Subscription>,
@@ -83,7 +95,37 @@ impl AppsPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let name = single_line_field("e.g. Deploy bot", "Name of the app", 64, cx);
+        let command_name = single_line_field("e.g. deploy", "Command name", 33, cx);
+        let command_url = single_line_field(
+            "https://your-app.example/slack/commands",
+            "Request address",
+            2048,
+            cx,
+        );
+        let command_description =
+            single_line_field("e.g. Deploy a service", "Description", 200, cx);
+        let command_usage =
+            single_line_field("e.g. [service] [environment]", "Usage hint", 100, cx);
         let mut subscriptions = Vec::new();
+        for input in [
+            &command_name,
+            &command_url,
+            &command_description,
+            &command_usage,
+        ] {
+            subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                |this, _input, event: &TextInputEvent, _window, cx| match event {
+                    TextInputEvent::Submit => this.add_command(cx),
+                    TextInputEvent::Tab { backwards } => cx.emit(AppsPanelEvent::Tab {
+                        backwards: *backwards,
+                    }),
+                    TextInputEvent::Changed => cx.notify(),
+                    _ => {}
+                },
+            ));
+        }
         subscriptions.push(cx.subscribe_in(
             &name,
             window,
@@ -113,7 +155,13 @@ impl AppsPanel {
             workspace,
             view: AppsView::List,
             name,
+            command_name,
+            command_url,
+            command_description,
+            command_usage,
             scopes: AppScope::DEFAULT.to_vec(),
+            secret_shown: false,
+            secret_copied: false,
             copied: false,
             waiting: None,
             back_focus: cx.focus_handle().tab_stop(true),
@@ -123,7 +171,10 @@ impl AppsPanel {
             copy_focus: cx.focus_handle().tab_stop(true),
             new_token_focus: cx.focus_handle().tab_stop(true),
             delete_focus: cx.focus_handle().tab_stop(true),
+            add_command_focus: cx.focus_handle().tab_stop(true),
+            secret_focus: cx.focus_handle().tab_stop(true),
             manage_focus: HashMap::new(),
+            remove_command_focus: HashMap::new(),
             scope_focus: HashMap::new(),
             channel_focus: HashMap::new(),
             _subscriptions: subscriptions,
@@ -145,7 +196,15 @@ impl AppsPanel {
     }
 
     pub fn composing(&self, cx: &gpui::App) -> bool {
-        self.name.read(cx).is_composing()
+        [
+            &self.name,
+            &self.command_name,
+            &self.command_url,
+            &self.command_description,
+            &self.command_usage,
+        ]
+        .iter()
+        .any(|input| input.read(cx).is_composing())
     }
 
     /// The action kinds the panel may have left failed, to clear when the dialog closes.
@@ -158,6 +217,8 @@ impl AppsPanel {
             kinds.push(ActionKind::NewAppToken(*app));
             kinds.push(ActionKind::UpdateAppScopes(*app));
             kinds.push(ActionKind::DeleteApp(*app));
+            kinds.push(ActionKind::AppCommand(*app));
+            kinds.push(ActionKind::LoadAppSigningSecret(*app));
             for channel in self.channel_focus.keys() {
                 kinds.push(ActionKind::AppChannel(*app, *channel));
             }
@@ -176,16 +237,19 @@ impl AppsPanel {
                 self.show_list(window, cx);
                 true
             }
-            AppsView::ConfirmNewToken(app) | AppsView::ConfirmDelete(app) => {
+            AppsView::ConfirmNewToken(app)
+            | AppsView::ConfirmDelete(app)
+            | AppsView::AddingCommand(app) => {
                 self.show_details(app, window, cx);
                 true
             }
         }
     }
 
-    /// Forgets a token this panel showed (the dialog is closing).
+    /// Forgets a token this panel showed, and hides the signing secret (the dialog is closing).
     pub fn forget_token(&mut self, cx: &mut Context<Self>) {
         self.dispatch(Input::DismissAppToken, cx);
+        self.secret_shown = false;
     }
 
     // ----- Following the core -----
@@ -221,6 +285,7 @@ impl AppsPanel {
                         }
                         ActionKind::NewAppToken(app) => self.show_details(app, window, cx),
                         ActionKind::DeleteApp(_) => self.show_list(window, cx),
+                        ActionKind::AppCommand(app) => self.show_details(app, window, cx),
                         _ => {}
                     }
                 }
@@ -244,6 +309,13 @@ impl AppsPanel {
     }
 
     pub fn show_details(&mut self, app: AppId, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(
+            self.view,
+            AppsView::Details(a) | AppsView::AddingCommand(a)
+                | AppsView::ConfirmNewToken(a) | AppsView::ConfirmDelete(a) if a == app
+        ) {
+            self.secret_shown = false;
+        }
         self.copied = false;
         self.view = AppsView::Details(app);
         window.focus(&self.back_focus, cx);
@@ -261,6 +333,47 @@ impl AppsPanel {
         let handle = self.name.focus_handle(cx);
         window.focus(&handle, cx);
         cx.notify();
+    }
+
+    pub fn start_adding_command(
+        &mut self,
+        app: AppId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch(Input::DismissAction(ActionKind::AppCommand(app)), cx);
+        for input in [
+            &self.command_name,
+            &self.command_url,
+            &self.command_description,
+            &self.command_usage,
+        ] {
+            input.update(cx, |input, cx| input.set_text("", cx));
+        }
+        self.view = AppsView::AddingCommand(app);
+        let handle = self.command_name.focus_handle(cx);
+        window.focus(&handle, cx);
+        cx.notify();
+    }
+
+    fn add_command(&mut self, cx: &mut Context<Self>) {
+        let AppsView::AddingCommand(app) = self.view else {
+            return;
+        };
+        let kind = ActionKind::AppCommand(app);
+        if self.action(kind, cx) == ActionState::InFlight {
+            return;
+        }
+        let read = |input: &Entity<TextInput>| input.read(cx).text().trim().to_owned();
+        let input = Input::AddAppCommand {
+            app,
+            name: read(&self.command_name),
+            url: read(&self.command_url),
+            description: read(&self.command_description),
+            usage_hint: read(&self.command_usage),
+        };
+        self.waiting = Some((kind, false));
+        self.dispatch(input, cx);
     }
 
     fn make(&mut self, cx: &mut Context<Self>) {
@@ -815,6 +928,7 @@ impl AppsPanel {
         if let Some(message) = failures.into_iter().next() {
             body = body.child(self.error_line(theme, message));
         }
+        body = body.child(self.commands_section(&app, theme, cx));
         let delete_to = this;
         body.child(div().flex().justify_end().child(form::button(
             theme,
@@ -835,6 +949,292 @@ impl AppsPanel {
             },
         )))
         .into_any_element()
+    }
+
+    /// Slash commands: the app's, with Remove, Add a command, and the signing secret its server
+    /// checks requests with.
+    fn commands_section(&mut self, app: &App, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme.colors;
+        let this = cx.entity().downgrade();
+        let id = app.id;
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(self.section_title(theme, "Slash commands"));
+        if app.commands.is_empty() {
+            section = section.child(self.note(
+                theme,
+                "apps-no-commands",
+                "None yet. A command sends what someone types after /name to your app's address, \
+                 as Slack does, and shows what it answers.",
+            ));
+        }
+        for (index, command) in app.commands.iter().enumerate() {
+            let focus = Self::handle_for(&mut self.remove_command_focus, command.id, cx);
+            let command_id = command.id;
+            let remove_to = this.clone();
+            let mut title = format!("/{}", command.name);
+            if !command.usage_hint.is_empty() {
+                title.push(' ');
+                title.push_str(&command.usage_hint);
+            }
+            let mut detail = command.url.clone();
+            if !command.description.is_empty() {
+                detail = format!("{} · {detail}", command.description);
+            }
+            section = section.child(
+                div()
+                    .debug_selector(|| "apps-command".into())
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_3()
+                    .py_2()
+                    .rounded(theme.radii.medium)
+                    .border_1()
+                    .border_color(colors.border)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .font_family(fonts::MONO_FAMILY)
+                                    .text_size(theme.type_scale.small)
+                                    .text_color(colors.text)
+                                    .child(title),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(theme.type_scale.small)
+                                    .text_color(colors.text_muted)
+                                    .child(detail),
+                            ),
+                    )
+                    .child(form::button(
+                        theme,
+                        format!("apps-remove-command-{index}"),
+                        "Remove",
+                        ButtonKind::Secondary,
+                        true,
+                        &focus,
+                        move |_, cx| {
+                            remove_to
+                                .update(cx, |panel, cx| {
+                                    panel.dispatch(
+                                        Input::RemoveAppCommand {
+                                            app: id,
+                                            command: command_id,
+                                        },
+                                        cx,
+                                    )
+                                })
+                                .ok();
+                        },
+                    )),
+            );
+        }
+        let add_to = this.clone();
+        section = section.child(div().flex().child(form::button(
+            theme,
+            "apps-add-command",
+            "Add a command",
+            ButtonKind::Secondary,
+            true,
+            &self.add_command_focus,
+            move |window, cx| {
+                add_to
+                    .update(cx, |panel, cx| panel.start_adding_command(id, window, cx))
+                    .ok();
+            },
+        )));
+        let secret = self
+            .model
+            .read(cx)
+            .core()
+            .app_signing_secret(id)
+            .map(|s| s.as_str().to_owned());
+        let secret_state = self.action(ActionKind::LoadAppSigningSecret(id), cx);
+        section = section.child(self.note(
+            theme,
+            "apps-secret-hint",
+            "Requests are signed as Slack signs them (X-Slack-Signature). Give your app this \
+             signing secret to check them.",
+        ));
+        match (self.secret_shown, secret) {
+            (true, Some(secret)) => {
+                let copy_to = this;
+                let shown = secret.clone();
+                section = section.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .debug_selector(|| "apps-signing-secret".into())
+                                .flex_1()
+                                .min_w_0()
+                                .px_2()
+                                .py_1p5()
+                                .rounded(theme.radii.small)
+                                .bg(colors.code_surface)
+                                .font_family(fonts::MONO_FAMILY)
+                                .text_size(theme.type_scale.small)
+                                .text_color(colors.text)
+                                .overflow_hidden()
+                                .child(shown),
+                        )
+                        .child(form::button(
+                            theme,
+                            "apps-copy-secret",
+                            if self.secret_copied { "Copied" } else { "Copy" },
+                            ButtonKind::Secondary,
+                            true,
+                            &self.secret_focus,
+                            move |_, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(secret.clone()));
+                                copy_to
+                                    .update(cx, |panel, cx| {
+                                        panel.secret_copied = true;
+                                        cx.notify();
+                                    })
+                                    .ok();
+                            },
+                        )),
+                );
+            }
+            _ => {
+                let show_to = this;
+                let loading = secret_state == ActionState::InFlight;
+                section = section
+                    .children(match secret_state {
+                        ActionState::Failed(message) => Some(self.error_line(theme, message)),
+                        _ => None,
+                    })
+                    .child(div().flex().child(form::button(
+                        theme,
+                        "apps-show-secret",
+                        if loading {
+                            "Loading…"
+                        } else {
+                            "Show signing secret"
+                        },
+                        ButtonKind::Secondary,
+                        !loading,
+                        &self.secret_focus,
+                        move |_, cx| {
+                            show_to
+                                .update(cx, |panel, cx| {
+                                    panel.secret_shown = true;
+                                    panel.secret_copied = false;
+                                    panel.dispatch(Input::LoadAppSigningSecret(id), cx);
+                                })
+                                .ok();
+                        },
+                    )));
+            }
+        }
+        section.into_any_element()
+    }
+
+    fn adding_command(
+        &mut self,
+        id: AppId,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let this = cx.entity().downgrade();
+        let name = self.app(id, cx).map(|a| a.name).unwrap_or_default();
+        let kind = ActionKind::AppCommand(id);
+        let state = self.action(kind, cx);
+        let working = state == ActionState::InFlight;
+        let error = match state {
+            ActionState::Failed(message) => Some(message),
+            _ => None,
+        };
+        let ready = !working
+            && !self.command_name.read(cx).text().trim().is_empty()
+            && !self.command_url.read(cx).text().trim().is_empty();
+        let cancel_to = this.clone();
+        let add_to = this;
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(self.header(theme, format!("Add a command to {name}"), cx))
+            .child(form::labeled_field(
+                theme,
+                "Command",
+                &self.command_name,
+                Some("Typed as /name: lower-case letters, digits, - and _.".into()),
+                error.map(Into::into),
+                window,
+                cx,
+            ))
+            .child(form::labeled_field(
+                theme,
+                "Request address",
+                &self.command_url,
+                Some("Where Lazy sends it, signed, as Slack's request URL. https:// only.".into()),
+                None,
+                window,
+                cx,
+            ))
+            .child(form::labeled_field(
+                theme,
+                "Description",
+                &self.command_description,
+                None,
+                None,
+                window,
+                cx,
+            ))
+            .child(form::labeled_field(
+                theme,
+                "Usage hint",
+                &self.command_usage,
+                None,
+                None,
+                window,
+                cx,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap_2()
+                    .child(form::button(
+                        theme,
+                        "apps-command-cancel",
+                        "Cancel",
+                        ButtonKind::Secondary,
+                        true,
+                        &self.cancel_focus,
+                        move |window, cx| {
+                            cancel_to
+                                .update(cx, |panel, cx| panel.show_details(id, window, cx))
+                                .ok();
+                        },
+                    ))
+                    .child(form::button(
+                        theme,
+                        "apps-command-add",
+                        if working { "Adding…" } else { "Add" },
+                        ButtonKind::Primary,
+                        ready,
+                        &self.confirm_focus,
+                        move |_, cx| {
+                            add_to.update(cx, |panel, cx| panel.add_command(cx)).ok();
+                        },
+                    )),
+            )
+            .into_any_element()
     }
 
     fn confirm(
@@ -949,6 +1349,7 @@ impl Render for AppsPanel {
                 AppsView::Details(id) => self.details(id, &theme, cx),
                 AppsView::ConfirmNewToken(id) => self.confirm(id, false, &theme, cx),
                 AppsView::ConfirmDelete(id) => self.confirm(id, true, &theme, cx),
+                AppsView::AddingCommand(id) => self.adding_command(id, &theme, window, cx),
             })
     }
 }

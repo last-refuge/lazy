@@ -14,6 +14,7 @@ pub mod app;
 pub mod apps;
 pub mod attachments;
 pub mod bootstrap;
+pub mod commands;
 pub mod config;
 pub mod connectors;
 pub mod conversations;

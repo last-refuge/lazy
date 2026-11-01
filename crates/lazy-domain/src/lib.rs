@@ -31,7 +31,7 @@ pub use conversation::{ConversationFacts, ConversationKind, ParticipantError, Pa
 pub use document::{Block, DocumentError, Inline, Marks, MessageDocument};
 pub use emoji::{MAX_CUSTOM_EMOJI, MAX_REACTION_KINDS, ReactionEmoji};
 pub use ids::{
-    AppId, AttachmentId, ConnectorSubscriptionId, ConversationId, EmojiId, EventSeq,
+    AppCommandId, AppId, AttachmentId, ConnectorSubscriptionId, ConversationId, EmojiId, EventSeq,
     GithubSubscriptionId, GroupId, InvitationId, MessageId, OperationId, UserId, WebhookId,
     WorkspaceId,
 };

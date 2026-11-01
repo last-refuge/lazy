@@ -455,6 +455,15 @@ pub enum ActionKind {
     /// Adding an app's bot to a channel, or taking it out.
     AppChannel(lazy_domain::AppId, ConversationId),
     DeleteApp(lazy_domain::AppId),
+    /// Loading an app's signing secret (D36).
+    LoadAppSigningSecret(lazy_domain::AppId),
+    /// Adding a slash command to an app, or removing one.
+    AppCommand(lazy_domain::AppId),
+    RemoveAppCommand(lazy_domain::AppCommandId),
+    /// Loading the slash commands members can use in a workspace.
+    LoadCommands(WorkspaceId),
+    /// Running a slash command in a conversation.
+    RunCommand(ConversationId),
     /// Adding a custom emoji (one at a time).
     AddCustomEmoji,
     RenameCustomEmoji(EmojiId),
@@ -566,6 +575,15 @@ impl ViewState {
     }
 }
 
+/// A private reply to a slash command: only the person who ran it sees it, until they dismiss it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandReply {
+    /// The command as typed, e.g. `/deploy web`.
+    pub command: String,
+    pub app_name: String,
+    pub document: lazy_domain::MessageDocument,
+}
+
 /// A secret kept out of every debug and display string. Its text is available only by asking.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretUrl(String);
@@ -641,6 +659,12 @@ pub enum ActionOutcome {
     AppToken(Box<lazy_protocol::App>, SecretUrl),
     /// An app after a change.
     App(Box<lazy_protocol::App>),
+    /// An app's signing secret, to show its admin.
+    AppSigningSecret(SecretUrl),
+    /// The slash commands of a workspace.
+    Commands(Vec<lazy_protocol::WorkspaceCommand>),
+    /// What came of running a command.
+    CommandRan(Box<lazy_protocol::RunCommandResponse>),
     /// A custom emoji after it was renamed.
     CustomEmoji(CustomEmoji),
     /// The workspace after its name or settings were changed.

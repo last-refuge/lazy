@@ -29,6 +29,7 @@ fn app(id: AppId, scopes: Vec<AppScope>) -> App {
         created_by: UserId::generate(),
         created_at: lazy_domain::Timestamp::from(time::OffsetDateTime::UNIX_EPOCH),
         last_used_at: None,
+        commands: Vec::new(),
     }
 }
 
@@ -170,4 +171,99 @@ fn changes_replace_the_app_and_deleting_removes_it() {
     assert_eq!(driver.core.apps(ws).map(<[App]>::len), Some(0));
     driver.send(Input::SignOut);
     assert!(driver.core.apps(ws).is_none());
+}
+
+fn deploy_command() -> lazy_protocol::WorkspaceCommand {
+    lazy_protocol::WorkspaceCommand {
+        name: "deploy".into(),
+        description: "Deploy a service".into(),
+        usage_hint: "[service]".into(),
+        app_name: "Deployer".into(),
+    }
+}
+
+#[test]
+fn a_known_command_runs_instead_of_sending_and_its_reply_is_private() {
+    let mut world = World::new();
+    world.role = WorkspaceRole::Member;
+    let mut driver = Driver::ready(&world);
+    let ws = world.workspace.id;
+    let general = world.channel.id;
+
+    // Typing a slash loads the workspace's commands.
+    driver.send(Input::SetDraft {
+        conversation: general,
+        text: "/dep".into(),
+    });
+    assert!(
+        driver
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadCommands { workspace } if *workspace == ws))
+    );
+    driver.send(Input::ActionResult {
+        kind: ActionKind::LoadCommands(ws),
+        result: Ok(ActionOutcome::Commands(vec![deploy_command()])),
+    });
+    assert_eq!(driver.core.commands(ws).map(<[_]>::len), Some(1));
+
+    // A command that is not one of them is an ordinary message.
+    driver.effects.clear();
+    driver.send(Input::SendMessage {
+        conversation: general,
+        text: "/shrug ok".into(),
+    });
+    assert!(
+        !driver
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::RunCommand { .. }))
+    );
+
+    // A known one runs, and the draft is cleared; nothing is sent as a message.
+    driver.effects.clear();
+    driver.send(Input::SetDraft {
+        conversation: general,
+        text: "/deploy web prod".into(),
+    });
+    driver.send(Input::SendMessage {
+        conversation: general,
+        text: "/deploy web prod".into(),
+    });
+    match driver
+        .effects
+        .iter()
+        .find(|e| matches!(e, Effect::RunCommand { .. }))
+    {
+        Some(Effect::RunCommand { request, .. }) => {
+            assert_eq!(
+                (request.command.as_str(), request.text.as_str()),
+                ("deploy", "web prod")
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(driver.core.draft(general).is_empty());
+    assert_eq!(driver.core.last_command(general), Some("/deploy web prod"));
+
+    // Its private reply is held for the conversation until dismissed.
+    let reply = lazy_domain::MessageDocument::from_markdown("Deploying *web*").unwrap();
+    driver.send(Input::ActionResult {
+        kind: ActionKind::RunCommand(general),
+        result: Ok(ActionOutcome::CommandRan(Box::new(
+            lazy_protocol::RunCommandResponse {
+                app_name: "Deployer".into(),
+                reply: Some(reply.clone()),
+                posted: None,
+            },
+        ))),
+    });
+    let held = driver.core.command_reply(general).unwrap();
+    assert_eq!(
+        (held.app_name.as_str(), held.command.as_str()),
+        ("Deployer", "/deploy web prod")
+    );
+    assert_eq!(held.document, reply);
+    driver.send(Input::DismissCommandReply(general));
+    assert!(driver.core.command_reply(general).is_none());
 }
