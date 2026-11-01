@@ -54,7 +54,8 @@ pub struct Integrations {
     pub jobs: crate::jobs::Waker,
     /// Where GitHub is, and the client the server talks to it with (D32).
     pub github: crate::github::GithubEndpoints,
-    pub http: reqwest::Client,
+    /// `None` when no HTTPS client could be built (no CA certificates): GitHub is unavailable.
+    pub http: Option<reqwest::Client>,
 }
 
 /// The kinds of job this server knows how to run. Integrations add theirs here.
