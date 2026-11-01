@@ -301,6 +301,30 @@ impl fmt::Debug for Effect {
                 .field("add", add)
                 .finish(),
             Effect::DeleteApp { app } => f.debug_struct("DeleteApp").field("app", app).finish(),
+            Effect::LoadAppSigningSecret { app } => f
+                .debug_struct("LoadAppSigningSecret")
+                .field("app", app)
+                .finish(),
+            Effect::AddAppCommand { app, .. } => f
+                .debug_struct("AddAppCommand")
+                .field("app", app)
+                .finish_non_exhaustive(),
+            Effect::RemoveAppCommand { command } => f
+                .debug_struct("RemoveAppCommand")
+                .field("command", command)
+                .finish(),
+            Effect::LoadCommands { workspace } => f
+                .debug_struct("LoadCommands")
+                .field("workspace", workspace)
+                .finish(),
+            Effect::RunCommand {
+                conversation,
+                request,
+            } => f
+                .debug_struct("RunCommand")
+                .field("conversation", conversation)
+                .field("command", &request.command)
+                .finish_non_exhaustive(),
             Effect::DisconnectConnector {
                 workspace,
                 provider,

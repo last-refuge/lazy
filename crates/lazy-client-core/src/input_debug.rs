@@ -310,6 +310,23 @@ impl fmt::Debug for Input {
                 .finish(),
             Input::DeleteApp(v0) => f.debug_tuple("DeleteApp").field(v0).finish(),
             Input::DismissAppToken => f.write_str("DismissAppToken"),
+            Input::LoadAppSigningSecret(v0) => {
+                f.debug_tuple("LoadAppSigningSecret").field(v0).finish()
+            }
+            Input::AddAppCommand { app, name, .. } => f
+                .debug_struct("AddAppCommand")
+                .field("app", app)
+                .field("name", name)
+                .finish_non_exhaustive(),
+            Input::RemoveAppCommand { app, command } => f
+                .debug_struct("RemoveAppCommand")
+                .field("app", app)
+                .field("command", command)
+                .finish(),
+            Input::LoadCommands(v0) => f.debug_tuple("LoadCommands").field(v0).finish(),
+            Input::DismissCommandReply(v0) => {
+                f.debug_tuple("DismissCommandReply").field(v0).finish()
+            }
             Input::DisconnectConnector {
                 workspace,
                 provider,

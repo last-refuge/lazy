@@ -257,6 +257,14 @@ pub struct ClientCore {
     >,
     /// The apps of each workspace, as last loaded (D35).
     apps: HashMap<WorkspaceId, Vec<lazy_protocol::App>>,
+    /// An app's signing secret, for its admin, until dismissed. Never cached or saved.
+    app_signing_secret: Option<(lazy_domain::AppId, crate::model::SecretUrl)>,
+    /// The slash commands of each workspace, as last loaded (D36).
+    slash_commands: HashMap<WorkspaceId, Vec<lazy_protocol::WorkspaceCommand>>,
+    /// The private reply to the last command run in a conversation, until dismissed.
+    command_replies: HashMap<ConversationId, crate::model::CommandReply>,
+    /// The command last run in each conversation, as typed, for its reply's heading.
+    last_command: HashMap<ConversationId, String>,
     /// A token just made, for its app, until dismissed. Never cached or saved.
     app_token: Option<(lazy_domain::AppId, crate::model::SecretUrl)>,
     /// A signing secret Lazy just made, for its provider, until dismissed. Never cached or saved.
@@ -412,6 +420,10 @@ impl ClientCore {
             connector_secret: None,
             apps: HashMap::new(),
             app_token: None,
+            app_signing_secret: None,
+            slash_commands: HashMap::new(),
+            command_replies: HashMap::new(),
+            last_command: HashMap::new(),
             created_webhook: None,
             draft_selections: HashMap::new(),
             thread_selections: HashMap::new(),
@@ -743,6 +755,21 @@ impl ClientCore {
             } => self.set_app_channel(app, conversation, add, &mut out),
             Input::DeleteApp(app) => self.delete_app(app, &mut out),
             Input::DismissAppToken => self.dismiss_app_token(&mut out),
+            Input::LoadAppSigningSecret(app) => self.load_app_signing_secret(app, &mut out),
+            Input::AddAppCommand {
+                app,
+                name,
+                url,
+                description,
+                usage_hint,
+            } => self.add_app_command(app, &name, &url, &description, &usage_hint, &mut out),
+            Input::RemoveAppCommand { app, command } => {
+                self.remove_app_command(app, command, &mut out)
+            }
+            Input::LoadCommands(workspace) => self.load_commands(workspace, &mut out),
+            Input::DismissCommandReply(conversation) => {
+                self.dismiss_command_reply(conversation, &mut out)
+            }
             Input::DismissCreatedWebhook => self.dismiss_created_webhook(&mut out),
             Input::SetDraftSelection {
                 conversation,
@@ -2024,6 +2051,7 @@ impl ClientCore {
             return;
         }
         let emptied = text.is_empty();
+        let command_like = text.trim_start().starts_with('/');
         if emptied {
             self.drafts.remove(&conversation);
         } else {
@@ -2031,6 +2059,10 @@ impl ClientCore {
         }
         out.changes.push(Change::DraftChanged { conversation });
         self.persist_drafts(out);
+        // A draft that starts like a command: have the workspace's commands ready by Send.
+        if command_like {
+            self.prefetch_commands(conversation, out);
+        }
         // A draft with no text has no caret to keep.
         if emptied && self.draft_selections.remove(&conversation).is_some() {
             self.persist_view(out);
@@ -2051,6 +2083,14 @@ impl ClientCore {
 
     fn send_message(&mut self, conversation: ConversationId, text: &str, out: &mut Output) {
         if !matches!(self.phase, SessionPhase::Ready) || self.conversation(conversation).is_none() {
+            return;
+        }
+        // `/name text` for a command of this workspace runs it instead (D36).
+        if self.run_command_text(conversation, text, out) {
+            if self.drafts.remove(&conversation).is_some() {
+                out.changes.push(Change::DraftChanged { conversation });
+                self.persist_drafts(out);
+            }
             return;
         }
         let target = ComposerTarget::Conversation(conversation);

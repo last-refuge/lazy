@@ -52,12 +52,12 @@ pub use discovery::{
 pub use effect::Effect;
 pub use input::{Input, SocketEvent};
 pub use model::{
-    ActionKind, ActionOutcome, ActionState, ConnectionState, CreatedWebhook, Delivery,
-    DraftSelection, EditState, EmojiPrefs, HistoryStatus, ItemKey, JournalEntry, JournalKind,
-    JumpTarget, MAX_RECENT_EMOJI, MAX_SKIN_TONE, MentionCandidate, MentionKind, MessageExcerpt,
-    OpenThread, PERMALINK_MAX_PAGES, RequestError, RetryKind, SecretUrl, SessionPhase, Sidebar,
-    StartupState, TextSelection, ThreadDraft, ThreadView, TimelineItem, UNKNOWN_MEMBER_NAME,
-    ViewState, WorkspaceInfo,
+    ActionKind, ActionOutcome, ActionState, CommandReply, ConnectionState, CreatedWebhook,
+    Delivery, DraftSelection, EditState, EmojiPrefs, HistoryStatus, ItemKey, JournalEntry,
+    JournalKind, JumpTarget, MAX_RECENT_EMOJI, MAX_SKIN_TONE, MentionCandidate, MentionKind,
+    MessageExcerpt, OpenThread, PERMALINK_MAX_PAGES, RequestError, RetryKind, SecretUrl,
+    SessionPhase, Sidebar, StartupState, TextSelection, ThreadDraft, ThreadView, TimelineItem,
+    UNKNOWN_MEMBER_NAME, ViewState, WorkspaceInfo,
 };
 pub use notify::{
     DesktopNotification, INBOX_PAGE, INBOX_READ_CAP, InboxStatus, InboxView, LoadStatus,

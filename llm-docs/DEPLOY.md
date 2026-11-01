@@ -218,3 +218,13 @@ curl -X POST https://chat.example.com/v1/bot/messages \
 
 The body can also be Slack's (`text` in `mrkdwn`, `blocks`, `attachments`), so code written for Slack's `chat.postMessage` mostly works with the address and token changed. `GET /v1/bot/me` says which app a token is; `GET /v1/bot/conversations` lists its channels. Too many posts too fast answer `429` with `Retry-After`. A lost token cannot be shown again: make a new one in the app's screen.
 
+### Slash commands
+
+On an app's screen, **Add a command**: its name (`deploy` for `/deploy`), the address Lazy sends it to (`https://`), a description, and a usage hint. **Show signing secret** gives the secret your app checks requests with. Lazy signs them exactly as Slack does (`X-Slack-Signature`, `X-Slack-Request-Timestamp`) and sends Slack's form fields, so a Slack command handler works with that secret and its address. Answer within 3 seconds:
+
+- plain text, or `{"text": "..."}`: a reply only the person sees;
+- `{"response_type": "in_channel", "text": "..."}`: posted in the conversation by the app's bot;
+- an empty `200`, then `POST` to the `response_url` within 30 minutes (up to 5 times) with `"response_type": "in_channel"`.
+
+A private answer sent later through `response_url` is not shown yet; answer privately within the 3 seconds instead. Commands need `LAZY_CREDENTIALS_KEY`, since the signing secret is sealed with it.
+

@@ -350,6 +350,24 @@ pub enum Input {
     DeleteApp(lazy_domain::AppId),
     /// Forget the token just shown.
     DismissAppToken,
+    /// Load an app's signing secret into `ClientCore::app_signing_secret` (admins, D36).
+    LoadAppSigningSecret(lazy_domain::AppId),
+    /// Add a slash command to an app (or change the app's command of that name).
+    AddAppCommand {
+        app: lazy_domain::AppId,
+        name: String,
+        url: String,
+        description: String,
+        usage_hint: String,
+    },
+    RemoveAppCommand {
+        app: lazy_domain::AppId,
+        command: lazy_domain::AppCommandId,
+    },
+    /// Load the slash commands members can use in a workspace into `ClientCore::commands`.
+    LoadCommands(WorkspaceId),
+    /// Forget the private reply to a command in this conversation.
+    DismissCommandReply(ConversationId),
     /// Give a webhook a new address. The old one stops working at once; the new one arrives in
     /// `ClientCore::created_webhook`, to be shown once. Progress is
     /// `action(ActionKind::NewWebhookAddress(webhook))`.

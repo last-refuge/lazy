@@ -61,9 +61,46 @@ impl AppScope {
 /// The prefix of every bot token, so one is recognisable (in a leak scanner, say).
 pub const BOT_TOKEN_PREFIX: &str = "lzb_";
 
+/// Whether `name` can be a slash command's name (without its `/`): 1 to 32 lower-case letters,
+/// digits, `-` and `_`, starting with a letter or digit.
+pub fn is_command_name(name: &str) -> bool {
+    (1..=32).contains(&name.len())
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
+/// A composer text read as a slash command: `/name` and the rest (trimmed), or `None` if it is
+/// not shaped like one. Whether the command exists is for the caller to know.
+pub fn parse_command(text: &str) -> Option<(String, String)> {
+    let rest = text.trim_start().strip_prefix('/')?;
+    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let name = rest[..end].to_ascii_lowercase();
+    is_command_name(&name).then(|| (name, rest[end..].trim().to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_are_parsed_from_the_composer() {
+        assert_eq!(
+            parse_command("/deploy  web prod\n"),
+            Some(("deploy".into(), "web prod".into()))
+        );
+        assert_eq!(
+            parse_command(" /Standup"),
+            Some(("standup".into(), String::new()))
+        );
+        assert_eq!(parse_command("/"), None);
+        assert_eq!(parse_command("// comment"), None);
+        assert_eq!(parse_command("not /a command"), None);
+        assert_eq!(parse_command("/usr/bin/env"), None);
+        assert!(is_command_name("a1_b-c"));
+        assert!(!is_command_name("-x") && !is_command_name(&"x".repeat(33)));
+    }
 
     #[test]
     fn scopes_use_slack_names_and_tolerate_new_ones() {

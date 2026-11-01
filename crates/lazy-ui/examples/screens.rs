@@ -2144,6 +2144,13 @@ fn sample_apps(cast: &Cast) -> Vec<lazy_protocol::App> {
             created_by: cast.me.id,
             created_at: ago(60 * 24 * 3),
             last_used_at: Some(ago(12)),
+            commands: vec![lazy_protocol::AppCommand {
+                id: lazy_domain::AppCommandId::generate(),
+                name: "deploy".into(),
+                url: "https://deploy.lazyto.day/slack/commands".into(),
+                description: "Deploy a service".into(),
+                usage_hint: "[service] [environment]".into(),
+            }],
         },
         lazy_protocol::App {
             id: sample_app_ids().1,
@@ -2155,6 +2162,7 @@ fn sample_apps(cast: &Cast) -> Vec<lazy_protocol::App> {
             created_by: cast.me.id,
             created_at: ago(60 * 5),
             last_used_at: None,
+            commands: Vec::new(),
         },
     ]
 }
@@ -2214,6 +2222,65 @@ fn apps_scene(
         }),
         _ => {}
     }
+    draw(cx, win);
+}
+
+/// Runs `/deploy web prod` in the open channel and answers it with a private reply.
+fn command_reply_scene(
+    cx: &mut HeadlessAppContext,
+    model: &Entity<AppModel>,
+    cast: &Cast,
+    win: &WindowHandle<RootView>,
+) {
+    dispatch(
+        cx,
+        model,
+        Input::SetDraft {
+            conversation: cast.general,
+            text: "/deploy web prod".into(),
+        },
+    );
+    dispatch(
+        cx,
+        model,
+        Input::ActionResult {
+            kind: ActionKind::LoadCommands(cast.workspace),
+            result: Ok(ActionOutcome::Commands(vec![
+                lazy_protocol::WorkspaceCommand {
+                    name: "deploy".into(),
+                    description: "Deploy a service".into(),
+                    usage_hint: "[service] [environment]".into(),
+                    app_name: "Deploy bot".into(),
+                },
+            ])),
+        },
+    );
+    dispatch(
+        cx,
+        model,
+        Input::SendMessage {
+            conversation: cast.general,
+            text: "/deploy web prod".into(),
+        },
+    );
+    let reply = lazy_domain::MessageDocument::from_markdown(
+        "Deploying *web* to *prod*: build 4821 is queued. [Follow the run](https://ci.example/runs/4821)",
+    )
+    .unwrap();
+    dispatch(
+        cx,
+        model,
+        Input::ActionResult {
+            kind: ActionKind::RunCommand(cast.general),
+            result: Ok(ActionOutcome::CommandRan(Box::new(
+                lazy_protocol::RunCommandResponse {
+                    app_name: "Deploy bot".into(),
+                    reply: Some(reply),
+                    posted: None,
+                },
+            ))),
+        },
+    );
     draw(cx, win);
 }
 
@@ -8951,6 +9018,33 @@ fn main() {
             build: &|model, cast, cx, rec, win| {
                 reach_chat(cx, model, cast, rec, true);
                 apps_scene(cx, model, cast, win, 2);
+            },
+        },
+        Scene {
+            name: "4e-04-app-commands-light",
+            width: 1100.0,
+            height: 1300.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                apps_scene(cx, model, cast, win, 0);
+                let id = sample_app_ids().0;
+                with_integrations(cx, win, |dialog, window, cx| {
+                    if let Some(panel) = dialog.apps_panel() {
+                        panel.update(cx, |panel, cx| panel.show_details(id, window, cx));
+                    }
+                });
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4e-05-command-reply-dark",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                command_reply_scene(cx, model, cast, win);
             },
         },
         Scene {

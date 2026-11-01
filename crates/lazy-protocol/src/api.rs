@@ -156,6 +156,19 @@ pub mod paths {
     pub const BOT_CONVERSATIONS_ROUTE: &str = "/v1/bot/conversations";
     pub const BOT_JOIN_ROUTE: &str = "/v1/bot/conversations/{conversation_id}/join";
     pub const BOT_MESSAGES_ROUTE: &str = "/v1/bot/messages";
+    /// `POST` adds a slash command to an app (or changes it). Admins and owners (D36).
+    pub const APP_COMMANDS_ROUTE: &str = "/v1/apps/{app_id}/commands";
+    /// `DELETE` removes a slash command.
+    pub const APP_COMMAND_ROUTE: &str = "/v1/app-commands/{command_id}";
+    /// `GET` the secret the app's command requests are signed with (made when first asked for).
+    pub const APP_SIGNING_SECRET_ROUTE: &str = "/v1/apps/{app_id}/signing-secret";
+    /// `GET` the slash commands members can use in the workspace.
+    pub const WORKSPACE_COMMANDS_ROUTE: &str = "/v1/workspaces/{workspace_id}/commands";
+    /// `POST` runs a slash command in a conversation.
+    pub const RUN_COMMAND_ROUTE: &str = "/v1/conversations/{conversation_id}/commands";
+    /// Where an app sends a later answer to a command (Slack's `response_url`). Public; the token
+    /// is the credential.
+    pub const COMMAND_RESPOND_ROUTE: &str = "/commands/respond/{token}";
     /// `POST` delivers a message through an incoming webhook. Public: the secret in the path is
     /// the only credential, so it carries no `Authorization` header.
     pub const HOOK_ROUTE: &str = "/hooks/{webhook_id}/{secret}";
@@ -371,6 +384,26 @@ pub mod paths {
 
     pub fn app_channel(app_id: lazy_domain::AppId, conversation_id: ConversationId) -> String {
         format!("/v1/apps/{app_id}/channels/{conversation_id}")
+    }
+
+    pub fn app_commands(app_id: lazy_domain::AppId) -> String {
+        format!("/v1/apps/{app_id}/commands")
+    }
+
+    pub fn app_command(command_id: lazy_domain::AppCommandId) -> String {
+        format!("/v1/app-commands/{command_id}")
+    }
+
+    pub fn app_signing_secret(app_id: lazy_domain::AppId) -> String {
+        format!("/v1/apps/{app_id}/signing-secret")
+    }
+
+    pub fn workspace_commands(workspace_id: WorkspaceId) -> String {
+        format!("/v1/workspaces/{workspace_id}/commands")
+    }
+
+    pub fn run_command(conversation_id: ConversationId) -> String {
+        format!("/v1/conversations/{conversation_id}/commands")
     }
 
     pub fn bot_join(conversation_id: ConversationId) -> String {
@@ -1293,6 +1326,77 @@ pub struct App {
     pub created_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_used_at: Option<Timestamp>,
+    /// The slash commands it answers, by name (D36).
+    #[serde(default)]
+    pub commands: Vec<AppCommand>,
+}
+
+/// A slash command an app answers: `/name` goes to `url` (D36).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppCommand {
+    pub id: lazy_domain::AppCommandId,
+    /// Without its `/`.
+    pub name: String,
+    pub url: String,
+    #[serde(default)]
+    pub description: String,
+    /// What to type after it, e.g. `[service] [environment]`.
+    #[serde(default)]
+    pub usage_hint: String,
+}
+
+/// `POST /v1/apps/{id}/commands`: the same name again changes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateAppCommandRequest {
+    pub name: String,
+    pub url: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub usage_hint: String,
+}
+
+/// `GET /v1/apps/{id}/signing-secret`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppSigningSecretResponse {
+    pub secret: String,
+}
+
+/// A slash command as members see it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceCommand {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub usage_hint: String,
+    pub app_name: String,
+}
+
+/// Response of `GET /v1/workspaces/{id}/commands`, by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceCommandsResponse {
+    pub commands: Vec<WorkspaceCommand>,
+}
+
+/// `POST /v1/conversations/{id}/commands`: `/command text`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunCommandRequest {
+    /// Without its `/`.
+    pub command: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// What came of a command: a reply only the person who ran it sees, and the message the app
+/// posted in the conversation, either or both or neither.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunCommandResponse {
+    pub app_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<MessageDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posted: Option<MessageId>,
 }
 
 /// Response of `GET /v1/workspaces/{id}/apps`: the apps, oldest first.

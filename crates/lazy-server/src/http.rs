@@ -151,6 +151,12 @@ pub fn router(state: AppState) -> Router {
         .route(paths::BOT_CONVERSATIONS_ROUTE, get(bot_conversations))
         .route(paths::BOT_JOIN_ROUTE, post(bot_join))
         .route(paths::BOT_MESSAGES_ROUTE, post(bot_post))
+        .route(paths::APP_COMMANDS_ROUTE, post(app_add_command))
+        .route(paths::APP_COMMAND_ROUTE, delete(app_remove_command))
+        .route(paths::APP_SIGNING_SECRET_ROUTE, get(app_signing_secret))
+        .route(paths::WORKSPACE_COMMANDS_ROUTE, get(workspace_commands))
+        .route(paths::RUN_COMMAND_ROUTE, post(run_command))
+        .route(paths::COMMAND_RESPOND_ROUTE, post(command_respond))
         .route(paths::HOOK_ROUTE, post(incoming_webhook))
         .route(
             paths::EMOJI_ROUTE,
@@ -686,6 +692,77 @@ async fn app_remove_channel(
     crate::apps::remove_channel(&state, principal.user_id, app_id, conversation_id)
         .await
         .map(Json)
+}
+
+// ----- Slash commands (D36) -----
+
+async fn app_add_command(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(app_id): ApiPath<lazy_domain::AppId>,
+    ApiJson(request): ApiJson<lazy_protocol::CreateAppCommandRequest>,
+) -> Result<Json<lazy_protocol::App>, AppError> {
+    crate::commands::add_command(&state, principal.user_id, app_id, request)
+        .await
+        .map(Json)
+}
+
+async fn app_remove_command(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(command_id): ApiPath<lazy_domain::AppCommandId>,
+) -> Result<StatusCode, AppError> {
+    crate::commands::remove_command(&state, principal.user_id, command_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn app_signing_secret(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(app_id): ApiPath<lazy_domain::AppId>,
+) -> Result<Json<lazy_protocol::AppSigningSecretResponse>, AppError> {
+    let secret = crate::commands::signing_secret(&state, principal.user_id, app_id).await?;
+    Ok(Json(lazy_protocol::AppSigningSecretResponse { secret }))
+}
+
+async fn workspace_commands(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(workspace_id): ApiPath<WorkspaceId>,
+) -> Result<Json<lazy_protocol::WorkspaceCommandsResponse>, AppError> {
+    let commands =
+        crate::commands::workspace_commands(&state, principal.user_id, workspace_id).await?;
+    Ok(Json(lazy_protocol::WorkspaceCommandsResponse { commands }))
+}
+
+async fn run_command(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+    ApiJson(request): ApiJson<lazy_protocol::RunCommandRequest>,
+) -> Result<Json<lazy_protocol::RunCommandResponse>, AppError> {
+    crate::commands::run(&state, principal.user_id, conversation_id, request)
+        .await
+        .map(Json)
+}
+
+/// An app's later answer to a command. Public: the token in the path is the credential.
+async fn command_respond(
+    State(state): State<AppState>,
+    path: Result<Path<String>, PathRejection>,
+    headers: HeaderMap,
+    body: axum::body::Body,
+) -> Response {
+    let token = path.map(|Path(token)| token).unwrap_or_default();
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    match axum::body::to_bytes(body, MAX_WEBHOOK_BODY_BYTES).await {
+        Ok(bytes) => crate::commands::respond(&state, &token, &bytes, content_type).await,
+        Err(_) => {
+            AppError::new(ErrorCode::PayloadTooLarge, "the answer is too large").into_response()
+        }
+    }
 }
 
 async fn bot_me(BotAuth(bot): BotAuth) -> Json<lazy_protocol::BotMeResponse> {

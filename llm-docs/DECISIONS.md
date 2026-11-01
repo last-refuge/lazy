@@ -683,3 +683,29 @@ Goal: a program can act as a bot in Lazy, the way a Slack app does with a bot to
 
 **Not yet:** slash commands (next, D36), reading messages or receiving events, user tokens, OAuth installation for apps made elsewhere, and per-scope rate limits.
 
+## D36. Slash commands (Phase 4, task 4.6)
+
+Goal: `/deploy web` in a conversation goes to the app that answers `/deploy`, the way Slack's slash commands work, so a command server written for Slack answers Lazy's with only its address and secret changed. No protocol bump: only endpoints and types are added (`App.commands` defaults to empty).
+
+**Setting up** (an app's screen, admins and owners):
+- **Adding a command:** `POST /v1/apps/{id}/commands {name, url, description, usage_hint}`. Names are 1 to 32 lower-case letters, digits, `-` and `_`, and unique in the workspace (another app's name is `conflict`). An app has at most 25. The address must be `https://`, or `http://` to this machine only (an app beside the server, and tests). Removing is `DELETE /v1/app-commands/{id}`.
+- **The signing secret** (`GET /v1/apps/{id}/signing-secret`) is made when first asked for. It is a credential (D31), so commands need the credentials key, and deleting the app revokes it with its commands.
+
+**Running** (`POST /v1/conversations/{id}/commands {command, text}`, a member of an open conversation):
+- **The request:** the server `POST`s Slack's form to the address: `token` (empty), `team_id`, `team_domain`, `channel_id`, `channel_name`, `user_id`, `user_name`, `command`, `text`, `api_app_id`, `response_url`, `trigger_id`. It is signed as Slack signs, with `X-Slack-Request-Timestamp` and `X-Slack-Signature: v0=` plus the hex HMAC-SHA256 of `v0:{timestamp}:{body}`. The signer matches Slack's documented example.
+- **The answer:** the app has 3 seconds, and redirects are not followed.
+  - An empty `200` is an acknowledgement.
+  - Plain text, or JSON with `response_type: "ephemeral"` (the default), is a private reply, answered to the client only.
+  - `"in_channel"` is posted by the app's bot, which joins the conversation if it must.
+  - JSON is read like a webhook's body (D33).
+  - A failure, a non-`2xx` status, or a timeout is `unavailable`, with words that name the app.
+- **Later answers** go to `response_url` (`POST /commands/respond/{token}`). Only the token's SHA-256 is kept, and it is good for 30 minutes and 5 answers. They are posted in the conversation by the bot, with operation ids derived from the token and the count. A later *private* answer is refused with a word on why: showing it needs an event older clients cannot read, so it waits for the next protocol bump.
+
+**The app.**
+- **Discovery:** members' clients load the workspace's commands (`GET /v1/workspaces/{id}/commands`) when a draft starts with `/`.
+- **Sending:** `/name text` for a known command runs it instead of sending, and clears the draft. Anything else that starts with `/` (`/shrug`, or before the list has loaded) is an ordinary message.
+- **The reply box** sits above the composer: "Running /deploy web…", then the private reply with the app's name and the command ("Only visible to you", Dismiss), or why it failed. It is held per conversation and never saved.
+- **Managing commands** happens on the app's screen in Integrations: list, Add a command, and Show signing secret with Copy.
+
+**Not yet:** private later answers (above), autocomplete of commands in the composer, interactive messages (4.4), and commands typed in thread replies.
+

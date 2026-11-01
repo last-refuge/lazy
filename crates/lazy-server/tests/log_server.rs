@@ -157,7 +157,7 @@ async fn startup_logs_the_configuration_and_no_credential(
         .lines()
         .find(|l| l.contains("database ready"))
         .expect("a ready line");
-    assert!(ready.contains("migration_version=20"), "{ready}");
+    assert!(ready.contains("migration_version=21"), "{ready}");
 }
 
 #[tokio::test]

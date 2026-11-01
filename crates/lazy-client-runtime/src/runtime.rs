@@ -1600,6 +1600,81 @@ impl Inner {
                     inner.emit(Input::ActionResult { kind, result }).await;
                 });
             }
+            Effect::LoadAppSigningSecret { app } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::app_signing_secret(app);
+                    let result = inner
+                        .retry_read(|| {
+                            inner
+                                .api
+                                .get::<lazy_protocol::AppSigningSecretResponse>(&path)
+                        })
+                        .await
+                        .map(|got| ActionOutcome::AppSigningSecret(SecretUrl::new(got.secret)));
+                    let kind = ActionKind::LoadAppSigningSecret(app);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::AddAppCommand { app, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::app_commands(app);
+                    let result = inner
+                        .retry_read(|| inner.api.post::<lazy_protocol::App, _>(&path, &request))
+                        .await
+                        .map(|app| ActionOutcome::App(Box::new(app)));
+                    let kind = ActionKind::AppCommand(app);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::RemoveAppCommand { command } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::app_command(command);
+                    let result = inner
+                        .retry_read(|| inner.api.delete_unit(&path))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::RemoveAppCommand(command);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::LoadCommands { workspace } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::workspace_commands(workspace);
+                    let result = inner
+                        .retry_read(|| {
+                            inner
+                                .api
+                                .get::<lazy_protocol::WorkspaceCommandsResponse>(&path)
+                        })
+                        .await
+                        .map(|list| ActionOutcome::Commands(list.commands));
+                    let kind = ActionKind::LoadCommands(workspace);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::RunCommand {
+                conversation,
+                request,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: the app acts on each request it gets.
+                    let result = inner
+                        .api
+                        .post::<lazy_protocol::RunCommandResponse, _>(
+                            &paths::run_command(conversation),
+                            &request,
+                        )
+                        .await
+                        .map(|ran| ActionOutcome::CommandRan(Box::new(ran)));
+                    let kind = ActionKind::RunCommand(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
             Effect::PersistView(view) => {
                 if let Some(persistence) = self.persistence() {
                     persistence.queue_view(view);
