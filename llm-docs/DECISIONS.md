@@ -709,3 +709,20 @@ Goal: `/deploy web` in a conversation goes to the app that answers `/deploy`, th
 
 **Not yet:** private later answers (above), autocomplete of commands in the composer, interactive messages (4.4), and commands typed in thread replies.
 
+## D37. Sentry and PagerDuty as webhook connectors (Phase 4, task 4.5)
+
+Both create signed webhooks from their own settings, so both join the D34 framework as a provider module each (`connectors/sentry.rs`, `connectors/pagerduty.rs`). There is no new endpoint and no protocol bump; `ConnectorProvider` gains two values, and older clients read unknown ones as `Unknown`. Migration 0022 widens the stored scope to `^[A-Z0-9_-]{0,64}$` for Sentry's project slugs.
+
+**Sentry** (an internal integration: Settings, Developer Settings):
+- **Checking:** `Sentry-Hook-Signature` is the hex HMAC-SHA256 of the body under the integration's Client Secret, pasted into Lazy. `Sentry-Hook-Resource` names the kind, and `Request-ID` is the dedupe key. Sentry wants an answer within a second; Lazy answers once the delivery is queued.
+- **Kinds:** new issues, issues back again (`unresolved`), resolved, assignments, and alerts (`event_alert` from an alert rule's "Send a notification via ..." action, and `metric_alert` critical/warning/resolved).
+- **Scope:** the project slug (`data.issue.project.slug`; for metric alerts, `data.metric_alert.projects`). An issue alert names only a numeric project id, so it reaches only subscriptions that follow everything; the scope hint says so.
+- **Not handled:** `error` (Business plan) and `comment`.
+
+**PagerDuty** (Integrations, Generic Webhooks (v3), or a service's Integrations tab):
+- **Checking:** `X-PagerDuty-Signature` holds one or more `v1=<hex>` HMAC-SHA256 signatures, several during a secret's rotation. Any one matching is enough, and the `v1=` prefix is required. The secret, shown once by PagerDuty, is pasted into Lazy. `X-Webhook-Id`, the same across retries, is the dedupe key, and `pagey.ping` is ignored.
+- **Kinds:** triggered (with urgency), acknowledged, resolved, escalated and reassigned, and notes (`incident.annotated`).
+- **Scope:** the service id (`data.service.id`), taken from a key or a service address. A note names only its incident, so it reaches only subscriptions that follow everything.
+
+**Not yet:** acting on either service (acknowledging or resolving from Lazy needs their APIs and message buttons, 4.4).
+

@@ -953,6 +953,8 @@ impl IntegrationsDialog {
         let what = match provider {
             ConnectorProvider::Linear => "issues, status changes and project updates",
             ConnectorProvider::Jira => "issues, status changes and comments",
+            ConnectorProvider::Sentry => "new issues, regressions and alerts",
+            ConnectorProvider::PagerDuty => "incidents as they're triggered and resolved",
             ConnectorProvider::Unknown => "activity",
         };
         let (line, color, button) = match &status {

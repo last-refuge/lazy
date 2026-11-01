@@ -352,7 +352,7 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [X] Deduplication by provider delivery ID (D32)
   - [ ] Provider-specific idempotency or reconciliation for any provider action (posting is idempotent per subscription and delivery, D32; Lazy takes no action on GitHub yet)
   - [X] Credential revocation (disconnect revokes all three secrets, D32)
-  - [ ] More providers: Linear and Jira as webhook connectors (built and tested against stand-in deliveries, D34; not yet run against the real services); Confluence, Figma, Miro to do
+  - [ ] More providers: Linear, Jira (D34), Sentry and PagerDuty (D37) as webhook connectors, built and tested against stand-in deliveries, not yet run against the real services; Confluence, Figma deferred by the owner; Miro waits for link previews
 - [ ] 4.6 Bots and commands
   - [X] Bot tokens and scopes (apps with `chat:write`, `channels:read`, `channels:join`, D35)
   - [X] Slash commands (Slack-compatible requests and signatures, private and in-channel answers, `response_url` for in-channel only, D36)

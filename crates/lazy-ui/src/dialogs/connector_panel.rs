@@ -102,6 +102,8 @@ impl ConnectorPanel {
         let (placeholder, label) = match provider {
             ConnectorProvider::Linear => ("e.g. ENG (empty: every team)", "Team key"),
             ConnectorProvider::Jira => ("e.g. WEB (empty: every project)", "Project key"),
+            ConnectorProvider::Sentry => ("e.g. web-app (empty: every project)", "Project slug"),
+            ConnectorProvider::PagerDuty => ("e.g. PXYZ123 (empty: every service)", "Service ID"),
             ConnectorProvider::Unknown => ("", "Key"),
         };
         let scope = single_line_field(placeholder, label, 200, cx);
@@ -1313,6 +1315,14 @@ fn intro(provider: ConnectorProvider) -> String {
              into the channels you choose. Connecting gives you an address to paste into a webhook \
              in Jira's settings; you need the Administer Jira permission to make one."
             .to_owned(),
+        ConnectorProvider::Sentry => "Post new and returning Sentry issues and alerts into the \
+             channels you choose. Connecting gives you an address for an internal integration in \
+             Sentry's settings; you need to be a Sentry manager or owner to make one."
+            .to_owned(),
+        ConnectorProvider::PagerDuty => "Post PagerDuty incidents (triggered, acknowledged, \
+             resolved) into the channels you choose. Connecting gives you an address for a Generic \
+             Webhook in PagerDuty; you need a Manager, Admin or Owner role to add one."
+            .to_owned(),
         ConnectorProvider::Unknown => String::new(),
     }
 }
@@ -1339,6 +1349,18 @@ fn step_provider(provider: ConnectorProvider) -> String {
              (a JQL filter can narrow it to some projects). Save it."
                 .to_owned()
         }
+        ConnectorProvider::Sentry => "2. In Sentry, open Settings, Developer Settings, and create an \
+             internal integration named Lazy. Paste the address as its Webhook URL, turn on Alert \
+             Action, give it Read access to Issue & Event, and tick the issue webhook. Save it, then \
+             paste its Client Secret here. For alerts, add \"Send a notification via Lazy\" to an \
+             alert rule."
+            .to_owned(),
+        ConnectorProvider::PagerDuty => "2. In PagerDuty, open Integrations, Generic Webhooks (v3), \
+             and choose New Webhook (or add one on a service's Integrations tab). Paste the address \
+             as the Webhook URL and choose the incident events (triggered, acknowledged, resolved, \
+             escalated, reassigned, annotated). Add it, then paste the secret it shows here: it is \
+             shown only once."
+            .to_owned(),
         ConnectorProvider::Unknown => String::new(),
     }
 }
@@ -1355,6 +1377,14 @@ fn scope_hint(provider: ConnectorProvider) -> String {
              issue's Jira address. Leave it empty to follow every project the webhook sends."
                 .to_owned()
         }
+        ConnectorProvider::Sentry => "The project's slug, or its Sentry address. Leave it empty to \
+             follow every project. Issue alerts name no project, so only a channel that follows \
+             everything gets them."
+            .to_owned(),
+        ConnectorProvider::PagerDuty => "The service's ID (as in its address, \
+             .../service-directory/PXYZ123) or its address. Leave it empty to follow every service. \
+             Notes name no service, so only a channel that follows everything gets them."
+            .to_owned(),
         ConnectorProvider::Unknown => String::new(),
     }
 }
