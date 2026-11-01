@@ -196,14 +196,17 @@ the organization (all repositories, or chosen ones). The app is private to that 
 remove it: **Disconnect** in Lazy, then delete the app on GitHub (the organization's settings,
 Developer settings, GitHub Apps). Details: D32.
 
-## Connecting Linear and Jira
+## Connecting Linear, Jira, Sentry and PagerDuty
 
 Needs `LAZY_CREDENTIALS_KEY` and `LAZY_PUBLIC_URL` (as for GitHub). An admin opens **Integrations**, chooses **Linear** or **Jira**, and **Connect**, then follows the steps shown:
 
 - **Linear:** a Linear admin opens Settings, API, Webhooks, **New webhook**, pastes the address Lazy shows, chooses the teams and the resource types (Issues, Comments, Projects, Project updates), saves, and pastes the webhook's signing secret back into Lazy.
 - **Jira:** someone with the Administer Jira permission opens Settings, System, WebHooks, **Create a WebHook**, pastes the address, chooses **Make a secret** in Lazy and pastes that into the Secret field, ticks Issue created and updated and Comment created (a JQL filter can narrow it), and saves.
 
-Then **Add a channel** chooses which team (Linear) or project (Jira) goes where. Disconnecting in Lazy does not delete the webhook in Linear or Jira; delete it there too.
+- **Sentry:** a Sentry manager opens Settings, Developer Settings, creates an internal integration, pastes the address as its Webhook URL, turns on Alert Action, gives it Read access to Issue & Event, ticks the issue webhook, and pastes its Client Secret into Lazy. For alerts, add "Send a notification via" the integration to an alert rule.
+- **PagerDuty:** a Manager, Admin or Owner opens Integrations, Generic Webhooks (v3), **New Webhook** (or a service's Integrations tab), pastes the address, picks the incident events, and pastes the secret PagerDuty shows (once) into Lazy.
+
+Then **Add a channel** chooses which team (Linear), project (Jira, Sentry) or service (PagerDuty) goes where. Disconnecting in Lazy does not delete the webhook in Linear or Jira; delete it there too.
 
 ## Apps and the bot API
 

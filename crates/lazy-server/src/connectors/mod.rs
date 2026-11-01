@@ -26,6 +26,8 @@
 
 mod jira;
 mod linear;
+mod pagerduty;
+mod sentry;
 
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -198,6 +200,8 @@ async fn receive_inner(
     let signed = match provider {
         ConnectorProvider::Linear => linear::signature_ok(secret.expose(), headers, body),
         ConnectorProvider::Jira => jira::signature_ok(secret.expose(), headers, body),
+        ConnectorProvider::Sentry => sentry::signature_ok(secret.expose(), headers, body),
+        ConnectorProvider::PagerDuty => pagerduty::signature_ok(secret.expose(), headers, body),
         ConnectorProvider::Unknown => false,
     };
     drop(secret);
@@ -219,6 +223,8 @@ async fn receive_inner(
             linear::receive(headers, &payload)
         }
         ConnectorProvider::Jira => jira::receive(headers, &payload),
+        ConnectorProvider::Sentry => sentry::receive(headers, &payload),
+        ConnectorProvider::PagerDuty => pagerduty::receive(headers, &payload),
         ConnectorProvider::Unknown => return Ok(plain(StatusCode::NOT_FOUND, "unknown connector")),
     };
     let delivery = if received.delivery.is_empty() || received.delivery.len() > 100 {

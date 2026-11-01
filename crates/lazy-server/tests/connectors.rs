@@ -590,3 +590,139 @@ async fn jira_takes_a_secret_lazy_makes(pool: PgPool) {
     assert_eq!(jira(&url, &newer.secret, "j-4", &created).await.0, 200);
     t.app.server.shutdown().await.unwrap();
 }
+
+#[sqlx::test]
+async fn sentry_and_pagerduty_route_by_project_and_service(pool: PgPool) {
+    let t = team(pool, true).await;
+    let app = &t.app;
+    let ops = app.create_channel(&t.boss, "ops", "public").await.id;
+    let mut urls = Vec::new();
+    for (provider, secret) in [
+        (ConnectorProvider::Sentry, "sentry-client-secret-1"),
+        (ConnectorProvider::PagerDuty, "pd-webhook-secret-1"),
+    ] {
+        let s: ConnectorStatusResponse =
+            connect(app, &t.boss, provider).await.json().await.unwrap();
+        let connection = s.connection.unwrap();
+        let set = call(
+            app,
+            reqwest::Method::PUT,
+            &paths::connector_secret(app.workspace_id, provider),
+            &t.boss,
+            Some(json!({"secret": secret})),
+        )
+        .await;
+        assert_eq!(set.status().as_u16(), 204);
+        urls.push((connection.webhook_url, connection.bot_user_id, secret));
+    }
+    let (sentry_url, sentry_bot, sentry_secret) = urls[0].clone();
+    let (pd_url, pd_bot, pd_secret) = urls[1].clone();
+
+    // #general follows one Sentry project; #ops follows every PagerDuty service.
+    assert!(
+        subscribe(
+            app,
+            &t.boss,
+            app.general,
+            ConnectorProvider::Sentry,
+            "https://acme.sentry.io/settings/projects/web-app/",
+            &["issue_created", "alert"]
+        )
+        .await
+        .status()
+        .is_success()
+    );
+    assert!(
+        subscribe(
+            app,
+            &t.boss,
+            ops,
+            ConnectorProvider::PagerDuty,
+            "",
+            &["triggered", "note"]
+        )
+        .await
+        .status()
+        .is_success()
+    );
+
+    let issue = |slug: &str| {
+        json!({"action": "created", "actor": {"type": "application", "id": "sentry"},
+               "data": {"issue": {"shortId": "WEB-1", "title": "Boom", "web_url": "https://acme.sentry.io/issues/1/",
+                                  "project": {"slug": slug, "name": slug}}}})
+    };
+    let sentry_post = |body: Value, id: &'static str, secret: &'static str| {
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let url = sentry_url.clone();
+        async move {
+            post(
+                &url,
+                &body,
+                &[
+                    ("sentry-hook-signature", hex_hmac(secret.as_bytes(), &bytes)),
+                    ("sentry-hook-resource", "issue".to_owned()),
+                    ("request-id", id.to_owned()),
+                ],
+            )
+            .await
+        }
+    };
+    assert_eq!(
+        sentry_post(issue("web-app"), "s-1", sentry_secret).await,
+        (200, "queued".into())
+    );
+    assert_eq!(
+        sentry_post(issue("api"), "s-2", sentry_secret).await,
+        (200, "queued".into())
+    );
+    assert_eq!(sentry_post(issue("web-app"), "s-3", "wrong").await.0, 401);
+
+    let pd = |event_type: &str| {
+        json!({"event": {"event_type": event_type, "agent": {"summary": "Ada"},
+            "data": {"number": 7, "title": "Checkout down", "html_url": "https://acme.pagerduty.com/incidents/Q7",
+                     "urgency": "high", "service": {"id": "PXYZ123", "summary": "Payments"}}}})
+    };
+    let pd_post = |body: Value, id: &'static str| {
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let url = pd_url.clone();
+        async move {
+            post(
+                &url,
+                &body,
+                &[
+                    (
+                        "x-pagerduty-signature",
+                        format!("v1=00ff, v1={}", hex_hmac(pd_secret.as_bytes(), &bytes)),
+                    ),
+                    ("x-webhook-id", id.to_owned()),
+                ],
+            )
+            .await
+        }
+    };
+    assert_eq!(
+        pd_post(pd("incident.triggered"), "p-1").await,
+        (200, "queued".into())
+    );
+    assert_eq!(
+        pd_post(pd("incident.resolved"), "p-2").await,
+        (200, "queued".into())
+    );
+    assert_eq!(
+        pd_post(json!({"event": {"event_type": "pagey.ping"}}), "p-3").await,
+        (200, "ignored".into())
+    );
+    until_jobs_settle(app).await;
+
+    assert_eq!(
+        bot_texts(app, sentry_bot, app.general).await,
+        ["New issue in web-app: WEB-1 Boom (https://acme.sentry.io/issues/1/)"]
+    );
+    assert_eq!(
+        bot_texts(app, pd_bot, ops).await,
+        [
+            "Triggered: #7 Checkout down (https://acme.pagerduty.com/incidents/Q7) on Payments · high urgency"
+        ]
+    );
+    t.app.server.shutdown().await.unwrap();
+}

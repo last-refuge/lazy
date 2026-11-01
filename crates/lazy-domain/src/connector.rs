@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 pub enum ConnectorProvider {
     Linear,
     Jira,
+    Sentry,
+    PagerDuty,
     /// A provider this version does not know (sent by a newer server).
     #[serde(other)]
     Unknown,
@@ -55,6 +57,22 @@ const LINEAR_KINDS: [ConnectorKind; 5] = [
     kind("project", "Projects and project updates", true),
 ];
 
+const SENTRY_KINDS: [ConnectorKind; 5] = [
+    kind("issue_created", "New issues", true),
+    kind("issue_unresolved", "Issues back again", true),
+    kind("issue_resolved", "Resolved issues", false),
+    kind("issue_assigned", "Assignments", false),
+    kind("alert", "Alerts", true),
+];
+
+const PAGERDUTY_KINDS: [ConnectorKind; 5] = [
+    kind("triggered", "Triggered incidents", true),
+    kind("acknowledged", "Acknowledged", true),
+    kind("resolved", "Resolved", true),
+    kind("escalated", "Escalations and reassignments", false),
+    kind("note", "Notes", false),
+];
+
 const JIRA_KINDS: [ConnectorKind; 4] = [
     kind("issue_created", "New issues", true),
     kind("issue_status", "Status changes", true),
@@ -64,13 +82,20 @@ const JIRA_KINDS: [ConnectorKind; 4] = [
 
 impl ConnectorProvider {
     /// Every provider, in the order they are shown.
-    pub const ALL: [ConnectorProvider; 2] = [ConnectorProvider::Linear, ConnectorProvider::Jira];
+    pub const ALL: [ConnectorProvider; 4] = [
+        ConnectorProvider::Linear,
+        ConnectorProvider::Jira,
+        ConnectorProvider::Sentry,
+        ConnectorProvider::PagerDuty,
+    ];
 
     /// The stored name, also used in addresses.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Linear => "linear",
             Self::Jira => "jira",
+            Self::Sentry => "sentry",
+            Self::PagerDuty => "pagerduty",
             Self::Unknown => "unknown",
         }
     }
@@ -84,6 +109,8 @@ impl ConnectorProvider {
         match self {
             Self::Linear => "Linear",
             Self::Jira => "Jira",
+            Self::Sentry => "Sentry",
+            Self::PagerDuty => "PagerDuty",
             Self::Unknown => "Unknown",
         }
     }
@@ -93,6 +120,8 @@ impl ConnectorProvider {
         match self {
             Self::Linear => &LINEAR_KINDS,
             Self::Jira => &JIRA_KINDS,
+            Self::Sentry => &SENTRY_KINDS,
+            Self::PagerDuty => &PAGERDUTY_KINDS,
             Self::Unknown => &[],
         }
     }
@@ -112,7 +141,7 @@ impl ConnectorProvider {
 
     pub fn secret_source(self) -> SecretSource {
         match self {
-            Self::Linear | Self::Unknown => SecretSource::Provider,
+            Self::Linear | Self::Sentry | Self::PagerDuty | Self::Unknown => SecretSource::Provider,
             Self::Jira => SecretSource::Lazy,
         }
     }
@@ -121,7 +150,8 @@ impl ConnectorProvider {
     pub fn scope_label(self) -> &'static str {
         match self {
             Self::Linear => "Team",
-            Self::Jira => "Project",
+            Self::Jira | Self::Sentry => "Project",
+            Self::PagerDuty => "Service",
             Self::Unknown => "Scope",
         }
     }
@@ -131,6 +161,8 @@ impl ConnectorProvider {
         match self {
             Self::Linear => "ENG",
             Self::Jira => "PROJ",
+            Self::Sentry => "web-app",
+            Self::PagerDuty => "PXYZ123",
             Self::Unknown => "",
         }
     }
@@ -149,6 +181,25 @@ impl ConnectorProvider {
             Self::Jira => path_after(text, "/projects/")
                 .or_else(|| path_after(text, "/browse/"))
                 .unwrap_or(text),
+            // .../projects/<slug>/... (settings or the project page), or a slug.
+            Self::Sentry => {
+                let slug = path_after(text, "/projects/").unwrap_or(text);
+                let ok = (1..=50).contains(&slug.len())
+                    && slug.as_bytes()[0].is_ascii_alphanumeric()
+                    && slug
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+                return ok.then(|| slug.to_ascii_uppercase());
+            }
+            // .../service-directory/PXYZ123 or .../services/PXYZ123, or an id.
+            Self::PagerDuty => {
+                let id = path_after(text, "/service-directory/")
+                    .or_else(|| path_after(text, "/services/"))
+                    .unwrap_or(text);
+                let ok =
+                    (2..=20).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric());
+                return ok.then(|| id.to_ascii_uppercase());
+            }
             Self::Unknown => return None,
         };
         let key = match key.split_once('-') {
@@ -164,7 +215,7 @@ impl ConnectorProvider {
                     && key.as_bytes()[0].is_ascii_alphabetic()
                     && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
             }
-            Self::Unknown => false,
+            Self::Sentry | Self::PagerDuty | Self::Unknown => false,
         };
         valid.then(|| key.to_ascii_uppercase())
     }
@@ -216,5 +267,23 @@ mod tests {
             Some("APP".into())
         );
         assert_eq!(jira.normalize_scope("2BAD"), None);
+        let sentry = ConnectorProvider::Sentry;
+        assert_eq!(sentry.normalize_scope("web-app"), Some("WEB-APP".into()));
+        assert_eq!(
+            sentry.normalize_scope("https://acme.sentry.io/settings/projects/api-server/"),
+            Some("API-SERVER".into())
+        );
+        assert_eq!(
+            sentry.normalize_scope("https://sentry.io/organizations/acme/projects/web/?project=1"),
+            Some("WEB".into())
+        );
+        assert_eq!(sentry.normalize_scope("bad slug"), None);
+        let pd = ConnectorProvider::PagerDuty;
+        assert_eq!(
+            pd.normalize_scope("https://acme.pagerduty.com/service-directory/PXYZ123"),
+            Some("PXYZ123".into())
+        );
+        assert_eq!(pd.normalize_scope("p1abc"), Some("P1ABC".into()));
+        assert_eq!(pd.normalize_scope("not an id"), None);
     }
 }
