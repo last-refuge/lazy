@@ -89,7 +89,10 @@ Based on Coolify's documented conventions for Docker Compose applications (the `
    generated for you. **Read `SERVICE_PASSWORD_SETUPCODE` here**: it is the setup code you type when
    you create the owner account. Optional overrides: `LAZY_SEED_REGISTRATION` (`invite_only` or
    `open`), `LAZY_OPEN_WORKSPACE_CREATION`, `LAZY_EVENT_RETENTION_DAYS`, `LAZY_MAX_ATTACHMENT_BYTES`,
-   `LAZY_LOG`, `LAZY_LOG_FORMAT`. For integrations that hold credentials (GitHub), add
+   `LAZY_LOG`, `LAZY_LOG_FORMAT`. Set **`LAZY_PUBLIC_URL`** to the domain (`https://chat.example.com`):
+   without it the server uses Coolify's generated `SERVICE_URL_LAZY`, which can keep an old
+   `sslip.io` address after the domain changes (seen on Coolify 4.5.3), and webhook addresses and
+   GitHub would use that. The startup log's `public_url=` shows which one it took. For integrations that hold credentials (GitHub), add
    `LAZY_CREDENTIALS_KEY` (see "The credentials key" below).
 5. **Deploy.** The first build takes a few minutes. Both services show healthy (the container has
    its own health check, `lazy-server healthcheck`).
@@ -186,7 +189,8 @@ may share the queue.
 ## Connecting GitHub
 
 Needs `LAZY_CREDENTIALS_KEY` (above) and `LAZY_PUBLIC_URL` set to the `https://` address GitHub can
-reach (Coolify sets it from the domain). An admin then opens **Integrations, GitHub, Connect GitHub**
+reach: on Coolify, set it yourself (step 4 above), and check the startup log's `public_url=` before
+connecting. An admin then opens **Integrations, GitHub, Connect GitHub**
 in the app, names the organization, and follows GitHub's screens: create the app, then install it on
 the organization (all repositories, or chosen ones). The app is private to that organization. To
 remove it: **Disconnect** in Lazy, then delete the app on GitHub (the organization's settings,

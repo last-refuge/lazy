@@ -133,6 +133,11 @@ struct ServeArgs {
     /// (`<public-url>/hooks/<id>/<secret>`). Defaults to http:// and the listening address.
     #[arg(long, env = "LAZY_PUBLIC_URL")]
     public_url: Option<String>,
+    /// The address to use when `LAZY_PUBLIC_URL` is unset or empty: a deployment's generated
+    /// address (Coolify's `SERVICE_URL_LAZY`), which can lag behind a domain set later, so a
+    /// `LAZY_PUBLIC_URL` someone sets always wins.
+    #[arg(long, env = "LAZY_DEFAULT_PUBLIC_URL", hide = true)]
+    default_public_url: Option<String>,
     /// The directory attachment files are kept in. It is created if it does not exist; keep it on
     /// a disk that survives restarts, and back it up with the database.
     #[arg(long, env = "LAZY_ATTACHMENTS_DIR", default_value = "attachments")]
@@ -233,7 +238,7 @@ async fn serve(args: ServeArgs) -> Result<(), lazy_server::AppError> {
     config.open_registration = args.open_registration;
     config.open_workspace_creation = args.open_workspace_creation;
     config.event_retention_days = args.event_retention_days;
-    config.public_url = args.public_url;
+    config.public_url = public_url(args.public_url, args.default_public_url);
     config.attachments_dir = args.attachments_dir;
     config.max_attachment_bytes = args.max_attachment_bytes;
     config.credential_keys = args.keys.keys()?;
@@ -281,6 +286,15 @@ async fn rewrap(args: RewrapArgs) -> Result<(), lazy_server::AppError> {
         )));
     }
     Ok(())
+}
+
+/// The first of the given addresses that is set and not blank.
+fn public_url(given: Option<String>, default: Option<String>) -> Option<String> {
+    [given, default]
+        .into_iter()
+        .flatten()
+        .map(|url| url.trim().to_owned())
+        .find(|url| !url.is_empty())
 }
 
 async fn migrate(args: DatabaseArgs) -> Result<(), lazy_server::AppError> {
@@ -371,6 +385,29 @@ mod tests {
         assert!(Cli::try_parse_from(argv).is_err());
         let args = serve_args(&["--setup-code", "a-long-enough-setup-code"]);
         assert_eq!(args.setup_code.as_deref(), Some("a-long-enough-setup-code"));
+    }
+
+    #[test]
+    fn a_set_public_url_wins_over_the_generated_one_and_blank_means_unset() {
+        let some = |s: &str| Some(s.to_owned());
+        let generated = some("http://lazy-abc.203.0.113.7.sslip.io");
+        assert_eq!(
+            public_url(some("https://chat.example.com"), generated.clone()).as_deref(),
+            Some("https://chat.example.com")
+        );
+        assert_eq!(public_url(some("  "), generated.clone()), generated);
+        assert_eq!(public_url(None, generated.clone()), generated);
+        assert_eq!(public_url(None, some("")), None);
+        let args = serve_args(&[
+            "--public-url",
+            "https://chat.example.com",
+            "--default-public-url",
+            "http://generated",
+        ]);
+        assert_eq!(
+            public_url(args.public_url, args.default_public_url).as_deref(),
+            Some("https://chat.example.com")
+        );
     }
 
     #[test]

@@ -32,7 +32,11 @@ services:
       # Gives the service a domain (editable in Coolify) routed to port 8080, with HTTPS and WebSockets.
       - SERVICE_URL_LAZY_8080
       - DATABASE_URL=postgres://lazy:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/lazy
-      - LAZY_PUBLIC_URL=${SERVICE_URL_LAZY}
+      # The address clients, webhooks and GitHub use. Coolify's generated SERVICE_URL_LAZY is the
+      # fallback; it can keep an old address after the domain changes, so set LAZY_PUBLIC_URL
+      # (https://your.domain) in Coolify to be sure.
+      - LAZY_PUBLIC_URL=${LAZY_PUBLIC_URL:-}
+      - LAZY_DEFAULT_PUBLIC_URL=${SERVICE_URL_LAZY}
       - LAZY_SETUP_CODE=${SERVICE_PASSWORD_SETUPCODE}
       - LAZY_SEED_REGISTRATION=${LAZY_SEED_REGISTRATION:-invite_only}
       - LAZY_OPEN_WORKSPACE_CREATION=${LAZY_OPEN_WORKSPACE_CREATION:-true}
