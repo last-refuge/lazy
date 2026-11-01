@@ -182,3 +182,13 @@ The server runs background jobs (integration deliveries) from a queue in Postgre
 process by default. To isolate them, run a second container with the same image and environment and
 the command `lazy-server worker`, and set `LAZY_RUN_JOBS=false` on the server. Any number of workers
 may share the queue.
+
+## Connecting GitHub
+
+Needs `LAZY_CREDENTIALS_KEY` (above) and `LAZY_PUBLIC_URL` set to the `https://` address GitHub can
+reach (Coolify sets it from the domain). An admin then opens **Integrations, GitHub, Connect GitHub**
+in the app, names the organization, and follows GitHub's screens: create the app, then install it on
+the organization (all repositories, or chosen ones). The app is private to that organization. To
+remove it: **Disconnect** in Lazy, then delete the app on GitHub (the organization's settings,
+Developer settings, GitHub Apps). Details: D32.
+

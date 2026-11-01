@@ -15,6 +15,7 @@ const ALLOWED_FIELDS: &[&str] = &[
     "user_id",
     "webhook_id",
     "job_id",
+    "github_app_id",
     // counters, sizes, durations
     "seq",
     "deleted",

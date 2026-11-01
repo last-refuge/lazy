@@ -548,3 +548,53 @@ The foundation every connector needs (the agreed order is this, then the GitHub 
 
 **Not yet:** an admin view of failed and unknown jobs with Retry (it comes with the first connector that enqueues jobs), and installation and subscription tables (they come with GitHub, shaped by it).
 
+## D32. The GitHub connector, server side (Phase 4, task 4.5; slice 2a)
+
+A workspace connects GitHub by having Lazy create **its own GitHub App**, owned by an organization and installable only there (GitHub's "Only on this account"); for the dogfood server that is `last-refuge`, covering every repository in it. Setup is entirely through screens: Lazy, then GitHub's own. Migration 0018; new endpoints and types only, so `PROTOCOL_VERSION` stays 14. The admin screens in the app are slice 2b.
+
+**Connecting (GitHub's manifest flow).**
+1. `POST /v1/workspaces/{id}/github/setup {organization}` (admins and owners; `unavailable` without a credentials key, D31; `conflict` if already connected) answers with a one-time address, `{public-url}/github/setup/{state}`, valid for an hour. Only the state's SHA-256 is stored.
+2. That page posts the browser to `github.com/organizations/{org}/settings/apps/new` with a manifest. The manifest asks for:
+   - **name** `Lazy {host}`, at most 34 characters; editable on GitHub if it's taken;
+   - **webhook** `{public-url}/github/webhook`, and **redirect** `{public-url}/github/callback`;
+   - **public: false** (installable only by its owner);
+   - **read access** to metadata, contents, pull requests, issues and actions;
+   - **events:** `pull_request`, `pull_request_review`, `issues`, `issue_comment`, `push`, `release`, `workflow_run`.
+3. GitHub redirects to `/github/callback?code&state`. The state is claimed once (used, unexpired), and the code is traded at `POST /app-manifests/{code}/conversions`.
+4. The private key, webhook secret and client secret are sealed as credentials. A bot user named "GitHub" is created as in D16 (`member_joined`), and the browser is sent to `{app}/installations/new`.
+
+A refused conversion says to start again; a second app while one is live is refused and the page says to delete the extra one on GitHub. Installations are recorded only from GitHub's signed `installation` and `installation_repositories` events, keyed by installation id and app id, never from the setup redirect, which anyone could forge.
+
+**Receiving.** `POST /github/webhook`:
+1. **Find the app** by `X-GitHub-Hook-Installation-Target-ID`. An unknown or disconnected app gets `404`.
+2. **Check the signature.** `X-Hub-Signature-256` is checked with HMAC-SHA256 (aws-lc-rs) against the app's webhook secret; a mismatch gets `401`. The body is at most 5 MiB.
+3. **Reduce to a summary.** Each delivery is reduced to event, action, repository, kind of activity, and Markdown text, with everything from GitHub escaped so it can't format, link or mention. Nothing else of the payload is kept.
+4. **Queue it** as a `github.event` job (D31) whose dedupe key is `X-GitHub-Delivery`. The answer is `202 queued`, or `200 already received` for a repeat. `ping` gets `200`; events and actions that post nothing get `200 ignored`.
+
+What posts:
+
+| Kind | Posts when | Text |
+| --- | --- | --- |
+| Pull requests | opened (or as a draft), ready for review, reopened, merged, closed | a quote of the description when opened |
+| Reviews | submitted (approved, changes requested, commented) | a quote of the review |
+| Issues | opened, reopened, closed (or "not planned") | a quote when opened |
+| Comments | new comments on issues and pull requests | a quote of the comment |
+| Commits | pushes to the default branch only | up to 5 commits, then "and N more" |
+| Releases | published | marked as a pre-release when it is one |
+| Failed workflow runs | `workflow_run` completed as failure, timed out, or startup failure | — |
+
+Quotes are at most 280 characters over 3 lines. New subscriptions follow pull requests, issues, commits, releases and failed runs; reviews and comments are off unless chosen.
+
+**Posting.** The job posts the text, as the bot, through the ordinary send, into every channel subscribed to the repository for that kind:
+- Each post's operation id is UUID v5 of the subscription and the delivery, so a retried job never posts twice.
+- A channel that refuses (archived, bot removed, gone) is skipped. Any other failure retries the job; posts already made are recognised by their receipts.
+- A disconnected app fails definitively.
+
+**Managing.**
+- **Status.** `GET /v1/workspaces/{id}/github` returns: whether credentials are available; the connection; the live installations of the current app; the subscriptions in channels the caller can read; and the 50 newest deliveries, with state (queued, running, posted, failed, unknown), attempts and last error.
+- **Subscribe.** `POST /v1/conversations/{id}/github/subscriptions {repository, events}` needs an admin who can read the channel, an unarchived channel, a live app, and an owner the app is installed on. It accepts `owner/name` or a GitHub address. The same repository again replaces the events, and the bot joins the channel (`member_added`).
+- **Unsubscribe.** `DELETE /v1/github/subscriptions/{id}` is idempotent; the bot leaves a channel with no subscriptions left.
+- **Retry.** `POST /v1/github/deliveries/{id}/retry` runs a failed or unknown delivery again (`conflict` otherwise).
+- **Disconnect.** `DELETE /v1/workspaces/{id}/github` revokes the three credentials, marks the app disconnected, deletes the subscriptions, and has the bot leave each channel. The app stays on GitHub until an owner deletes it there (GitHub has no API to delete one). Connecting again replaces the row.
+
+**Not yet:** the app's screens (2b); repository pickers (the admin types `owner/name`, as with Slack's `/github subscribe`); GitHub API calls with the stored private key (listing repositories, acting on GitHub); links that unfurl.

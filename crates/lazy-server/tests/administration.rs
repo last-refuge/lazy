@@ -837,6 +837,37 @@ async fn ask_everything(app: &App, who: &Account, things: &Things, peer: &Accoun
     .await;
     answer(
         &mut out,
+        "github status",
+        app.call(reqwest::Method::GET, &paths::github(ws), who, None)
+            .await,
+    )
+    .await;
+    answer(
+        &mut out,
+        "github setup",
+        app.call(
+            reqwest::Method::POST,
+            &paths::github_setup(ws),
+            who,
+            Some(json!({"organization": "last-refuge"})),
+        )
+        .await,
+    )
+    .await;
+    answer(
+        &mut out,
+        "github subscribe",
+        app.call(
+            reqwest::Method::POST,
+            &paths::github_subscriptions(c),
+            who,
+            Some(json!({"repository": "last-refuge/lazy", "events": ["push"]})),
+        )
+        .await,
+    )
+    .await;
+    answer(
+        &mut out,
         "new webhook address",
         app.call(
             reqwest::Method::POST,

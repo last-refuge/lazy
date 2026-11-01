@@ -108,6 +108,18 @@ pub fn router(state: AppState) -> Router {
         )
         .route(paths::WEBHOOK_DELIVERIES_ROUTE, get(webhook_deliveries))
         .route(paths::WEBHOOK_ADDRESS_ROUTE, post(new_webhook_address))
+        .route(
+            paths::GITHUB_ROUTE,
+            get(github_status).delete(github_disconnect),
+        )
+        .route(paths::GITHUB_SETUP_ROUTE, post(github_setup))
+        .route(paths::GITHUB_SUBSCRIPTIONS_ROUTE, post(github_subscribe))
+        .route(paths::GITHUB_SUBSCRIPTION_ROUTE, delete(github_unsubscribe))
+        .route(paths::GITHUB_DELIVERY_RETRY_ROUTE, post(github_retry))
+        .route(paths::GITHUB_SETUP_PAGE_ROUTE, get(github_setup_page))
+        .route(paths::GITHUB_CALLBACK_ROUTE, get(github_callback))
+        .route(paths::GITHUB_INSTALLED_ROUTE, get(github_installed))
+        .route(paths::GITHUB_WEBHOOK_ROUTE, post(github_webhook))
         .route(paths::HOOK_ROUTE, post(incoming_webhook))
         .route(
             paths::EMOJI_ROUTE,
@@ -375,6 +387,120 @@ async fn new_webhook_address(
     webhooks::new_address(&state, principal.user_id, webhook_id)
         .await
         .map(Json)
+}
+
+// ----- GitHub (D32) -----
+
+async fn github_status(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(workspace_id): ApiPath<WorkspaceId>,
+) -> Result<Json<lazy_protocol::GithubStatusResponse>, AppError> {
+    crate::github::status(&state, principal.user_id, workspace_id)
+        .await
+        .map(Json)
+}
+
+async fn github_disconnect(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(workspace_id): ApiPath<WorkspaceId>,
+) -> Result<StatusCode, AppError> {
+    crate::github::disconnect(&state, principal.user_id, workspace_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn github_setup(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(workspace_id): ApiPath<WorkspaceId>,
+    ApiJson(request): ApiJson<lazy_protocol::StartGithubSetupRequest>,
+) -> Result<Json<lazy_protocol::GithubSetupResponse>, AppError> {
+    let url = crate::github::start_setup(
+        &state,
+        principal.user_id,
+        workspace_id,
+        &request.organization,
+    )
+    .await?;
+    Ok(Json(lazy_protocol::GithubSetupResponse { url }))
+}
+
+async fn github_subscribe(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+    ApiJson(request): ApiJson<lazy_protocol::CreateGithubSubscriptionRequest>,
+) -> Result<Json<lazy_protocol::GithubSubscriptionResponse>, AppError> {
+    let subscription =
+        crate::github::subscribe(&state, principal.user_id, conversation_id, request).await?;
+    Ok(Json(lazy_protocol::GithubSubscriptionResponse {
+        subscription,
+    }))
+}
+
+async fn github_unsubscribe(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(subscription_id): ApiPath<lazy_domain::GithubSubscriptionId>,
+) -> Result<StatusCode, AppError> {
+    crate::github::unsubscribe(&state, principal.user_id, subscription_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn github_retry(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(delivery_id): ApiPath<i64>,
+) -> Result<StatusCode, AppError> {
+    crate::github::retry_delivery(&state, principal.user_id, delivery_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The admin's browser, from the address `github_setup` answered with. Public: the state in the
+/// path is the credential.
+async fn github_setup_page(
+    State(state): State<AppState>,
+    path: Result<Path<String>, PathRejection>,
+) -> Response {
+    let token = path.map(|Path(token)| token).unwrap_or_default();
+    crate::github::setup_page(&state, &token).await
+}
+
+#[derive(serde::Deserialize)]
+struct GithubCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+}
+
+/// GitHub sends the admin's browser here after creating the app.
+async fn github_callback(
+    State(state): State<AppState>,
+    query: Result<Query<GithubCallbackQuery>, QueryRejection>,
+) -> Response {
+    let query = query.map(|Query(q)| q).unwrap_or(GithubCallbackQuery {
+        code: None,
+        state: None,
+    });
+    crate::github::callback(&state, query.code.as_deref(), query.state.as_deref()).await
+}
+
+async fn github_installed() -> Response {
+    crate::github::installed_page()
+}
+
+/// GitHub's webhook deliveries. Public: each is checked against the app's signing secret.
+async fn github_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Body,
+) -> Response {
+    match axum::body::to_bytes(body, crate::github::MAX_BODY_BYTES).await {
+        Ok(bytes) => crate::github::receive(&state, &headers, &bytes).await,
+        Err(_) => {
+            AppError::new(ErrorCode::PayloadTooLarge, "the delivery is too large").into_response()
+        }
+    }
 }
 
 /// Why a delivery was not made: a refusal like any other, or the webhook is posting too fast.

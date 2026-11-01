@@ -84,7 +84,7 @@ async fn a_database_left_by_the_previous_release_upgrades_in_place(pool: PgPool)
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=18).collect::<Vec<i64>>());
 
     let alice = account("alice", "1", 'a');
     let bob = account("bob", "2", 'b');
@@ -272,7 +272,7 @@ async fn a_database_left_by_the_mentions_release_upgrades_in_place_and_gains_thr
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=18).collect::<Vec<i64>>());
     // Every message is still listed except the one that was deleted; nothing has a thread; the
     // mention rows are listed; the indexes the counts and pages use exist.
     let unlisted: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM messages WHERE NOT listed")
@@ -460,7 +460,7 @@ async fn a_database_left_by_the_threads_release_upgrades_in_place_and_gains_webh
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=18).collect::<Vec<i64>>());
     // Everyone who was here is a person, with the password they had and the session they had; there
     // are no webhooks.
     let (people, bots, sessions, hooks): (i64, i64, i64, i64) = sqlx::query_as(
@@ -639,7 +639,7 @@ async fn a_database_left_by_the_webhooks_release_upgrades_in_place_and_gains_att
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=18).collect::<Vec<i64>>());
     let files: i64 = sqlx::query_scalar("SELECT count(*) FROM attachments")
         .fetch_one(&pool)
         .await
@@ -808,7 +808,7 @@ async fn a_database_left_by_the_attachments_release_upgrades_in_place_and_gains_
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=18).collect::<Vec<i64>>());
     let emoji: i64 = sqlx::query_scalar("SELECT count(*) FROM custom_emoji")
         .fetch_one(&pool)
         .await
@@ -999,7 +999,7 @@ async fn a_database_left_by_the_custom_emoji_release_upgrades_in_place_and_gains
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=18).collect::<Vec<i64>>());
     let unindexed: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM messages WHERE plain_text <> '' AND search_vector = ''::tsvector",
     )
@@ -1122,7 +1122,7 @@ async fn a_database_left_by_the_search_release_upgrades_in_place_and_gains_atten
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=18).collect::<Vec<i64>>());
     let rows: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM notification_settings) \
               + (SELECT count(*) FROM conversation_notification_prefs) \
@@ -1260,7 +1260,7 @@ async fn a_database_left_by_the_attention_release_upgrades_in_place_and_gains_di
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=18).collect::<Vec<i64>>());
     let saved_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM saved_messages")
         .fetch_one(&pool)
         .await
@@ -1392,7 +1392,7 @@ async fn a_database_left_by_the_discovery_release_upgrades_in_place_and_gains_ad
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=18).collect::<Vec<i64>>());
     let deactivated: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM workspace_members WHERE deactivated_at IS NOT NULL",
     )
@@ -1530,7 +1530,7 @@ async fn a_database_left_by_the_administration_release_upgrades_in_place_and_gai
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=18).collect::<Vec<i64>>());
     // Nobody has a picture, and no workspace has a creator (the old one is the default one).
     let (pictured, avatars, creators): (i64, i64, i64) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM users WHERE avatar_version <> 0), \

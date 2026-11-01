@@ -107,6 +107,23 @@ pub mod paths {
     /// `POST` gives a webhook a new secret: the old address stops working at once and the new one
     /// is shown once.
     pub const WEBHOOK_ADDRESS_ROUTE: &str = "/v1/webhooks/{webhook_id}/address";
+    /// `GET` the workspace's GitHub connection, installations, subscriptions and recent
+    /// deliveries; `DELETE` disconnects it. Admins and owners only (D32).
+    pub const GITHUB_ROUTE: &str = "/v1/workspaces/{workspace_id}/github";
+    /// `POST` starts connecting GitHub: answers with an address to open in a browser.
+    pub const GITHUB_SETUP_ROUTE: &str = "/v1/workspaces/{workspace_id}/github/setup";
+    /// `POST` subscribes a channel to a repository (or changes what it follows).
+    pub const GITHUB_SUBSCRIPTIONS_ROUTE: &str =
+        "/v1/conversations/{conversation_id}/github/subscriptions";
+    /// `DELETE` removes a subscription.
+    pub const GITHUB_SUBSCRIPTION_ROUTE: &str = "/v1/github/subscriptions/{subscription_id}";
+    /// `POST` runs a failed or unknown GitHub delivery again.
+    pub const GITHUB_DELIVERY_RETRY_ROUTE: &str = "/v1/github/deliveries/{delivery_id}/retry";
+    /// Public pages and endpoints GitHub and the admin's browser reach. Not part of the API.
+    pub const GITHUB_SETUP_PAGE_ROUTE: &str = "/github/setup/{state}";
+    pub const GITHUB_CALLBACK_ROUTE: &str = "/github/callback";
+    pub const GITHUB_INSTALLED_ROUTE: &str = "/github/installed";
+    pub const GITHUB_WEBHOOK_ROUTE: &str = "/github/webhook";
     /// `POST` delivers a message through an incoming webhook. Public: the secret in the path is
     /// the only credential, so it carries no `Authorization` header.
     pub const HOOK_ROUTE: &str = "/hooks/{webhook_id}/{secret}";
@@ -258,6 +275,26 @@ pub mod paths {
 
     pub fn webhook_address(webhook_id: WebhookId) -> String {
         format!("/v1/webhooks/{webhook_id}/address")
+    }
+
+    pub fn github(workspace_id: WorkspaceId) -> String {
+        format!("/v1/workspaces/{workspace_id}/github")
+    }
+
+    pub fn github_setup(workspace_id: WorkspaceId) -> String {
+        format!("/v1/workspaces/{workspace_id}/github/setup")
+    }
+
+    pub fn github_subscriptions(conversation_id: ConversationId) -> String {
+        format!("/v1/conversations/{conversation_id}/github/subscriptions")
+    }
+
+    pub fn github_subscription(subscription_id: lazy_domain::GithubSubscriptionId) -> String {
+        format!("/v1/github/subscriptions/{subscription_id}")
+    }
+
+    pub fn github_delivery_retry(delivery_id: i64) -> String {
+        format!("/v1/github/deliveries/{delivery_id}/retry")
     }
 
     pub fn hook(webhook_id: WebhookId, secret: &str) -> String {
@@ -1060,6 +1097,123 @@ pub struct WorkspaceWebhook {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceWebhooksResponse {
     pub webhooks: Vec<WorkspaceWebhook>,
+}
+
+/// The workspace's GitHub App (D32).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubConnection {
+    /// The app's name on GitHub, as in `https://github.com/apps/{slug}`.
+    pub app_slug: String,
+    /// The app's page on GitHub (install it, change its repositories).
+    pub html_url: String,
+    /// The organization that owns it.
+    pub owner: String,
+    /// The bot that posts what GitHub sends.
+    pub bot_user_id: UserId,
+    pub created_by: UserId,
+    pub created_at: Timestamp,
+}
+
+/// Where the app is installed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubInstallation {
+    pub account: String,
+    /// Every repository of the account, rather than chosen ones.
+    pub all_repositories: bool,
+    pub suspended: bool,
+}
+
+/// One repository's activity followed in one channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubSubscription {
+    pub id: lazy_domain::GithubSubscriptionId,
+    pub conversation_id: ConversationId,
+    /// The channel's name (an admin may not have joined it).
+    pub channel_name: ChannelName,
+    /// `owner/name`, lower case.
+    pub repository: String,
+    pub events: Vec<lazy_domain::github::GithubEvent>,
+    pub created_by: UserId,
+    pub created_at: Timestamp,
+}
+
+/// Where one delivery from GitHub stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GithubDeliveryState {
+    /// Waiting to be posted (also between retries).
+    Queued,
+    Running,
+    /// Posted to every channel that follows it (or to none, if none does).
+    Posted,
+    /// Gave up: posting failed and will not be tried again unless asked.
+    Failed,
+    /// It may or may not have been posted; not tried again unless asked.
+    Unknown,
+    #[serde(other)]
+    Other,
+}
+
+/// One event GitHub sent, as Lazy handled it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubDelivery {
+    pub id: i64,
+    /// GitHub's event name (`pull_request`, `push`, ...).
+    pub event: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    pub state: GithubDeliveryState,
+    pub attempts: u32,
+    /// Why the last attempt did not post, in Lazy's words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    pub received_at: Timestamp,
+}
+
+/// Response of `GET /v1/workspaces/{id}/github`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubStatusResponse {
+    /// Whether this server can hold GitHub's credentials (it has a credentials key). Without it,
+    /// connecting is `unavailable`.
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<GithubConnection>,
+    pub installations: Vec<GithubInstallation>,
+    /// Subscriptions in channels the caller can read, by channel then repository.
+    pub subscriptions: Vec<GithubSubscription>,
+    /// The newest deliveries first, at most 50.
+    pub deliveries: Vec<GithubDelivery>,
+}
+
+/// `POST /v1/workspaces/{id}/github/setup`: starts connecting GitHub. The app is created in
+/// `organization`, owned by it, and installable only there. Answers with a one-time address to
+/// open in a browser, valid for an hour. `conflict` if GitHub is already connected; `unavailable`
+/// without a credentials key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartGithubSetupRequest {
+    pub organization: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubSetupResponse {
+    pub url: String,
+}
+
+/// `POST /v1/conversations/{id}/github/subscriptions`: the channel follows `repository`
+/// (`owner/name`, or a GitHub address) for `events` (at least one). The same repository again
+/// changes the events. The app's bot joins the channel. Admins and owners who can read the
+/// channel; the repository must belong to an account the app is installed on (`invalid_request`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateGithubSubscriptionRequest {
+    pub repository: String,
+    pub events: Vec<lazy_domain::github::GithubEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubSubscriptionResponse {
+    pub subscription: GithubSubscription,
 }
 
 /// Body of `POST /hooks/{id}/{secret}`. `text` is composer source: formatting and `:shortcode:`

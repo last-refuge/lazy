@@ -85,6 +85,11 @@ uuid_id!(
     Uuid::now_v7()
 );
 uuid_id!(
+    /// A GitHub subscription: one repository's activity followed in one channel (D32).
+    GithubSubscriptionId,
+    Uuid::now_v7()
+);
+uuid_id!(
     /// An invitation to join a workspace. Assigned by the server; it names the invitation, and the
     /// separate code is what a person types.
     InvitationId,
