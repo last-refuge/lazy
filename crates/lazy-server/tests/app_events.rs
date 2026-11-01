@@ -178,6 +178,16 @@ async fn an_app_is_told_what_happens_in_its_channels(pool: PgPool) {
     };
     *stand.wrong.lock().unwrap() = true;
     denied(set(json!(["message"])).await, ErrorCode::InvalidRequest).await;
+    // A tool that cannot answer the challenge is saved when the check is skipped.
+    let skipped = app
+        .call(
+            reqwest::Method::PUT,
+            &events_path,
+            &boss,
+            Some(json!({"url": url, "types": ["message"], "skip_check": true})),
+        )
+        .await;
+    assert!(skipped.status().is_success(), "{}", skipped.status());
     *stand.wrong.lock().unwrap() = false;
     denied(set(json!(["nonsense"])).await, ErrorCode::InvalidRequest).await;
     denied(

@@ -71,6 +71,8 @@ pub struct AppsPanel {
     /// The events address, and the kinds chosen, as being edited (D38).
     events_url: Entity<TextInput>,
     event_types: Vec<&'static str>,
+    /// Save the events address without the challenge (Zapier, n8n, Make).
+    skip_check: bool,
     scopes: Vec<AppScope>,
     /// The signing secret is showing (it was asked for).
     secret_shown: bool,
@@ -89,6 +91,7 @@ pub struct AppsPanel {
     secret_focus: FocusHandle,
     events_save_focus: FocusHandle,
     events_off_focus: FocusHandle,
+    skip_check_focus: FocusHandle,
     event_type_focus: HashMap<&'static str, FocusHandle>,
     manage_focus: HashMap<AppId, FocusHandle>,
     remove_command_focus: HashMap<lazy_domain::AppCommandId, FocusHandle>,
@@ -191,6 +194,7 @@ impl AppsPanel {
             command_usage,
             events_url,
             event_types: vec!["app_mention"],
+            skip_check: false,
             scopes: AppScope::DEFAULT.to_vec(),
             secret_shown: false,
             secret_copied: false,
@@ -207,6 +211,7 @@ impl AppsPanel {
             secret_focus: cx.focus_handle().tab_stop(true),
             events_save_focus: cx.focus_handle().tab_stop(true),
             events_off_focus: cx.focus_handle().tab_stop(true),
+            skip_check_focus: cx.focus_handle().tab_stop(true),
             event_type_focus: HashMap::new(),
             manage_focus: HashMap::new(),
             remove_command_focus: HashMap::new(),
@@ -432,7 +437,15 @@ impl AppsPanel {
         };
         let url = self.events_url.read(cx).text().trim().to_owned();
         let types = self.event_types.iter().map(|t| (*t).to_owned()).collect();
-        self.dispatch(Input::SetAppEvents { app, url, types }, cx);
+        self.dispatch(
+            Input::SetAppEvents {
+                app,
+                url,
+                types,
+                skip_check: self.skip_check,
+            },
+            cx,
+        );
     }
 
     fn make(&mut self, cx: &mut Context<Self>) {
@@ -1301,6 +1314,33 @@ impl AppsPanel {
                 cx,
             ))
             .child(toggles)
+            .child({
+                let skip_to = cx.entity().downgrade();
+                form::button(
+                    theme,
+                    "apps-events-skip-check",
+                    if self.skip_check {
+                        "✓ Don't check the address (Zapier, n8n, Make)"
+                    } else {
+                        "Don't check the address (Zapier, n8n, Make)"
+                    },
+                    if self.skip_check {
+                        ButtonKind::Primary
+                    } else {
+                        ButtonKind::Secondary
+                    },
+                    !working,
+                    &self.skip_check_focus,
+                    move |_, cx| {
+                        skip_to
+                            .update(cx, |panel, cx| {
+                                panel.skip_check = !panel.skip_check;
+                                cx.notify();
+                            })
+                            .ok();
+                    },
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -1339,6 +1379,7 @@ impl AppsPanel {
                                                 app: id,
                                                 url: String::new(),
                                                 types: Vec::new(),
+                                                skip_check: false,
                                             },
                                             cx,
                                         );

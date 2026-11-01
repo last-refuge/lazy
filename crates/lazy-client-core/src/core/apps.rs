@@ -275,6 +275,7 @@ impl ClientCore {
         app: AppId,
         url: &str,
         types: Vec<String>,
+        skip_check: bool,
         out: &mut Output,
     ) {
         let kind = ActionKind::AppEvents(app);
@@ -292,6 +293,7 @@ impl ClientCore {
                 request: lazy_protocol::SetAppEventsRequest {
                     url: url.to_owned(),
                     types,
+                    skip_check,
                 },
             });
         }
