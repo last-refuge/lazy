@@ -325,15 +325,15 @@ Source: PLAN.md "Outside integrations".
 Goal: generic webhooks and one complete provider integration, with predictable recovery from duplicates and failures.
 
 - [ ] 4.1 Data model and credentials
-  - [ ] Schema for installations with explicit scopes, subscriptions, deliveries, and credential references
-  - [ ] Credential storage with encryption at rest and rotation
+  - [ ] Schema for installations with explicit scopes, subscriptions, deliveries, and credential references (credentials and jobs, D31; installations and subscriptions come with GitHub)
+  - [X] Credential storage with encryption at rest and rotation (D31)
   - [ ] Dedicated bot identities
 - [ ] 4.2 Job system
-  - [ ] Postgres-backed queue with leases, ownership, and bounded concurrency
-  - [ ] Shutdown draining and worker restart recovery
-  - [ ] Failure classes: retryable, definitive, unknown outcome
-  - [ ] Bounded retries with visible failures
-  - [ ] Worker process mode for isolation
+  - [X] Postgres-backed queue with leases, ownership, and bounded concurrency (D31)
+  - [X] Shutdown draining and worker restart recovery (D31)
+  - [X] Failure classes: retryable, definitive, unknown outcome (D31)
+  - [ ] Bounded retries with visible failures (bounded retries done, D31; failures are recorded but shown to admins only once a connector enqueues jobs)
+  - [ ] Worker process mode for isolation (`lazy-server worker` written, D31; the worker is tested, the separate process has not been run)
 - [ ] 4.3 Incoming webhooks
   - [X] Per-channel webhook endpoints with secrets (built in 2.9, D16; a new secret on request, D30)
   - [ ] Signature verification, timestamp checks, and replay protection

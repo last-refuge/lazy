@@ -40,6 +40,11 @@ services:
       - LAZY_MAX_ATTACHMENT_BYTES=${LAZY_MAX_ATTACHMENT_BYTES:-26214400}
       - LAZY_LOG=${LAZY_LOG:-info,sqlx=warn}
       - LAZY_LOG_FORMAT=${LAZY_LOG_FORMAT:-text}
+      # Seals integration credentials (64 hex digits: openssl rand -hex 32). Optional until an
+      # integration needs it; keep a copy outside Coolify, because losing it loses every stored
+      # credential (llm-docs/DEPLOY.md).
+      - LAZY_CREDENTIALS_KEY=${LAZY_CREDENTIALS_KEY:-}
+      - LAZY_CREDENTIALS_OLD_KEYS=${LAZY_CREDENTIALS_OLD_KEYS:-}
     volumes:
       - attachments:/data/attachments
     healthcheck:
