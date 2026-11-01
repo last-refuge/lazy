@@ -120,6 +120,26 @@ pub fn router(state: AppState) -> Router {
         .route(paths::GITHUB_CALLBACK_ROUTE, get(github_callback))
         .route(paths::GITHUB_INSTALLED_ROUTE, get(github_installed))
         .route(paths::GITHUB_WEBHOOK_ROUTE, post(github_webhook))
+        .route(
+            paths::CONNECTOR_ROUTE,
+            get(connector_status)
+                .post(connector_connect)
+                .delete(connector_disconnect),
+        )
+        .route(
+            paths::CONNECTOR_SECRET_ROUTE,
+            put(connector_set_secret).post(connector_generate_secret),
+        )
+        .route(
+            paths::CONNECTOR_SUBSCRIPTIONS_ROUTE,
+            post(connector_subscribe),
+        )
+        .route(
+            paths::CONNECTOR_SUBSCRIPTION_ROUTE,
+            delete(connector_unsubscribe),
+        )
+        .route(paths::CONNECTOR_DELIVERY_RETRY_ROUTE, post(connector_retry))
+        .route(paths::CONNECTOR_WEBHOOK_ROUTE, post(connector_webhook))
         .route(paths::HOOK_ROUTE, post(incoming_webhook))
         .route(
             paths::EMOJI_ROUTE,
@@ -487,6 +507,120 @@ async fn github_callback(
 
 async fn github_installed() -> Response {
     crate::github::installed_page()
+}
+
+// ----- Webhook connectors (D34) -----
+
+async fn connector_status(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath((workspace_id, provider)): ApiPath<(WorkspaceId, String)>,
+) -> Result<Json<lazy_protocol::ConnectorStatusResponse>, AppError> {
+    crate::connectors::status(&state, principal.user_id, workspace_id, &provider)
+        .await
+        .map(Json)
+}
+
+async fn connector_connect(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath((workspace_id, provider)): ApiPath<(WorkspaceId, String)>,
+) -> Result<Json<lazy_protocol::ConnectorStatusResponse>, AppError> {
+    crate::connectors::connect(&state, principal.user_id, workspace_id, &provider)
+        .await
+        .map(Json)
+}
+
+async fn connector_disconnect(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath((workspace_id, provider)): ApiPath<(WorkspaceId, String)>,
+) -> Result<StatusCode, AppError> {
+    crate::connectors::disconnect(&state, principal.user_id, workspace_id, &provider).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn connector_set_secret(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath((workspace_id, provider)): ApiPath<(WorkspaceId, String)>,
+    ApiJson(request): ApiJson<lazy_protocol::SetConnectorSecretRequest>,
+) -> Result<StatusCode, AppError> {
+    crate::connectors::set_secret(
+        &state,
+        principal.user_id,
+        workspace_id,
+        &provider,
+        &request.secret,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn connector_generate_secret(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath((workspace_id, provider)): ApiPath<(WorkspaceId, String)>,
+) -> Result<Json<lazy_protocol::ConnectorSecretResponse>, AppError> {
+    let secret =
+        crate::connectors::generate_secret(&state, principal.user_id, workspace_id, &provider)
+            .await?;
+    Ok(Json(lazy_protocol::ConnectorSecretResponse { secret }))
+}
+
+async fn connector_subscribe(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath((conversation_id, provider)): ApiPath<(ConversationId, String)>,
+    ApiJson(request): ApiJson<lazy_protocol::CreateConnectorSubscriptionRequest>,
+) -> Result<Json<lazy_protocol::ConnectorSubscriptionResponse>, AppError> {
+    let subscription = crate::connectors::subscribe(
+        &state,
+        principal.user_id,
+        conversation_id,
+        &provider,
+        request,
+    )
+    .await?;
+    Ok(Json(lazy_protocol::ConnectorSubscriptionResponse {
+        subscription,
+    }))
+}
+
+async fn connector_unsubscribe(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(subscription_id): ApiPath<lazy_domain::ConnectorSubscriptionId>,
+) -> Result<StatusCode, AppError> {
+    crate::connectors::unsubscribe(&state, principal.user_id, subscription_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn connector_retry(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(delivery_id): ApiPath<i64>,
+) -> Result<StatusCode, AppError> {
+    crate::connectors::retry_delivery(&state, principal.user_id, delivery_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A provider's signed deliveries. Public: each is checked against the connection's secret.
+async fn connector_webhook(
+    State(state): State<AppState>,
+    path: Result<Path<(String, String)>, PathRejection>,
+    headers: HeaderMap,
+    body: axum::body::Body,
+) -> Response {
+    let Ok(Path((provider, connector))) = path else {
+        return (StatusCode::NOT_FOUND, "unknown connector").into_response();
+    };
+    match axum::body::to_bytes(body, crate::connectors::MAX_BODY_BYTES).await {
+        Ok(bytes) => {
+            crate::connectors::receive(&state, &provider, &connector, &headers, &bytes).await
+        }
+        Err(_) => (StatusCode::PAYLOAD_TOO_LARGE, "too large").into_response(),
+    }
 }
 
 /// GitHub's webhook deliveries. Public: each is checked against the app's signing secret.

@@ -196,3 +196,11 @@ the organization (all repositories, or chosen ones). The app is private to that 
 remove it: **Disconnect** in Lazy, then delete the app on GitHub (the organization's settings,
 Developer settings, GitHub Apps). Details: D32.
 
+## Connecting Linear and Jira
+
+Needs `LAZY_CREDENTIALS_KEY` and `LAZY_PUBLIC_URL` (as for GitHub). An admin opens **Integrations**, chooses **Linear** or **Jira**, and **Connect**, then follows the steps shown:
+
+- **Linear:** a Linear admin opens Settings, API, Webhooks, **New webhook**, pastes the address Lazy shows, chooses the teams and the resource types (Issues, Comments, Projects, Project updates), saves, and pastes the webhook's signing secret back into Lazy.
+- **Jira:** someone with the Administer Jira permission opens Settings, System, WebHooks, **Create a WebHook**, pastes the address, chooses **Make a secret** in Lazy and pastes that into the Secret field, ticks Issue created and updated and Comment created (a JQL filter can narrow it), and saves.
+
+Then **Add a channel** chooses which team (Linear) or project (Jira) goes where. Disconnecting in Lazy does not delete the webhook in Linear or Jira; delete it there too.

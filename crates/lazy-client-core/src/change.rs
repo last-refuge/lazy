@@ -116,6 +116,13 @@ pub enum Change {
     },
     /// `ClientCore::github_setup_url` was set or cleared.
     GithubSetupChanged,
+    /// `ClientCore::connector` of this workspace and provider changed.
+    ConnectorChanged {
+        workspace: WorkspaceId,
+        provider: lazy_domain::connector::ConnectorProvider,
+    },
+    /// `ClientCore::connector_secret` was set or cleared.
+    ConnectorSecretChanged,
     /// `ClientCore::webhook_deliveries` of this webhook changed.
     WebhookDeliveriesChanged {
         webhook: WebhookId,

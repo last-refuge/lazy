@@ -1954,6 +1954,164 @@ fn github_scene(
     draw(cx, win);
 }
 
+/// A webhook connector's status: `stage` 1 is not connected, 2 connected without a secret, 3 set
+/// up with subscriptions and deliveries.
+fn connector_status(
+    cast: &Cast,
+    provider: lazy_domain::connector::ConnectorProvider,
+    stage: u8,
+) -> lazy_protocol::ConnectorStatusResponse {
+    use lazy_protocol::GithubDeliveryState as S;
+    let ago = |minutes: i64| {
+        Timestamp::from(time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes))
+    };
+    let (scope, other) = match provider {
+        lazy_domain::connector::ConnectorProvider::Jira => ("WEB", "APP"),
+        _ => ("ENG", "OPS"),
+    };
+    let ready = stage >= 3;
+    let delivery = |id: i64, summary: String, state, attempts, error: Option<&str>, minutes| {
+        lazy_protocol::ConnectorDelivery {
+            id,
+            summary,
+            scope: scope.to_owned(),
+            state,
+            attempts,
+            last_error: error.map(str::to_owned),
+            received_at: ago(minutes),
+        }
+    };
+    lazy_protocol::ConnectorStatusResponse {
+        provider,
+        available: true,
+        connection: (stage >= 2).then(|| lazy_protocol::ConnectorConnection {
+            webhook_url: format!(
+                "https://chat.lazyto.day/connectors/{}/5f0c2a7e-91d3-4b8a-a6e2-0c4d9b7f1e23",
+                provider.as_str()
+            ),
+            secret_set: ready,
+            bot_user_id: cast.deploy.id,
+            created_by: cast.me.id,
+            created_at: ago(60 * 24),
+        }),
+        subscriptions: if ready {
+            vec![
+                lazy_protocol::ConnectorSubscription {
+                    id: lazy_domain::ConnectorSubscriptionId::generate(),
+                    conversation_id: cast.engineering,
+                    channel_name: ChannelName::parse("engineering").unwrap(),
+                    scope: scope.to_owned(),
+                    events: provider
+                        .default_kinds()
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                    created_by: cast.me.id,
+                    created_at: ago(60 * 20),
+                },
+                lazy_protocol::ConnectorSubscription {
+                    id: lazy_domain::ConnectorSubscriptionId::generate(),
+                    conversation_id: cast.general,
+                    channel_name: ChannelName::parse("general").unwrap(),
+                    scope: String::new(),
+                    events: vec!["issue_created".to_owned()],
+                    created_by: cast.me.id,
+                    created_at: ago(60 * 19),
+                },
+            ]
+        } else {
+            Vec::new()
+        },
+        deliveries: if ready {
+            vec![
+                delivery(
+                    14,
+                    format!("{scope}-12 status change"),
+                    S::Posted,
+                    1,
+                    None,
+                    4,
+                ),
+                delivery(13, format!("{other}-3 created"), S::Posted, 1, None, 11),
+                delivery(
+                    12,
+                    format!("{scope}-9 comment"),
+                    S::Failed,
+                    6,
+                    Some("the database failed (pool timed out)"),
+                    48,
+                ),
+            ]
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+/// Opens Integrations with each connector at its stage (and GitHub installed), and the view of
+/// `open`, if any. A `made` secret is shown as just made for that connector.
+fn connector_scene(
+    cx: &mut HeadlessAppContext,
+    model: &Entity<AppModel>,
+    cast: &Cast,
+    win: &WindowHandle<RootView>,
+    stages: &[(lazy_domain::connector::ConnectorProvider, u8)],
+    open: Option<lazy_domain::connector::ConnectorProvider>,
+    made: Option<&str>,
+) {
+    integrations_scene(cx, model, cast, win, Some(workspace_webhooks(cast)));
+    let answer = |cx: &mut HeadlessAppContext| {
+        dispatch(
+            cx,
+            model,
+            Input::ActionResult {
+                kind: ActionKind::LoadGithub(cast.workspace),
+                result: Ok(ActionOutcome::Github(Box::new(github_status(cast, 3)))),
+            },
+        );
+        for (provider, stage) in stages {
+            dispatch(
+                cx,
+                model,
+                Input::ActionResult {
+                    kind: ActionKind::LoadConnector(cast.workspace, *provider),
+                    result: Ok(ActionOutcome::Connector(Box::new(connector_status(
+                        cast, *provider, *stage,
+                    )))),
+                },
+            );
+        }
+    };
+    answer(cx);
+    if let Some(provider) = open {
+        with_integrations(cx, win, |dialog, window, cx| {
+            dialog.open_connector(provider, window, cx)
+        });
+        answer(cx);
+        if let Some(secret) = made {
+            dispatch(
+                cx,
+                model,
+                Input::GenerateConnectorSecret {
+                    workspace: cast.workspace,
+                    provider,
+                },
+            );
+            dispatch(
+                cx,
+                model,
+                Input::ActionResult {
+                    kind: ActionKind::SetConnectorSecret(cast.workspace, provider),
+                    result: Ok(ActionOutcome::ConnectorSecret(
+                        lazy_client_core::SecretUrl::new(secret.to_owned()),
+                    )),
+                },
+            );
+        }
+    }
+    draw(cx, win);
+}
+
 /// Opens the invitations dialog and answers its request with `result`.
 fn invitations_scene(
     cx: &mut HeadlessAppContext,
@@ -8589,6 +8747,75 @@ fn main() {
             build: &|model, cast, cx, rec, win| {
                 reach_chat(cx, model, cast, rec, true);
                 integrations_scene(cx, model, cast, win, Some(Vec::new()));
+            },
+        },
+        Scene {
+            name: "4d-01-integrations-connectors-light",
+            width: 1100.0,
+            height: 1100.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                use lazy_domain::connector::ConnectorProvider::{Jira, Linear};
+                reach_chat(cx, model, cast, rec, true);
+                connector_scene(cx, model, cast, win, &[(Linear, 3), (Jira, 2)], None, None);
+            },
+        },
+        Scene {
+            name: "4d-02-linear-setup-dark",
+            width: 1100.0,
+            height: 1100.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                use lazy_domain::connector::ConnectorProvider::Linear;
+                reach_chat(cx, model, cast, rec, true);
+                connector_scene(cx, model, cast, win, &[(Linear, 2)], Some(Linear), None);
+            },
+        },
+        Scene {
+            name: "4d-03-linear-connected-light",
+            width: 1100.0,
+            height: 1200.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                use lazy_domain::connector::ConnectorProvider::Linear;
+                reach_chat(cx, model, cast, rec, true);
+                connector_scene(cx, model, cast, win, &[(Linear, 3)], Some(Linear), None);
+            },
+        },
+        Scene {
+            name: "4d-04-jira-secret-made-light",
+            width: 1100.0,
+            height: 1100.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                use lazy_domain::connector::ConnectorProvider::Jira;
+                reach_chat(cx, model, cast, rec, true);
+                connector_scene(
+                    cx,
+                    model,
+                    cast,
+                    win,
+                    &[(Jira, 2)],
+                    Some(Jira),
+                    Some("9b1f0c7e3a5d2b8f4e6c1a0d7b3e5f2c9a8d6b4e1f3c5a7b9d0e2f4a6c8b1d3e"),
+                );
+            },
+        },
+        Scene {
+            name: "4d-05-linear-adding-dark",
+            width: 1100.0,
+            height: 1000.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                use lazy_domain::connector::ConnectorProvider::Linear;
+                reach_chat(cx, model, cast, rec, true);
+                connector_scene(cx, model, cast, win, &[(Linear, 3)], Some(Linear), None);
+                with_integrations(cx, win, |dialog, window, cx| {
+                    if let Some(panel) = dialog.connector_panel(Linear) {
+                        panel.update(cx, |panel, cx| panel.start_adding(window, cx));
+                    }
+                });
+                draw(cx, win);
             },
         },
         Scene {

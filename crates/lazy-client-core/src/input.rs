@@ -285,6 +285,48 @@ pub enum Input {
         delivery: i64,
     },
     DisconnectGithub(WorkspaceId),
+    /// Load a webhook connector's status into `ClientCore::connector` (admins and owners, D34).
+    LoadConnector {
+        workspace: WorkspaceId,
+        provider: lazy_domain::connector::ConnectorProvider,
+    },
+    /// Connect a webhook connector: its address and bot are made, and the status arrives.
+    ConnectConnector {
+        workspace: WorkspaceId,
+        provider: lazy_domain::connector::ConnectorProvider,
+    },
+    /// Set the signing secret the provider made (pasted by the admin).
+    SetConnectorSecret {
+        workspace: WorkspaceId,
+        provider: lazy_domain::connector::ConnectorProvider,
+        secret: crate::model::SecretUrl,
+    },
+    /// Make a new signing secret for the provider's form. It arrives in
+    /// `ClientCore::connector_secret`, to be shown once.
+    GenerateConnectorSecret {
+        workspace: WorkspaceId,
+        provider: lazy_domain::connector::ConnectorProvider,
+    },
+    /// Forget the secret just made (it was copied, or the view closed).
+    DismissConnectorSecret,
+    /// Make a channel follow a team's or project's activity (or change what it follows). An
+    /// empty scope follows everything.
+    ConnectorSubscribe {
+        conversation: ConversationId,
+        provider: lazy_domain::connector::ConnectorProvider,
+        scope: String,
+        events: Vec<String>,
+    },
+    ConnectorUnsubscribe(lazy_domain::ConnectorSubscriptionId),
+    /// Run a failed or unknown connector delivery again.
+    RetryConnectorDelivery {
+        workspace: WorkspaceId,
+        delivery: i64,
+    },
+    DisconnectConnector {
+        workspace: WorkspaceId,
+        provider: lazy_domain::connector::ConnectorProvider,
+    },
     /// Give a webhook a new address. The old one stops working at once; the new one arrives in
     /// `ClientCore::created_webhook`, to be shown once. Progress is
     /// `action(ActionKind::NewWebhookAddress(webhook))`.

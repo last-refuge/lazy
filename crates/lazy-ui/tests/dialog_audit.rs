@@ -312,6 +312,10 @@ fn every_dialog(world: &World) -> Vec<ShellDialog> {
 const DIALOG_FILES: &[(&str, &str)] = &[
     ("add_workspace", "ShellDialog::AddWorkspace"),
     ("browse", "ShellDialog::BrowseChannels"),
+    (
+        "connector_panel",
+        "a view of ShellDialog::Integrations (Linear, Jira; not a dialog of its own)",
+    ),
     ("create_channel", "ShellDialog::CreateChannel"),
     ("custom_emoji", "ShellDialog::CustomEmoji"),
     ("delete_message", "ShellDialog::DeleteMessage"),

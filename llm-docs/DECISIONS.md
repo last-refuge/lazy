@@ -632,3 +632,28 @@ Goal: tools that post to chat through a built-in "Slack" option (Coolify, Grafan
 
 **Not yet:** colors (no colored bar in Lazy's documents), images shown inline (attachments are uploads only), interactive buttons (4.4), and threading by `thread_ts`. The reply is Lazy's JSON (`{"message_id": …}`), not Slack's plain `ok`; tools check only the status.
 
+## D34. Webhook connectors: Linear and Jira (Phase 4, task 4.5)
+
+Goal: Linear and Jira post their activity into channels, set up by an admin from GUIs alone (Lazy's Integrations dialog and the provider's own webhook settings), with no app registration, OAuth, or code. Both providers let an admin create a signed webhook in their settings, and both organise work by a key (a Linear team, a Jira project), so one framework serves both; more providers of that shape are a module each. No protocol bump: only endpoints and types are added (`PROTOCOL_VERSION` stays 14).
+
+**Connecting.** `POST /v1/workspaces/{id}/connectors/{provider}` (admins and owners; `unavailable` without a credentials key, D31) makes the connection: a random id, its address `{public-url}/connectors/{provider}/{id}`, and a bot named after the provider (as GitHub's, D32). Connected already answers the existing connection. The address is not a secret: deliveries are checked against the signing secret, which is a credential:
+- **Linear** shows a signing secret on the webhook's page; the admin pastes it into Lazy (`PUT .../secret`, 8 to 256 characters, no spaces).
+- **Jira** takes a secret in its webhook form and never shows it again, so Lazy makes one (`POST .../secret`, 32 random bytes as hex), answers it once, and the admin pastes it into Jira. Making a new one replaces the old at once.
+
+**Receiving** (`POST /connectors/{provider}/{id}`, public):
+1. The connection must be live and have a secret (else `404` / `401`).
+2. The signature must match in constant time. Linear: `Linear-Signature`, hex HMAC-SHA256 of the raw body. Jira: `X-Hub-Signature: sha256=<hex>` (WebSub, checked against Atlassian's published test vector).
+3. A Linear delivery's `webhookTimestamp` must be within 5 minutes of now (Linear suggests a minute; the window allows some clock skew). Jira's retries resend the same body, so it has no such check and relies on dedupe.
+4. The provider's module reduces it to a summary: a kind, the team or project keys it belongs to, a label for the delivery list, and the message (names and titles escaped, descriptions as a plain-text quote, shared with GitHub in `provider_text`). Events no channel can follow answer `200 ignored`.
+5. It is queued as a `connector.event` job deduplicated by `{connector}:{delivery id}` (`Linear-Delivery`; `X-Atlassian-Webhook-Identifier`, the same across Jira's retries; a hash of the body if missing). Both providers treat anything but `200` as a failure, so queued and already-received both answer `200` (GitHub's answers `202`).
+
+**Kinds.** Linear: new issues, status changes, assignments, comments, projects and project updates. Jira: new issues, status changes, assignments, comments. Defaults leave out assignments and comments. Linear does not document every field of its payloads, so messages fall back on what is always there: the entity's `url`, which for an issue or comment holds the identifier (`/issue/ENG-12/`) and so the team key. Jira's payload has no browse address; it is made from the host of `issue.self` (`https://{host}/browse/{key}`), and an odd host is not linked. Jira descriptions may be wiki text or an Atlassian document; both are read as text.
+
+**Subscriptions** (`POST /v1/conversations/{id}/connectors/{provider}/subscriptions`): a channel, a scope (a key, or an address holding one, normalised to upper case; empty follows everything), and kinds. The bot joins the channel; removing the last subscription there takes it out. A project spanning several Linear teams reaches every one of them. Posting uses operation ids derived from the subscription and the job, as GitHub's.
+
+**Disconnecting** revokes the secret, ends the subscriptions, takes the bot out of every channel, and refuses deliveries from then on (`404`). The webhook stays in the provider's settings until an admin deletes it there; the dialog says so.
+
+**The app.** Integrations lists Linear and Jira under GitHub, each with its state ("Connected, but the webhook in Jira isn't set up yet", channels following, failed deliveries). The view shows the setup steps (the address with Copy, what to do in the provider, and the secret step), then channels with Remove and Add a channel (channel, key, kinds), recent deliveries with Retry, and Disconnect behind a confirmation. A pasted secret goes straight to the server and is not kept; a made one is held out of every debug string until the view closes.
+
+**Not yet:** link previews for Linear and Jira addresses (4.7), acting on the provider (no API calls are made), Confluence (its Cloud edition has no admin webhook screen; to be decided), and a check that a webhook is set up beyond deliveries arriving.
+

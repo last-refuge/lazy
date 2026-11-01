@@ -38,6 +38,7 @@ use lazy_domain::{ConversationId, ConversationKind, MAX_WEBHOOKS_PER_CONVERSATIO
 use lazy_domain::{MAX_WEBHOOK_DELIVERIES_KEPT, WorkspaceId};
 use lazy_protocol::{WebhookDelivery, WebhookDeliveryOutcome, WorkspaceWebhook};
 
+use super::connector_panel::{ConnectorPanel, ConnectorPanelEvent};
 use super::github_panel::{GithubPanel, GithubPanelEvent};
 use super::{any_composing, single_line_field};
 use crate::app_model::{AppEvent, AppModel};
@@ -48,6 +49,7 @@ use crate::states;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::Theme;
 use crate::time_fmt::{ago_label, to_zoned};
+use lazy_domain::connector::ConnectorProvider;
 
 /// Which view of the dialog is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +66,8 @@ pub enum IntegrationsView {
     ConfirmDelete(WebhookId),
     /// GitHub (D32), drawn by [`GithubPanel`].
     Github,
+    /// A webhook connector (D34), drawn by [`ConnectorPanel`].
+    Connector(ConnectorProvider),
 }
 
 pub struct IntegrationsDialog {
@@ -99,6 +103,10 @@ pub struct IntegrationsDialog {
     github_focus: FocusHandle,
     /// The GitHub view, made the first time it is opened.
     github: Option<Entity<GithubPanel>>,
+    /// Each connector's card button.
+    connector_focus: HashMap<ConnectorProvider, FocusHandle>,
+    /// Each connector's view, made the first time it is opened.
+    connectors: HashMap<ConnectorProvider, Entity<ConnectorPanel>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -152,6 +160,15 @@ impl IntegrationsDialog {
             }
             model.dispatch(Input::LoadWorkspaceWebhooks(workspace), cx);
             model.dispatch(Input::LoadGithub(workspace), cx);
+            for provider in ConnectorProvider::ALL {
+                model.dispatch(
+                    Input::LoadConnector {
+                        workspace,
+                        provider,
+                    },
+                    cx,
+                );
+            }
         });
         let mut trap = ModalTrap::new(cx);
         let add_focus = cx.focus_handle().tab_stop(true);
@@ -185,6 +202,11 @@ impl IntegrationsDialog {
             log_scroll: ScrollHandle::new(),
             github_focus: cx.focus_handle().tab_stop(true),
             github: None,
+            connector_focus: ConnectorProvider::ALL
+                .into_iter()
+                .map(|p| (p, cx.focus_handle().tab_stop(true)))
+                .collect(),
+            connectors: HashMap::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -436,6 +458,75 @@ impl IntegrationsDialog {
         cx.notify();
     }
 
+    /// Opens a connector's view (making it the first time).
+    pub fn open_connector(
+        &mut self,
+        provider: ConnectorProvider,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel = match self.connectors.get(&provider) {
+            Some(panel) => {
+                let workspace = self.workspace;
+                self.model.update(cx, |model, cx| {
+                    model.dispatch(
+                        Input::LoadConnector {
+                            workspace,
+                            provider,
+                        },
+                        cx,
+                    )
+                });
+                panel.clone()
+            }
+            None => {
+                let model = self.model.clone();
+                let workspace = self.workspace;
+                let panel =
+                    cx.new(|cx| ConnectorPanel::new(model, workspace, provider, window, cx));
+                let events = cx.subscribe_in(
+                    &panel,
+                    window,
+                    move |this, _panel, event: &ConnectorPanelEvent, window, cx| match event {
+                        ConnectorPanelEvent::Tab { backwards } => {
+                            this.trap.tab(*backwards, window, cx)
+                        }
+                        ConnectorPanelEvent::Leave => this.leave_connector(provider, window, cx),
+                    },
+                );
+                self._subscriptions.push(events);
+                self.connectors.insert(provider, panel.clone());
+                panel
+            }
+        };
+        self.view = IntegrationsView::Connector(provider);
+        let focus = panel.read(cx).first_focus();
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// Back from a connector's view to the list, on its card.
+    fn leave_connector(
+        &mut self,
+        provider: ConnectorProvider,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(panel) = self.connectors.get(&provider).cloned() {
+            panel.update(cx, |panel, cx| panel.forget_secret(cx));
+        }
+        self.view = IntegrationsView::List;
+        if let Some(focus) = self.connector_focus.get(&provider) {
+            window.focus(focus, cx);
+        }
+        cx.notify();
+    }
+
+    /// A connector's view, while it exists. For tests.
+    pub fn connector_panel(&self, provider: ConnectorProvider) -> Option<Entity<ConnectorPanel>> {
+        self.connectors.get(&provider).cloned()
+    }
+
     /// The GitHub view, while it exists. For tests.
     pub fn github_panel(&self) -> Option<Entity<GithubPanel>> {
         self.github.clone()
@@ -457,6 +548,15 @@ impl IntegrationsDialog {
             }
             return;
         }
+        if let IntegrationsView::Connector(provider) = self.view {
+            let Some(panel) = self.connectors.get(&provider).cloned() else {
+                return self.show_list(window, cx);
+            };
+            if !panel.update(cx, |panel, cx| panel.back(window, cx)) {
+                self.leave_connector(provider, window, cx);
+            }
+            return;
+        }
         match self.view {
             IntegrationsView::List => self.finish(window, cx),
             IntegrationsView::Adding | IntegrationsView::Details(_) => self.show_list(window, cx),
@@ -464,7 +564,7 @@ impl IntegrationsDialog {
             IntegrationsView::ConfirmNewAddress(id) | IntegrationsView::ConfirmDelete(id) => {
                 self.open_details(id, window, cx)
             }
-            IntegrationsView::Github => {}
+            IntegrationsView::Github | IntegrationsView::Connector(_) => {}
         }
     }
 
@@ -477,6 +577,10 @@ impl IntegrationsDialog {
         }
         if let Some(panel) = &self.github {
             kinds.extend(panel.read(cx).kinds());
+        }
+        for panel in self.connectors.values() {
+            kinds.extend(panel.read(cx).kinds());
+            panel.update(cx, |panel, cx| panel.forget_secret(cx));
         }
         for id in self.manage_focus.keys() {
             kinds.push(ActionKind::NewWebhookAddress(*id));
@@ -698,6 +802,138 @@ impl IntegrationsDialog {
             .into_any_element()
     }
 
+    /// A connector's card in the list: where it stands, and the way in.
+    fn connector_card(
+        &self,
+        provider: ConnectorProvider,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = theme.colors;
+        let status = self
+            .model
+            .read(cx)
+            .core()
+            .connector(self.workspace, provider)
+            .cloned();
+        let what = match provider {
+            ConnectorProvider::Linear => "issues, status changes and project updates",
+            ConnectorProvider::Jira => "issues, status changes and comments",
+            ConnectorProvider::Unknown => "activity",
+        };
+        let (line, color, button) = match &status {
+            None => (
+                format!("Post {what} into channels."),
+                colors.text_muted,
+                format!("{}…", provider.label()),
+            ),
+            Some(s) if !s.available => (
+                "Needs this server's credentials key before it can connect.".to_owned(),
+                colors.text_muted,
+                format!("{}…", provider.label()),
+            ),
+            Some(s) => match &s.connection {
+                None => (
+                    format!("Not connected. Post {what} into channels."),
+                    colors.text_muted,
+                    "Connect…".to_owned(),
+                ),
+                Some(c) if !c.secret_set => (
+                    format!(
+                        "Connected, but the webhook in {} isn't set up yet.",
+                        provider.label()
+                    ),
+                    colors.warning,
+                    "Finish setup…".to_owned(),
+                ),
+                Some(_) => {
+                    let failed = s
+                        .deliveries
+                        .iter()
+                        .filter(|d| {
+                            matches!(
+                                d.state,
+                                lazy_protocol::GithubDeliveryState::Failed
+                                    | lazy_protocol::GithubDeliveryState::Unknown
+                            )
+                        })
+                        .count();
+                    let followed = s.subscriptions.len();
+                    let mut line = format!(
+                        "Connected · {followed} {} following it",
+                        if followed == 1 { "channel" } else { "channels" }
+                    );
+                    let mut color = colors.text_muted;
+                    if failed > 0 {
+                        line.push_str(&format!(
+                            " · {failed} failed {}",
+                            if failed == 1 {
+                                "delivery"
+                            } else {
+                                "deliveries"
+                            }
+                        ));
+                        color = colors.danger;
+                    }
+                    (line, color, "Manage…".to_owned())
+                }
+            },
+        };
+        let open_to = cx.entity().downgrade();
+        let card = format!("{}-card", provider.as_str());
+        let card_status = format!("{}-card-status", provider.as_str());
+        let focus = self
+            .connector_focus
+            .get(&provider)
+            .cloned()
+            .unwrap_or_else(|| self.github_focus.clone());
+        div()
+            .debug_selector(move || card.clone())
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_2()
+            .rounded(theme.radii.medium)
+            .border_1()
+            .border_color(colors.border)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_size(theme.type_scale.body)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.text)
+                            .child(provider.label()),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(move || card_status.clone())
+                            .text_size(theme.type_scale.small)
+                            .text_color(color)
+                            .child(line),
+                    ),
+            )
+            .child(form::button(
+                theme,
+                format!("{}-open-panel", provider.as_str()),
+                button,
+                ButtonKind::Secondary,
+                true,
+                &focus,
+                move |window, cx| {
+                    open_to
+                        .update(cx, |dialog, cx| dialog.open_connector(provider, window, cx))
+                        .ok();
+                },
+            ))
+            .into_any_element()
+    }
+
     fn list_view(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme.colors;
         let this = cx.entity().downgrade();
@@ -803,6 +1039,11 @@ impl IntegrationsDialog {
             .flex_col()
             .gap_3()
             .child(self.github_card(theme, cx))
+            .children(
+                ConnectorProvider::ALL
+                    .into_iter()
+                    .map(|provider| self.connector_card(provider, theme, cx)),
+            )
             .child(
                 div()
                     .text_size(theme.type_scale.small)
@@ -1547,6 +1788,10 @@ impl Render for IntegrationsDialog {
             IntegrationsView::ConfirmNewAddress(id) => self.confirm_view(id, false, &theme, cx),
             IntegrationsView::ConfirmDelete(id) => self.confirm_view(id, true, &theme, cx),
             IntegrationsView::Github => match &self.github {
+                Some(panel) => panel.clone().into_any_element(),
+                None => self.list_view(&theme, cx),
+            },
+            IntegrationsView::Connector(provider) => match self.connectors.get(&provider) {
                 Some(panel) => panel.clone().into_any_element(),
                 None => self.list_view(&theme, cx),
             },

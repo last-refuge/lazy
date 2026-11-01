@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use lazy_domain::connector::ConnectorProvider;
 use lazy_domain::{
     ConversationId, EmojiId, EventSeq, GroupId, InvitationId, MentionTarget, MessageDocument,
     MessageId, OperationId, ReactionEmoji, Timestamp, UserId, WebhookId, WorkspaceId,
@@ -431,6 +432,18 @@ pub enum ActionKind {
     /// Running a failed GitHub delivery again.
     RetryGithubDelivery(i64),
     DisconnectGithub(WorkspaceId),
+    /// Loading a webhook connector's connection, subscriptions and deliveries (D34).
+    LoadConnector(WorkspaceId, ConnectorProvider),
+    /// Connecting a webhook connector (making its address and bot).
+    ConnectConnector(WorkspaceId, ConnectorProvider),
+    /// Setting or making a connector's signing secret.
+    SetConnectorSecret(WorkspaceId, ConnectorProvider),
+    /// Subscribing a channel to a team's or project's activity.
+    ConnectorSubscribe(ConversationId, ConnectorProvider),
+    ConnectorUnsubscribe(lazy_domain::ConnectorSubscriptionId),
+    /// Running a failed connector delivery again.
+    RetryConnectorDelivery(i64),
+    DisconnectConnector(WorkspaceId, ConnectorProvider),
     /// Adding a custom emoji (one at a time).
     AddCustomEmoji,
     RenameCustomEmoji(EmojiId),
@@ -607,6 +620,10 @@ pub enum ActionOutcome {
     Github(Box<lazy_protocol::GithubStatusResponse>),
     /// The one-time address that continues connecting GitHub in a browser.
     GithubSetup(SecretUrl),
+    /// A webhook connector's connection, subscriptions and deliveries.
+    Connector(Box<lazy_protocol::ConnectorStatusResponse>),
+    /// A signing secret Lazy made, to paste into the provider's form once.
+    ConnectorSecret(SecretUrl),
     /// A custom emoji after it was renamed.
     CustomEmoji(CustomEmoji),
     /// The workspace after its name or settings were changed.

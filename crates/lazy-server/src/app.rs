@@ -60,7 +60,12 @@ pub struct Integrations {
 
 /// The kinds of job this server knows how to run. Integrations add theirs here.
 pub fn job_handlers() -> crate::jobs::Registry {
-    crate::jobs::Registry::new().on(crate::github::EVENT_JOB, crate::github::handle_event)
+    crate::jobs::Registry::new()
+        .on(crate::github::EVENT_JOB, crate::github::handle_event)
+        .on(
+            crate::connectors::EVENT_JOB,
+            crate::connectors::handle_event,
+        )
 }
 
 /// Connects to Postgres, optionally migrates and seeds, and serves until `shutdown` completes.

@@ -227,6 +227,64 @@ impl fmt::Debug for Effect {
                 .debug_struct("DisconnectGithub")
                 .field("workspace", workspace)
                 .finish(),
+            Effect::LoadConnector {
+                workspace,
+                provider,
+            } => f
+                .debug_struct("LoadConnector")
+                .field("workspace", workspace)
+                .field("provider", provider)
+                .finish(),
+            Effect::ConnectConnector {
+                workspace,
+                provider,
+            } => f
+                .debug_struct("ConnectConnector")
+                .field("workspace", workspace)
+                .field("provider", provider)
+                .finish(),
+            Effect::SetConnectorSecret {
+                workspace,
+                provider,
+                ..
+            } => f
+                .debug_struct("SetConnectorSecret")
+                .field("workspace", workspace)
+                .field("provider", provider)
+                .finish_non_exhaustive(),
+            Effect::GenerateConnectorSecret {
+                workspace,
+                provider,
+            } => f
+                .debug_struct("GenerateConnectorSecret")
+                .field("workspace", workspace)
+                .field("provider", provider)
+                .finish(),
+            Effect::ConnectorSubscribe {
+                conversation,
+                provider,
+                ..
+            } => f
+                .debug_struct("ConnectorSubscribe")
+                .field("conversation", conversation)
+                .field("provider", provider)
+                .finish_non_exhaustive(),
+            Effect::ConnectorUnsubscribe { subscription } => f
+                .debug_struct("ConnectorUnsubscribe")
+                .field("subscription", subscription)
+                .finish(),
+            Effect::RetryConnectorDelivery { delivery } => f
+                .debug_struct("RetryConnectorDelivery")
+                .field("delivery", delivery)
+                .finish(),
+            Effect::DisconnectConnector {
+                workspace,
+                provider,
+            } => f
+                .debug_struct("DisconnectConnector")
+                .field("workspace", workspace)
+                .field("provider", provider)
+                .finish(),
             Effect::PersistView(v0) => f.debug_tuple("PersistView").field(v0).finish(),
             Effect::PersistThreadDrafts(v0) => f
                 .debug_tuple("PersistThreadDrafts")
