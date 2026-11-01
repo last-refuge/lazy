@@ -570,6 +570,90 @@ async fn a_delivery_is_a_message_by_the_bot_with_formatting_and_emoji_and_no_men
     finish(c).await;
 }
 
+/// What a tool's "send to Slack" option posts (D33): Slack's `mrkdwn`, legacy attachments, blocks,
+/// and the older form-encoded body all become ordinary messages by the bot, mentioning nobody.
+#[sqlx::test]
+async fn a_slack_style_body_posts_what_slack_would_show(pool: PgPool) {
+    let c = chat(pool).await;
+    let app = &c.app;
+    let hook = app.create_webhook(&c.boss, app.general, "Grafana").await;
+    let bot = hook.webhook.bot_user_id;
+    let posted = |response: reqwest::Response| async move {
+        assert_eq!(response.status().as_u16(), 200);
+        response
+            .json::<lazy_protocol::IncomingWebhookResponse>()
+            .await
+            .unwrap()
+            .message_id
+    };
+
+    // Attachments only, with Slack's link syntax and a broadcast that must not ping anyone.
+    let body = serde_json::json!({
+        "username": "ignored", "channel": "#ignored", "icon_emoji": ":ghost:",
+        "text": "<!channel> alert for <https://grafana.example/d/1?a=1&amp;b=2|CPU>",
+        "attachments": [{
+            "color": "#D63232", "title": "CPU high", "title_link": "https://grafana.example/d/1",
+            "text": "Above *90%*", "fields": [{"title": "Host", "value": "web-1", "short": true}],
+            "footer": "Grafana"
+        }]
+    });
+    let id = posted(app.deliver_body_raw(&hook.url, body.to_string(), &[]).await).await;
+    let message = app.get_message(&c.alice, id).await;
+    assert_eq!(message.author_id, bot);
+    let text = message.document.plain_text();
+    assert!(
+        text.starts_with("@channel alert for CPU (https://grafana.example/d/1?a=1&b=2)"),
+        "{text}"
+    );
+    for expected in [
+        "CPU high (https://grafana.example/d/1)",
+        "Above 90%",
+        "Host: web-1",
+        "Grafana",
+    ] {
+        assert!(text.contains(expected), "{expected} in {text}");
+    }
+    assert!(message.mentions.is_empty() && message.document.mentions().is_empty());
+    assert_eq!(app.state_of(&c.alice, app.general).await.mention_count, 0);
+
+    // Blocks are the message; `text` is only their fallback.
+    let body = serde_json::json!({
+        "text": "fallback",
+        "blocks": [
+            {"type": "header", "text": {"type": "plain_text", "text": "Deployed"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "*web* is live"}}
+        ]
+    });
+    let id = posted(app.deliver_body_raw(&hook.url, body.to_string(), &[]).await).await;
+    let text = app.get_message(&c.alice, id).await.document.plain_text();
+    assert_eq!(text, "Deployed\n\nweb is live");
+
+    // The older form-encoded body.
+    let id = posted(
+        app.http
+            .post(&hook.url)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body("payload=%7B%22text%22%3A%22from+a+form+%26amp%3B+more%22%7D")
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let text = app.get_message(&c.alice, id).await.document.plain_text();
+    assert_eq!(text, "from a form & more");
+
+    // A Slack body with nothing to show is refused like an empty one.
+    let response = app
+        .deliver_body_raw(
+            &hook.url,
+            r#"{"attachments": [{"color": "good"}]}"#.to_owned(),
+            &[],
+        )
+        .await;
+    denied(response, ErrorCode::InvalidRequest).await;
+    finish(c).await;
+}
+
 #[sqlx::test]
 async fn a_delivery_that_cannot_be_made_says_why(pool: PgPool) {
     let c = chat(pool).await;

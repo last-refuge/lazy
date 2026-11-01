@@ -1089,7 +1089,8 @@ impl IntegrationsDialog {
                 theme,
                 "webhook-usage",
                 "To post, send a POST to it with a JSON body like {\"text\": \"Deploy finished\"}. \
-                 Add an Idempotency-Key header so a retry posts once.",
+                 Tools with a Slack option can use this address there too. Add an \
+                 Idempotency-Key header so a retry posts once.",
             ))
             .child(
                 div()
@@ -1502,8 +1503,8 @@ pub fn outcome_words(
         WebhookDeliveryOutcome::Invalid => (
             "Couldn't be read",
             Some(
-                "Not JSON like {\"text\": \"…\"}, no text, text too long for a message, or an \
-                 Idempotency-Key used again with different text.",
+                "Not JSON like {\"text\": \"…\"} or a Slack webhook body, nothing to post, text \
+                 too long for a message, or an Idempotency-Key used again with different text.",
             ),
             colors.danger,
         ),

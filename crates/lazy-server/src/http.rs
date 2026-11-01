@@ -29,17 +29,17 @@ use lazy_protocol::{
     ConversationResponse, CreateChannelRequest, CreateGroupRequest, CreateInvitationRequest,
     CreateWebhookRequest, CreatedInvitation, CreatedWebhook, CustomEmojiResponse,
     EditMessageRequest, ErrorCode, GroupResponse, GroupsResponse, HealthResponse, HistoryPage,
-    HistoryQuery, InboxPage, InboxQuery, InboxReadResponse, IncomingWebhookRequest,
-    IncomingWebhookResponse, InvitationList, InvitationResponse, LoginRequest, MarkReadRequest,
-    MarkThreadReadRequest, MessageResponse, NotificationSettingsResponse, OpenConversationRequest,
-    OperationStatus, PROTOCOL_VERSION, PeoplePage, PeopleQuery, PersonResponse, RegisterRequest,
-    RenameEmojiRequest, SavedPage, SavedQuery, SavedResponse, SearchParams, SearchResponse,
-    SendMessageRequest, SendMessageResponse, SessionResponse,
-    SetConversationNotificationPrefsRequest, SetDeactivatedRequest, SetFavoriteRequest,
-    SetReactionRequest, SetRoleRequest, SetSavedRequest, SetStatusRequest, SetThreadFollowRequest,
-    StatusResponse, ThreadStateResponse, UpdateConversationRequest, UpdateGroupRequest,
-    UpdateWorkspaceRequest, UserStateResponse, WebhookDeliveriesResponse, WebhookDeliveryOutcome,
-    WebhooksResponse, WorkspaceResponse, WorkspaceWebhooksResponse,
+    HistoryQuery, InboxPage, InboxQuery, InboxReadResponse, IncomingWebhookResponse,
+    InvitationList, InvitationResponse, LoginRequest, MarkReadRequest, MarkThreadReadRequest,
+    MessageResponse, NotificationSettingsResponse, OpenConversationRequest, OperationStatus,
+    PROTOCOL_VERSION, PeoplePage, PeopleQuery, PersonResponse, RegisterRequest, RenameEmojiRequest,
+    SavedPage, SavedQuery, SavedResponse, SearchParams, SearchResponse, SendMessageRequest,
+    SendMessageResponse, SessionResponse, SetConversationNotificationPrefsRequest,
+    SetDeactivatedRequest, SetFavoriteRequest, SetReactionRequest, SetRoleRequest, SetSavedRequest,
+    SetStatusRequest, SetThreadFollowRequest, StatusResponse, ThreadStateResponse,
+    UpdateConversationRequest, UpdateGroupRequest, UpdateWorkspaceRequest, UserStateResponse,
+    WebhookDeliveriesResponse, WebhookDeliveryOutcome, WebhooksResponse, WorkspaceResponse,
+    WorkspaceWebhooksResponse,
 };
 use serde::de::DeserializeOwned;
 use tower_http::timeout::TimeoutLayer;
@@ -633,9 +633,17 @@ async fn receive(
             too_large()
         })?;
     *body_bytes = bytes.len();
-    let request: IncomingWebhookRequest = serde_json::from_slice(&bytes)
-        .map_err(|_| AppError::invalid("the body must be JSON like {\"text\": \"...\"}"))?;
-    webhooks::deliver(&state.pool, webhook, key, &request.text).await
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    // Lazy's own `{"text": ...}` and Slack's webhook body (D33) are read the same way.
+    let body = crate::slack_compat::parse_body(content_type, &bytes).ok_or_else(|| {
+        AppError::invalid("the body must be JSON like {\"text\": \"...\"}, or Slack's webhook body")
+    })?;
+    let text = crate::slack_compat::to_markdown(&body).ok_or_else(|| {
+        AppError::invalid("there is nothing to post: send text, blocks, or attachments")
+    })?;
+    webhooks::deliver(&state.pool, webhook, key, &text).await
 }
 
 async fn upload_attachment(
