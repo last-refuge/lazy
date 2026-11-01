@@ -35,6 +35,7 @@ use lazy_domain::github::GithubEvent;
 use lazy_domain::{ConversationId, ConversationKind, GithubSubscriptionId, WorkspaceId};
 use lazy_protocol::{GithubDelivery, GithubDeliveryState, GithubStatusResponse};
 
+use super::integration_ui as ui;
 use super::single_line_field;
 use crate::app_model::{AppEvent, AppModel};
 use crate::form::{self, ButtonKind};
@@ -394,42 +395,37 @@ impl GithubPanel {
     }
 
     fn section_title(&self, theme: &Theme, text: &'static str) -> AnyElement {
-        div()
-            .text_size(theme.type_scale.small)
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(theme.colors.text_muted)
-            .child(text)
-            .into_any_element()
+        ui::section(theme, text, None)
     }
 
     fn header(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let leave_to = cx.entity().downgrade();
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(theme.type_scale.title)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.colors.text)
-                    .child("GitHub"),
-            )
-            .child(form::button(
+        let state = self.status(cx).map(|s| match &s.connection {
+            None => ui::chip(theme, "Not connected".into(), ui::Tone::Quiet),
+            Some(_) if s.installations.is_empty() => {
+                ui::chip(theme, "Not installed".into(), ui::Tone::Attention)
+            }
+            Some(_) => ui::chip(theme, "Connected".into(), ui::Tone::Good),
+        });
+        ui::header(
+            theme,
+            "github-back".into(),
+            "‹ All integrations",
+            &self.back_focus,
+            move |_, cx| {
+                leave_to
+                    .update(cx, |_, cx| cx.emit(GithubPanelEvent::Leave))
+                    .ok();
+            },
+            Some(ui::service_mark(
                 theme,
-                "github-back",
-                "All integrations",
-                ButtonKind::Secondary,
-                true,
-                &self.back_focus,
-                move |_, cx| {
-                    leave_to
-                        .update(cx, |_, cx| cx.emit(GithubPanelEvent::Leave))
-                        .ok();
-                },
-            ))
-            .into_any_element()
+                ui::marks::GITHUB.0,
+                ui::marks::GITHUB.1,
+                36.,
+            )),
+            "GitHub".into(),
+            state,
+        )
     }
 
     fn overview(
@@ -594,7 +590,7 @@ impl GithubPanel {
                                     .text_size(theme.type_scale.body)
                                     .text_color(colors.text)
                                     .child(format!(
-                                        "Connected: the app {} owned by {}",
+                                        "The app {}, owned by {}",
                                         connection.app_slug, connection.owner
                                     )),
                             )
@@ -657,9 +653,11 @@ impl GithubPanel {
                 },
             )));
             body = body
-                .child(self.section_title(theme, "Recent deliveries from GitHub"))
+                .child(ui::divider(theme))
+                .child(self.section_title(theme, "Recent deliveries"))
                 .child(self.deliveries(&status.deliveries, theme, cx));
         }
+        body = body.child(ui::divider(theme));
         let disconnect_to = this;
         body.child(div().flex().justify_end().child(form::button(
             theme,
@@ -727,9 +725,10 @@ impl GithubPanel {
                     .gap_3()
                     .px_3()
                     .py_2()
-                    .rounded(theme.radii.medium)
+                    .rounded(theme.radii.panel)
                     .border_1()
                     .border_color(colors.border)
+                    .bg(colors.surface)
                     .child(
                         div()
                             .flex_1()
@@ -845,7 +844,7 @@ impl GithubPanel {
                     .items_center()
                     .gap_3()
                     .py_1p5()
-                    .border_b_1()
+                    .when(index + 1 < deliveries.len(), |row| row.border_b_1())
                     .border_color(colors.border)
                     .child(
                         div()

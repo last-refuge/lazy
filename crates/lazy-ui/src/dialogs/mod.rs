@@ -14,6 +14,7 @@ mod details;
 mod diagnostics;
 mod github_panel;
 mod groups;
+mod integration_ui;
 mod integrations;
 mod invitations;
 mod people;

@@ -331,6 +331,10 @@ const DIALOG_FILES: &[(&str, &str)] = &[
     ),
     ("groups", "ShellDialog::Groups"),
     (
+        "integration_ui",
+        "drawing helpers shared by the Integrations views (not a dialog of its own)",
+    ),
+    (
         "integrations",
         "a section of ShellDialog::Details (its webhook forms are not dialogs of their own)",
     ),

@@ -31,6 +31,7 @@ use lazy_domain::connector::{ConnectorProvider, SecretSource};
 use lazy_domain::{ConnectorSubscriptionId, ConversationId, ConversationKind, WorkspaceId};
 use lazy_protocol::{ConnectorDelivery, ConnectorStatusResponse, GithubDeliveryState};
 
+use super::integration_ui as ui;
 use super::single_line_field;
 use crate::app_model::{AppEvent, AppModel};
 use crate::fonts;
@@ -66,6 +67,8 @@ pub struct ConnectorPanel {
     events: Vec<String>,
     /// The secret field is showing though one is set (Replace secret was chosen).
     replacing: bool,
+    /// The setup steps are showing on a connected view.
+    show_steps: bool,
     /// What was last copied, to say so on its button.
     copied: Option<&'static str>,
     /// A request whose end moves the view, and whether it has been seen starting.
@@ -77,6 +80,7 @@ pub struct ConnectorPanel {
     copy_address_focus: FocusHandle,
     secret_focus: FocusHandle,
     copy_secret_focus: FocusHandle,
+    steps_focus: FocusHandle,
     add_focus: FocusHandle,
     disconnect_focus: FocusHandle,
     cancel_focus: FocusHandle,
@@ -160,6 +164,7 @@ impl ConnectorPanel {
             channel: None,
             events: default_events(provider),
             replacing: false,
+            show_steps: false,
             copied: None,
             waiting: None,
             zone: TimeZone::system(),
@@ -169,6 +174,7 @@ impl ConnectorPanel {
             copy_address_focus: cx.focus_handle().tab_stop(true),
             secret_focus: cx.focus_handle().tab_stop(true),
             copy_secret_focus: cx.focus_handle().tab_stop(true),
+            steps_focus: cx.focus_handle().tab_stop(true),
             add_focus: cx.focus_handle().tab_stop(true),
             disconnect_focus: cx.focus_handle().tab_stop(true),
             cancel_focus: cx.focus_handle().tab_stop(true),
@@ -453,12 +459,7 @@ impl ConnectorPanel {
     }
 
     fn section_title(&self, theme: &Theme, text: impl Into<String>) -> AnyElement {
-        div()
-            .text_size(theme.type_scale.small)
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(theme.colors.text_muted)
-            .child(text.into())
-            .into_any_element()
+        ui::section(theme, text, None)
     }
 
     /// Text to copy, in a box, with its Copy button.
@@ -514,34 +515,92 @@ impl ConnectorPanel {
             .into_any_element()
     }
 
+    /// Where it stands, for the header's chip.
+    fn state_chip(&self, status: Option<&ConnectorStatusResponse>, theme: &Theme) -> AnyElement {
+        let (text, tone) = match status.and_then(|s| s.connection.as_ref()) {
+            None => ("Not connected", ui::Tone::Quiet),
+            Some(c) if !c.secret_set => ("Setup needed", ui::Tone::Attention),
+            Some(_) => ("Connected", ui::Tone::Good),
+        };
+        ui::chip(theme, text.to_owned(), tone)
+    }
+
     fn header(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let leave_to = cx.entity().downgrade();
-        div()
+        let (glyph, color) = ui::marks::of(self.provider);
+        let status = self.status(cx);
+        ui::header(
+            theme,
+            self.selector("back"),
+            "‹ All integrations",
+            &self.back_focus,
+            move |_, cx| {
+                leave_to
+                    .update(cx, |_, cx| cx.emit(ConnectorPanelEvent::Leave))
+                    .ok();
+            },
+            Some(ui::service_mark(theme, glyph, color, 36.)),
+            self.provider.label().to_owned(),
+            Some(self.state_chip(status.as_ref(), theme)),
+        )
+    }
+
+    /// The setup steps: the address, what to do in the provider, and the secret.
+    fn steps(
+        &mut self,
+        connection: &lazy_protocol::ConnectorConnection,
+        with_secret: bool,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = self.provider;
+        let copy_address_focus = self.copy_address_focus.clone();
+        let address = self.copyable(
+            theme,
+            "address",
+            connection.webhook_url.clone(),
+            &copy_address_focus,
+            cx,
+        );
+        let mut steps = div()
             .flex()
-            .items_center()
-            .gap_3()
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(theme.type_scale.title)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.colors.text)
-                    .child(self.provider.label()),
-            )
-            .child(form::button(
+            .flex_col()
+            .gap_4()
+            .child(ui::step(
                 theme,
-                self.selector("back"),
-                "All integrations",
-                ButtonKind::Secondary,
-                true,
-                &self.back_focus,
-                move |_, cx| {
-                    leave_to
-                        .update(cx, |_, cx| cx.emit(ConnectorPanelEvent::Leave))
-                        .ok();
-                },
+                1,
+                false,
+                "Copy this webhook address",
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .child(self.note(theme, "step-address", step_address(p)))
+                    .child(address)
+                    .into_any_element(),
             ))
-            .into_any_element()
+            .child(ui::step(
+                theme,
+                2,
+                false,
+                format!("Create the webhook in {}", p.label()),
+                ui::bullets(theme, provider_steps(p)),
+            ));
+        if with_secret {
+            let secret = self.secret_step(connection, theme, window, cx);
+            steps = steps.child(ui::step(
+                theme,
+                3,
+                connection.secret_set,
+                match p.secret_source() {
+                    SecretSource::Provider => format!("Paste {}'s signing secret", p.label()),
+                    SecretSource::Lazy => format!("Give {} a secret", p.label()),
+                },
+                secret,
+            ));
+        }
+        steps.into_any_element()
     }
 
     fn overview(
@@ -561,14 +620,14 @@ impl ConnectorPanel {
         let mut body = div()
             .flex()
             .flex_col()
-            .gap_3()
+            .gap_4()
             .child(self.header(theme, cx));
         let refresh_to = this.clone();
         let refresh = form::button(
             theme,
             self.selector("refresh"),
             if loading { "Refreshing…" } else { "Refresh" },
-            ButtonKind::Secondary,
+            ButtonKind::Ghost,
             !loading,
             &self.refresh_focus,
             move |_, cx| {
@@ -598,6 +657,7 @@ impl ConnectorPanel {
                 .into_any_element();
         }
         let Some(connection) = status.connection.clone() else {
+            // Not connected: what it does, what it posts, and Connect.
             let kind = ActionKind::ConnectConnector(w, p);
             let working = self.action(kind, cx) == ActionState::InFlight;
             let error = match self.action(kind, cx) {
@@ -605,8 +665,11 @@ impl ConnectorPanel {
                 _ => None,
             };
             let connect_to = this.clone();
+            let kinds: Vec<&str> = p.kinds().iter().map(|k| k.label).collect();
             return body
                 .child(self.note(theme, "intro", intro(p)))
+                .child(ui::section(theme, "What it can post", None))
+                .child(ui::bullets(theme, &kinds))
                 .children(error.map(|m| self.error_line(theme, m)))
                 .child(div().flex().child(form::button(
                     theme,
@@ -626,27 +689,33 @@ impl ConnectorPanel {
                 .into_any_element();
         };
 
-        // Connected: the setup steps first while the secret is missing, then what is followed.
-        let copy_address_focus = self.copy_address_focus.clone();
-        body = body
-            .child(self.section_title(theme, format!("Set up the webhook in {}", p.label())))
-            .child(self.note(theme, "step-address", step_address(p)))
-            .child(self.copyable(
-                theme,
-                "address",
-                connection.webhook_url.clone(),
-                &copy_address_focus,
-                cx,
-            ))
-            .child(self.note(theme, "step-provider", step_provider(p)))
-            .child(self.secret_step(&connection, theme, window, cx));
+        if !connection.secret_set {
+            // Setting up: three steps, then channels.
+            return body
+                .child(self.note(
+                    theme,
+                    "setup-intro",
+                    format!(
+                        "Three steps join {} to Lazy. Then choose which channels it posts in.",
+                        p.label()
+                    ),
+                ))
+                .child(self.steps(&connection, true, theme, window, cx))
+                .child(ui::divider(theme))
+                .child(self.disconnect_row(theme, cx))
+                .into_any_element();
+        }
 
-        if connection.secret_set {
-            body = body
-                .child(self.section_title(theme, format!("Channels following {}", p.label())))
-                .child(self.subscriptions(&status, theme, cx));
-            let add_to = this.clone();
-            body = body.child(div().flex().gap_2().child(form::button(
+        // Connected: what it posts where comes first; the connection itself last.
+        let add_to = this.clone();
+        body = body
+            .child(ui::section(
+                theme,
+                format!("Channels following {}", p.label()),
+                None,
+            ))
+            .child(self.subscriptions(&status, theme, cx))
+            .child(div().flex().child(form::button(
                 theme,
                 self.selector("add"),
                 "Add a channel",
@@ -658,38 +727,107 @@ impl ConnectorPanel {
                         .update(cx, |panel, cx| panel.start_adding(window, cx))
                         .ok();
                 },
-            )));
-            body = body
-                .child(self.section_title(theme, format!("Recent deliveries from {}", p.label())))
-                .child(self.deliveries(&status.deliveries, theme, cx))
-                .child(div().flex().child(refresh));
-        }
-        let disconnect_to = this;
-        body.child(div().flex().justify_end().child(form::button(
+            )))
+            .child(ui::divider(theme))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(ui::section(theme, "Recent deliveries", None)),
+                    )
+                    .child(refresh),
+            )
+            .child(self.deliveries(&status.deliveries, theme, cx))
+            .child(ui::divider(theme))
+            .child(ui::section(
+                theme,
+                "Connection",
+                Some(format!(
+                    "{} sends its activity to this address, signed with the secret.",
+                    p.label()
+                )),
+            ));
+        let copy_address_focus = self.copy_address_focus.clone();
+        body = body.child(self.copyable(
             theme,
-            self.selector("disconnect"),
-            "Disconnect…",
-            ButtonKind::Danger,
+            "address",
+            connection.webhook_url.clone(),
+            &copy_address_focus,
+            cx,
+        ));
+        body = body.child(self.secret_step(&connection, theme, window, cx));
+        let steps_to = this;
+        body = body.child(div().flex().ml(px(-12.)).child(form::button(
+            theme,
+            self.selector("show-steps"),
+            if self.show_steps {
+                "Hide setup steps"
+            } else {
+                "Show setup steps"
+            },
+            ButtonKind::Ghost,
             true,
-            &self.disconnect_focus,
-            move |window, cx| {
-                disconnect_to
+            &self.steps_focus,
+            move |_, cx| {
+                steps_to
                     .update(cx, |panel, cx| {
-                        panel.dispatch(
-                            Input::DismissAction(ActionKind::DisconnectConnector(
-                                panel.workspace,
-                                panel.provider,
-                            )),
-                            cx,
-                        );
-                        panel.view = ConnectorView::ConfirmDisconnect;
-                        window.focus(&panel.cancel_focus, cx);
+                        panel.show_steps = !panel.show_steps;
                         cx.notify();
                     })
                     .ok();
             },
-        )))
-        .into_any_element()
+        )));
+        if self.show_steps {
+            body = body.child(self.steps(&connection, false, theme, window, cx));
+        }
+        body.child(ui::divider(theme))
+            .child(self.disconnect_row(theme, cx))
+            .into_any_element()
+    }
+
+    /// Disconnect…, at the foot of the view.
+    fn disconnect_row(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let disconnect_to = cx.entity().downgrade();
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(div().flex_1().child(self.note(
+                theme,
+                "disconnect-hint",
+                format!(
+                    "Disconnecting stops posting and forgets the secret. What {} posted stays.",
+                    self.provider.label()
+                ),
+            )))
+            .child(form::button(
+                theme,
+                self.selector("disconnect"),
+                "Disconnect…",
+                ButtonKind::Danger,
+                true,
+                &self.disconnect_focus,
+                move |window, cx| {
+                    disconnect_to
+                        .update(cx, |panel, cx| {
+                            panel.dispatch(
+                                Input::DismissAction(ActionKind::DisconnectConnector(
+                                    panel.workspace,
+                                    panel.provider,
+                                )),
+                                cx,
+                            );
+                            panel.view = ConnectorView::ConfirmDisconnect;
+                            window.focus(&panel.cancel_focus, cx);
+                            cx.notify();
+                        })
+                        .ok();
+                },
+            ))
+            .into_any_element()
     }
 
     /// The signing secret: pasted from the provider, or made here and shown once.
@@ -717,10 +855,11 @@ impl ConnectorPanel {
                         .flex()
                         .items_center()
                         .gap_2()
+                        .child(ui::chip(theme, "Secret saved".to_owned(), ui::Tone::Good))
                         .child(div().flex_1().child(self.note(
                             theme,
                             "secret-set",
-                            "✓ Signing secret saved. Deliveries are checked against it.",
+                            "Deliveries are checked against it.",
                         )))
                         .child(form::button(
                             theme,
@@ -802,7 +941,7 @@ impl ConnectorPanel {
                     step = step.child(self.note(
                         theme,
                         "secret-set",
-                        "✓ Secret set. Lost it? Make a new one and paste it into the webhook again; \
+                        "Secret set. Lost it? Make a new one and paste it into the webhook again; \
                          the old one stops working at once.",
                     ));
                 }
@@ -885,9 +1024,10 @@ impl ConnectorPanel {
                     .gap_3()
                     .px_3()
                     .py_2()
-                    .rounded(theme.radii.medium)
+                    .rounded(theme.radii.panel)
                     .border_1()
                     .border_color(colors.border)
+                    .bg(colors.surface)
                     .child(
                         div()
                             .flex_1()
@@ -1001,7 +1141,7 @@ impl ConnectorPanel {
                     .items_center()
                     .gap_3()
                     .py_1p5()
-                    .border_b_1()
+                    .when(index + 1 < deliveries.len(), |row| row.border_b_1())
                     .border_color(colors.border)
                     .child(
                         div()
@@ -1329,39 +1469,42 @@ fn intro(provider: ConnectorProvider) -> String {
 
 fn step_address(provider: ConnectorProvider) -> String {
     format!(
-        "1. Copy this address. It's where {} sends its activity.",
+        "It's where {} sends its activity. Only Lazy can read what arrives there.",
         provider.label()
     )
 }
 
-/// Where to go in the provider, and what to choose there.
-fn step_provider(provider: ConnectorProvider) -> String {
+/// What to do in the provider, a line each.
+fn provider_steps(provider: ConnectorProvider) -> &'static [&'static str] {
     match provider {
-        ConnectorProvider::Linear => "2. In Linear, open Settings, API, Webhooks, and choose New \
-             webhook. Paste the address, give it a label (\"Lazy\"), choose all public teams (or \
-             one), and tick Issues, Comments, Projects and Project updates. Save it, then copy the \
-             signing secret from the webhook's page and paste it here."
-            .to_owned(),
-        ConnectorProvider::Jira => {
-            "2. In Jira, open Settings, System, WebHooks, and choose Create \
-             a WebHook. Paste the address as the URL. Make a secret here and paste it into the \
-             Secret field. Under Events, tick Issue created and updated, and Comment created \
-             (a JQL filter can narrow it to some projects). Save it."
-                .to_owned()
-        }
-        ConnectorProvider::Sentry => "2. In Sentry, open Settings, Developer Settings, and create an \
-             internal integration named Lazy. Paste the address as its Webhook URL, turn on Alert \
-             Action, give it Read access to Issue & Event, and tick the issue webhook. Save it, then \
-             paste its Client Secret here. For alerts, add \"Send a notification via Lazy\" to an \
-             alert rule."
-            .to_owned(),
-        ConnectorProvider::PagerDuty => "2. In PagerDuty, open Integrations, Generic Webhooks (v3), \
-             and choose New Webhook (or add one on a service's Integrations tab). Paste the address \
-             as the Webhook URL and choose the incident events (triggered, acknowledged, resolved, \
-             escalated, reassigned, annotated). Add it, then paste the secret it shows here: it is \
-             shown only once."
-            .to_owned(),
-        ConnectorProvider::Unknown => String::new(),
+        ConnectorProvider::Linear => &[
+            "In Linear, open Settings, API, Webhooks, and choose New webhook.",
+            "Paste the address and label it \"Lazy\".",
+            "Choose all public teams, or one team.",
+            "Tick Issues, Comments, Projects and Project updates, then save.",
+            "Open the webhook again and copy its signing secret.",
+        ],
+        ConnectorProvider::Jira => &[
+            "In Jira, open Settings, System, WebHooks, and choose Create a WebHook.",
+            "Paste the address as the URL.",
+            "Paste the secret from the next step into the Secret field.",
+            "Under Events, tick Issue created and updated, and Comment created.",
+            "Optionally narrow it to some projects with JQL, then save.",
+        ],
+        ConnectorProvider::Sentry => &[
+            "In Sentry, open Settings, Developer Settings, and create an internal integration named Lazy.",
+            "Paste the address as its Webhook URL and turn on Alert Action.",
+            "Give it Read access to Issue & Event and tick the issue webhook, then save.",
+            "Copy its Client Secret.",
+            "For alerts, add \"Send a notification via Lazy\" to an alert rule.",
+        ],
+        ConnectorProvider::PagerDuty => &[
+            "In PagerDuty, open Integrations, Generic Webhooks (v3), and choose New Webhook (or use a service's Integrations tab).",
+            "Paste the address as the Webhook URL.",
+            "Choose the incident events: triggered, acknowledged, resolved, escalated, reassigned, annotated.",
+            "Add it, and copy the secret PagerDuty shows: it is shown only once.",
+        ],
+        ConnectorProvider::Unknown => &[],
     }
 }
 

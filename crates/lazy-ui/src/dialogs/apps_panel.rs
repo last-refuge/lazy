@@ -28,6 +28,7 @@ use lazy_domain::app::AppScope;
 use lazy_domain::{AppId, ConversationId, ConversationKind, WorkspaceId};
 use lazy_protocol::App;
 
+use super::integration_ui as ui;
 use super::single_line_field;
 use crate::app_model::{AppEvent, AppModel};
 use crate::fonts;
@@ -515,54 +516,40 @@ impl AppsPanel {
     }
 
     fn section_title(&self, theme: &Theme, text: &'static str) -> AnyElement {
-        div()
-            .text_size(theme.type_scale.small)
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(theme.colors.text_muted)
-            .child(text)
-            .into_any_element()
+        ui::section(theme, text, None)
     }
 
     fn header(&self, theme: &Theme, title: String, cx: &mut Context<Self>) -> AnyElement {
         let this = cx.entity().downgrade();
-        let view = self.view;
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(theme.type_scale.title)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.colors.text)
-                    .child(title),
-            )
-            .child(form::button(
+        let in_list = self.view == AppsView::List;
+        ui::header(
+            theme,
+            "apps-back".into(),
+            if in_list {
+                "‹ All integrations"
+            } else {
+                "‹ All apps"
+            },
+            &self.back_focus,
+            move |window, cx| {
+                this.update(cx, |panel, cx| {
+                    if panel.view == AppsView::List {
+                        cx.emit(AppsPanelEvent::Leave);
+                    } else {
+                        panel.show_list(window, cx);
+                    }
+                })
+                .ok();
+            },
+            Some(ui::service_mark(
                 theme,
-                "apps-back",
-                if view == AppsView::List {
-                    "All integrations"
-                } else {
-                    "All apps"
-                },
-                ButtonKind::Secondary,
-                true,
-                &self.back_focus,
-                move |window, cx| {
-                    this.update(cx, |panel, cx| {
-                        if panel.view == AppsView::List {
-                            cx.emit(AppsPanelEvent::Leave);
-                        } else {
-                            panel.show_list(window, cx);
-                        }
-                    })
-                    .ok();
-                },
-            ))
-            .into_any_element()
+                ui::marks::APPS.0,
+                ui::marks::APPS.1,
+                36.,
+            )),
+            title,
+            None,
+        )
     }
 
     fn list(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -579,13 +566,13 @@ impl AppsPanel {
             .flex()
             .flex_col()
             .gap_3()
-            .child(self.header(theme, "Apps".into(), cx))
+            .child(self.header(theme, "Apps and bots".into(), cx))
             .child(self.note(
                 theme,
                 "apps-intro",
-                "An app is a bot with a token. A program uses the token with Lazy's bot API to \
-                 post in the channels you add the bot to, in Lazy's message format or Slack's \
-                 (POST /v1/bot/messages, see DEPLOY.md).",
+                "An app is a bot your own program controls with a token. It posts in the \
+                 channels you add it to, answers slash commands, and can be told about new \
+                 messages, in Lazy's format or Slack's. DEPLOY.md has examples.",
             ))
             .children(error.map(|m| self.error_line(theme, format!("The apps didn't load. {m}"))));
         match apps {
@@ -620,9 +607,10 @@ impl AppsPanel {
                             .gap_3()
                             .px_3()
                             .py_2()
-                            .rounded(theme.radii.medium)
+                            .rounded(theme.radii.panel)
                             .border_1()
                             .border_color(colors.border)
+                            .bg(colors.surface)
                             .child(
                                 div()
                                     .flex_1()
@@ -1070,9 +1058,10 @@ impl AppsPanel {
                     .gap_3()
                     .px_3()
                     .py_2()
-                    .rounded(theme.radii.medium)
+                    .rounded(theme.radii.panel)
                     .border_1()
                     .border_color(colors.border)
+                    .bg(colors.surface)
                     .child(
                         div()
                             .flex_1()
