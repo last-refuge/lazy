@@ -99,13 +99,30 @@ impl Default for GithubEndpoints {
 }
 
 /// The HTTP client the server talks to GitHub with: GitHub's address only, a short timeout.
-pub fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+///
+/// `None` (logged) when it cannot be built, typically because the machine has no CA certificates:
+/// the server runs on and GitHub reports itself unavailable, since a client that cannot verify
+/// GitHub must not be used and building a default one would panic for the same reason.
+pub fn http_client() -> Option<reqwest::Client> {
+    match reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .user_agent(concat!("lazy-server/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_default()
+    {
+        Ok(client) => Some(client),
+        Err(_) => {
+            tracing::warn!(
+                "no HTTPS client (are CA certificates installed?): GitHub is unavailable"
+            );
+            None
+        }
+    }
+}
+
+/// Whether this server can connect GitHub: it can seal credentials and reach GitHub.
+fn available(state: &AppState) -> bool {
+    state.integrations.credentials.enabled() && state.integrations.http.is_some()
 }
 
 fn manage_error() -> AppError {
@@ -191,6 +208,12 @@ pub async fn start_setup(
             ErrorCode::Unavailable,
             "GitHub needs this server's credentials key (LAZY_CREDENTIALS_KEY); ask whoever runs \
              it to set one",
+        ));
+    }
+    if state.integrations.http.is_none() {
+        return Err(AppError::new(
+            ErrorCode::Unavailable,
+            "this server cannot make HTTPS requests (no CA certificates); ask whoever runs it",
         ));
     }
     let organization = organization.trim();
@@ -419,9 +442,10 @@ async fn finish_setup(state: &AppState, code: &str, token: &str) -> Result<Finis
         "{}/app-manifests/{code}/conversions",
         state.integrations.github.api
     );
-    let response = state
-        .integrations
-        .http
+    let Some(http) = &state.integrations.http else {
+        return Err(AppError::internal("this server cannot make HTTPS requests"));
+    };
+    let response = http
         .post(&url)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
@@ -1142,7 +1166,7 @@ pub async fn status(
         .fetch_all(&mut *conn)
         .await?;
     Ok(GithubStatusResponse {
-        available: state.integrations.credentials.enabled(),
+        available: available(state),
         connection: connection.map(|app| GithubConnection {
             app_slug: app.slug,
             html_url: app.html_url,

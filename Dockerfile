@@ -20,10 +20,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --profile dist -p lazy-server \
  && install -D target/dist/lazy-server /out/lazy-server
 
-# Debian slim has the same glibc as the builder, so the binary runs as built. The server makes no
-# outbound requests, so there are no CA certificates to carry either.
+# Debian slim has the same glibc as the builder, so the binary runs as built. CA certificates are
+# for the server's own HTTPS requests (the GitHub connector); without them it runs with GitHub off.
 FROM debian:bookworm-slim
-RUN useradd --system --uid 10001 --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin lazy \
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin lazy \
  && install -d -o lazy -g lazy /data/attachments
 COPY --from=build /out/lazy-server /usr/local/bin/lazy-server
 
