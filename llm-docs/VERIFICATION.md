@@ -426,3 +426,10 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
   - New: 4 UI tests in `lazy-ui/tests/workspace_integrations.rs`, covering the card and view, Escape back to the list, Connect opening the browser at the setup address and forgetting it, Follow with chosen activity, Retry, and Disconnect behind a confirmation.
   - The dialog audit covers the new panel's file.
 - *Observed in offscreen renders* (`.dev/screens/4b-01` to `4b-06`): the card, connect, not installed, installed (subscriptions and deliveries), adding, and unavailable at 560 px. The ✓ on selected activity chips draws as √ in DM Sans; selection also shows by fill.
+
+## The GitHub connector on chat.lazyto.day (0.8.1, 2026-11-01)
+
+- *Failed, then fixed:* the first deploy of the 0.8.0 server restart-looped. The runtime image had no CA certificates, building the GitHub HTTPS client failed, and the fallback panicked (`reqwest` `client.rs:2524`). Reproduced locally by hiding the certificates (`SSL_CERT_FILE`/`SSL_CERT_DIR`): exit 101 before the fix; after it the server stays up, `/healthz` answers 200, and a warning says GitHub is unavailable. The image now installs `ca-certificates` (PR #8). 0.8.0 was never published; 0.8.1 replaced it.
+- *Failed, then fixed:* the server's `public_url` was Coolify's generated `http://…sslip.io` address, not the domain: `SERVICE_URL_LAZY` kept it after the domain was set (Coolify 4.5.3). `LAZY_PUBLIC_URL`, set in Coolify, now wins over it (PR #10).
+- *Observed by the owner:* with `LAZY_CREDENTIALS_KEY` set and 0.8.1 clients, the whole flow worked against the real GitHub. That covers creating the app for `last-refuge` from the manifest, installing it on all repositories, following a repository into a channel, and events posted by the GitHub bot. The `lazy-notify.yml` Actions stopgap was removed afterwards.
+- *Not checked:* a key rotation with `rewrap-credentials` in production; Disconnect and reconnect against the real GitHub; review and comment events; behaviour under a burst of deliveries.

@@ -332,7 +332,7 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [X] Postgres-backed queue with leases, ownership, and bounded concurrency (D31)
   - [X] Shutdown draining and worker restart recovery (D31)
   - [X] Failure classes: retryable, definitive, unknown outcome (D31)
-  - [ ] Bounded retries with visible failures (bounded retries done, D31; failures are recorded but shown to admins only once a connector enqueues jobs)
+  - [X] Bounded retries with visible failures (D31; GitHub's failed deliveries are listed for admins with Retry, D32)
   - [ ] Worker process mode for isolation (`lazy-server worker` written, D31; the worker is tested, the separate process has not been run)
 - [ ] 4.3 Incoming webhooks
   - [X] Per-channel webhook endpoints with secrets (built in 2.9, D16; a new secret on request, D30)
@@ -344,10 +344,10 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [ ] No arbitrary remote HTML
   - [ ] Interactive actions with authorization rechecked on each use
 - [ ] 4.5 First provider integration (GitHub)
-  - [ ] Installation flow and scopes (manifest flow, installations from signed events, and the app's screens, D32; a run against the real GitHub is still to do)
+  - [X] Installation flow and scopes (manifest flow, installations from signed events, and the app's screens, D32; run against the real GitHub on chat.lazyto.day, 2026-11-01)
   - [X] Provider webhook signature verification (D32)
   - [ ] Event-to-rich-message mapping (Markdown messages for seven kinds of activity, D32; declarative rich blocks are 4.4)
-  - [ ] Channel subscriptions (server and app, D32; not yet used against the real GitHub)
+  - [X] Channel subscriptions (server and app, D32; used against the real GitHub, 2026-11-01)
   - [X] Deduplication by provider delivery ID (D32)
   - [ ] Provider-specific idempotency or reconciliation for any provider action (posting is idempotent per subscription and delivery, D32; Lazy takes no action on GitHub yet)
   - [X] Credential revocation (disconnect revokes all three secrets, D32)
@@ -360,8 +360,8 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [ ] Authorization recheck and size, time, and redirect bounds
   - [ ] Cached previews that respect conversation access
 - [ ] 4.8 Administration UI
-  - [ ] Install and configure integrations (incoming webhooks, D30; GitHub connect, install and subscriptions, D32; not yet run against the real GitHub)
-  - [ ] Manage channel subscriptions (GitHub, D32; not yet run against the real GitHub)
+  - [X] Install and configure integrations (incoming webhooks, D30; GitHub connect, install and subscriptions, D32; run against the real GitHub, 2026-11-01)
+  - [X] Manage channel subscriptions (GitHub, D32; run against the real GitHub, 2026-11-01)
   - [ ] View deliveries and failures, and retry (incoming webhooks: delivery log and recent failures, D30; there is nothing to retry for them because Lazy keeps no payload; retry comes with the job system)
   - [ ] Rotate and revoke credentials (incoming webhooks: new address and delete, D30; provider credentials still to do)
 - [ ] 4.9 Tests
