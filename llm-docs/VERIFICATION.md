@@ -404,3 +404,20 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
   - The credential tests cover: a round trip with no plaintext in the row, a ciphertext copied into another row refusing to open, revoke and replace, no key configured, and a rotation with `rewrap_all`, including a key dropped too early.
   - `cargo fmt --all --check` passes; clippy shows only the warning already in `lazy-client-runtime/tests/updates.rs`.
 - *Not checked by anyone:* the `worker` and `rewrap-credentials` commands as real processes; a key set in Coolify; behaviour across a real redeploy with jobs in flight (none exist until a connector enqueues them).
+
+## The GitHub connector, server side (D32, 2026-10-31)
+
+- *Measured:* the full suite (`scripts/test.sh --no-fail-fast -- --test-threads=12`) passed 2,738 tests with 0 failures. That includes 6 end-to-end tests in `lazy-server/tests/github.rs` against a stand-in for GitHub's API, plus unit tests for escaping, quotes, signatures, the manifest, and repository and organization names.
+  - The end-to-end tests cover:
+    - connecting through the manifest flow, with a state that works once;
+    - secrets that are never readable in the database or the status;
+    - refusals: without a key, for members, and for a second connection;
+    - a conversion GitHub refuses;
+    - unsigned and wrongly signed deliveries, and unknown apps;
+    - installations recorded from signed events;
+    - subscriptions: needing an installation, normalizing `https://github.com/Last-Refuge/Lazy`, and the bot joining and leaving;
+    - deliveries: a pull request posted once despite a duplicate delivery, with its title's markup and `@mention` kept as text; a push listing its commits; filtered and ignored events; nothing of the payload stored beyond the summary;
+    - an admin retry that posted nothing twice;
+    - disconnecting (secrets erased, bot gone, deliveries refused) and connecting again.
+  - The deactivated-versus-stranger boundary test now includes the GitHub status, setup and subscribe endpoints. `cargo fmt --all --check` passes; clippy shows only the warning already in `lazy-client-runtime/tests/updates.rs`.
+- *Not checked by anyone:* any of it against the real GitHub (the manifest page and its fields, the app's name rules, installing, real payloads and signatures), and the app's screens, which don't exist yet (slice 2b).

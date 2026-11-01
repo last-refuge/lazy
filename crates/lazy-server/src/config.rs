@@ -361,6 +361,8 @@ pub struct IntegrationOptions {
     /// A job worker in this process, with these settings; `None` (the default, and what tests
     /// get unless they ask) runs none.
     pub jobs: Option<crate::jobs::WorkerOptions>,
+    /// Where GitHub is; tests point it at a stand-in.
+    pub github: crate::github::GithubEndpoints,
 }
 
 /// Where the bytes of attachments live.

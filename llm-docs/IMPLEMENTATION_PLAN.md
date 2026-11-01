@@ -344,13 +344,13 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [ ] No arbitrary remote HTML
   - [ ] Interactive actions with authorization rechecked on each use
 - [ ] 4.5 First provider integration (GitHub)
-  - [ ] Installation flow and scopes
-  - [ ] Provider webhook signature verification
-  - [ ] Event-to-rich-message mapping
-  - [ ] Channel subscriptions
-  - [ ] Deduplication by provider delivery ID
-  - [ ] Provider-specific idempotency or reconciliation for any provider action
-  - [ ] Credential revocation
+  - [ ] Installation flow and scopes (server: manifest flow, installations from signed events, D32; the app's screens and a real GitHub run are still to do)
+  - [X] Provider webhook signature verification (D32)
+  - [ ] Event-to-rich-message mapping (Markdown messages for seven kinds of activity, D32; declarative rich blocks are 4.4)
+  - [ ] Channel subscriptions (server API, D32; the app's screens are still to do)
+  - [X] Deduplication by provider delivery ID (D32)
+  - [ ] Provider-specific idempotency or reconciliation for any provider action (posting is idempotent per subscription and delivery, D32; Lazy takes no action on GitHub yet)
+  - [X] Credential revocation (disconnect revokes all three secrets, D32)
 - [ ] 4.6 Bots and commands
   - [ ] Bot tokens and scopes
   - [ ] Slash commands

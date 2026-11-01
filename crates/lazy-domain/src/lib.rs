@@ -9,6 +9,7 @@ pub mod conversation;
 pub mod document;
 pub mod emoji;
 pub mod fuzzy;
+pub mod github;
 pub mod ids;
 pub mod markdown;
 pub mod mention;
@@ -28,8 +29,8 @@ pub use conversation::{ConversationFacts, ConversationKind, ParticipantError, Pa
 pub use document::{Block, DocumentError, Inline, Marks, MessageDocument};
 pub use emoji::{MAX_CUSTOM_EMOJI, MAX_REACTION_KINDS, ReactionEmoji};
 pub use ids::{
-    AttachmentId, ConversationId, EmojiId, EventSeq, GroupId, InvitationId, MessageId, OperationId,
-    UserId, WebhookId, WorkspaceId,
+    AttachmentId, ConversationId, EmojiId, EventSeq, GithubSubscriptionId, GroupId, InvitationId,
+    MessageId, OperationId, UserId, WebhookId, WorkspaceId,
 };
 pub use mention::{MapDirectory, MentionDirectory, MentionTarget, NoMentions};
 pub use message::{MAX_THREAD_REPLIERS_LISTED, MessageFacts, Permalink};

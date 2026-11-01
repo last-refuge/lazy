@@ -21,6 +21,8 @@ testing = ["dep:tempfile"]
 lazy-domain.workspace = true
 lazy-protocol.workspace = true
 argon2.workspace = true
+# HMAC (GitHub's webhook signatures) and, later, RSA (GitHub App tokens); already built for reqwest's TLS.
+aws-lc-rs = "1"
 # Integration credentials are sealed with XChaCha20-Poly1305 (the client's files use it too).
 chacha20poly1305.workspace = true
 axum.workspace = true
@@ -31,6 +33,8 @@ getrandom.workspace = true
 # Thumbnails and the dimensions of uploaded images: the four raster formats that are shown inline,
 # and nothing else (no AVIF, TIFF, EXR, ..., and no rayon).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# Talking to GitHub's API (rustls).
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

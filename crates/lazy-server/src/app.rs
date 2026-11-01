@@ -52,11 +52,14 @@ pub struct Integrations {
     pub credentials: crate::credentials::CredentialKeys,
     /// Wakes this process's job worker after an enqueue (does nothing if it runs none).
     pub jobs: crate::jobs::Waker,
+    /// Where GitHub is, and the client the server talks to it with (D32).
+    pub github: crate::github::GithubEndpoints,
+    pub http: reqwest::Client,
 }
 
 /// The kinds of job this server knows how to run. Integrations add theirs here.
 pub fn job_handlers() -> crate::jobs::Registry {
-    crate::jobs::Registry::new()
+    crate::jobs::Registry::new().on(crate::github::EVENT_JOB, crate::github::handle_event)
 }
 
 /// Connects to Postgres, optionally migrates and seeds, and serves until `shutdown` completes.
@@ -272,6 +275,8 @@ pub async fn serve_all(
             setup_code: integrations.setup_code,
             credentials: integrations.credential_keys,
             jobs: waker,
+            github: integrations.github,
+            http: crate::github::http_client(),
         }),
         attachments: Arc::clone(&attachments),
         search,

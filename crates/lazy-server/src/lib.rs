@@ -23,6 +23,7 @@ pub mod dispatcher;
 pub mod emoji;
 pub mod error;
 pub mod events;
+pub mod github;
 pub mod groups;
 pub mod health;
 pub mod http;
