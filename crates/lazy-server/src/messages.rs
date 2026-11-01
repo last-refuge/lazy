@@ -622,6 +622,8 @@ pub async fn send_message(
             .await?;
         }
     }
+    // Apps that follow this channel's events are told, exactly when the message is posted (D38).
+    crate::app_events::message_posted(&mut tx, loaded.workspace_id, conversation, &message).await?;
     tx.commit().await?;
     Ok(message)
 }

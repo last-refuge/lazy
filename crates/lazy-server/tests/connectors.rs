@@ -433,7 +433,11 @@ async fn linear_end_to_end(pool: PgPool) {
     );
     let ops_texts = bot_texts(app, bot, ops).await;
     assert_eq!(ops_texts.len(), 3, "{ops_texts:?}");
-    assert!(ops_texts[2].ends_with("to Done"), "{ops_texts:?}");
+    // Deliveries are posted by several workers at once, so in no promised order.
+    assert!(
+        ops_texts.iter().any(|t| t.ends_with("to Done")),
+        "{ops_texts:?}"
+    );
     // The bot is named after Linear and joined both channels.
     let name: String = sqlx::query_scalar("SELECT display_name FROM users WHERE id = $1")
         .bind(bot.as_uuid())

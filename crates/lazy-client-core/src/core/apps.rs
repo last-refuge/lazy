@@ -270,6 +270,33 @@ impl ClientCore {
         }
     }
 
+    pub(super) fn set_app_events(
+        &mut self,
+        app: AppId,
+        url: &str,
+        types: Vec<String>,
+        out: &mut Output,
+    ) {
+        let kind = ActionKind::AppEvents(app);
+        if !matches!(self.phase, SessionPhase::Ready) || self.action(kind) == &ActionState::InFlight
+        {
+            return;
+        }
+        let url = url.trim();
+        if !url.is_empty() && types.is_empty() {
+            return self.fail_action(kind, "Choose at least one kind of event.", out);
+        }
+        if self.begin_action(kind, out) {
+            out.effects.push(Effect::SetAppEvents {
+                app,
+                request: lazy_protocol::SetAppEventsRequest {
+                    url: url.to_owned(),
+                    types,
+                },
+            });
+        }
+    }
+
     pub(super) fn load_commands(&mut self, workspace: WorkspaceId, out: &mut Output) {
         if !matches!(self.phase, SessionPhase::Ready) || self.role_in(workspace).is_none() {
             return;
@@ -394,6 +421,11 @@ impl ClientCore {
                 self.app_signing_secret = Some((app, secret));
                 out.changes.push(Change::AppSigningSecretChanged);
             }
+            (ActionKind::AppEvents(id), ActionOutcome::App(app)) => {
+                if let Some(workspace) = self.app_workspace(id) {
+                    self.put_app(workspace, *app, out);
+                }
+            }
             (ActionKind::AppCommand(id), ActionOutcome::App(app)) => {
                 if let Some(workspace) = self.app_workspace(id) {
                     self.put_app(workspace, *app, out);
@@ -460,7 +492,7 @@ fn sentence(message: &str) -> String {
 pub(super) fn app_error(kind: ActionKind, error: &RequestError) -> String {
     // A command's failure is the server's to explain: which app, and what to do.
     if let (
-        ActionKind::RunCommand(_) | ActionKind::LoadAppSigningSecret(_),
+        ActionKind::RunCommand(_) | ActionKind::LoadAppSigningSecret(_) | ActionKind::AppEvents(_),
         RequestError::Rejected(api),
     ) = (kind, error)
         && matches!(

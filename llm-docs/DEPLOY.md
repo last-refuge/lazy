@@ -231,3 +231,7 @@ On an app's screen, **Add a command**: its name (`deploy` for `/deploy`), the ad
 
 A private answer sent later through `response_url` is not shown yet; answer privately within the 3 seconds instead. Commands need `LAZY_CREDENTIALS_KEY`, since the signing secret is sealed with it.
 
+### Events
+
+On an app's screen, **Events**: an address and what to send, **Messages that name it** (`@App name` in a message) and/or **Every message in its channels**. Lazy checks the address with Slack's `url_verification` challenge before saving, then sends each event as Slack's `event_callback`, signed like commands. Reply with `POST /v1/bot/messages` using the event's `channel` and its `ts` as `thread_ts`. Messages written by bots are not sent, so two apps never answer each other in a loop.
+

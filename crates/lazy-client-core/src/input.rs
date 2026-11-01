@@ -368,6 +368,13 @@ pub enum Input {
     LoadCommands(WorkspaceId),
     /// Forget the private reply to a command in this conversation.
     DismissCommandReply(ConversationId),
+    /// Set where an app is told what happens in its channels, and which events (an empty `url`
+    /// turns them off). The server checks the address answers first (D38).
+    SetAppEvents {
+        app: lazy_domain::AppId,
+        url: String,
+        types: Vec<String>,
+    },
     /// Give a webhook a new address. The old one stops working at once; the new one arrives in
     /// `ClientCore::created_webhook`, to be shown once. Progress is
     /// `action(ActionKind::NewWebhookAddress(webhook))`.

@@ -2151,6 +2151,10 @@ fn sample_apps(cast: &Cast) -> Vec<lazy_protocol::App> {
                 description: "Deploy a service".into(),
                 usage_hint: "[service] [environment]".into(),
             }],
+            events: Some(lazy_protocol::AppEvents {
+                url: "https://deploy.lazyto.day/slack/events".into(),
+                types: vec!["app_mention".into()],
+            }),
         },
         lazy_protocol::App {
             id: sample_app_ids().1,
@@ -2163,6 +2167,7 @@ fn sample_apps(cast: &Cast) -> Vec<lazy_protocol::App> {
             created_at: ago(60 * 5),
             last_used_at: None,
             commands: Vec::new(),
+            events: None,
         },
     ]
 }
@@ -9023,7 +9028,7 @@ fn main() {
         Scene {
             name: "4e-04-app-commands-light",
             width: 1100.0,
-            height: 1300.0,
+            height: 1700.0,
             appearance: WindowAppearance::Light,
             build: &|model, cast, cx, rec, win| {
                 reach_chat(cx, model, cast, rec, true);

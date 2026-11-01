@@ -313,6 +313,10 @@ impl fmt::Debug for Effect {
                 .debug_struct("RemoveAppCommand")
                 .field("command", command)
                 .finish(),
+            Effect::SetAppEvents { app, .. } => f
+                .debug_struct("SetAppEvents")
+                .field("app", app)
+                .finish_non_exhaustive(),
             Effect::LoadCommands { workspace } => f
                 .debug_struct("LoadCommands")
                 .field("workspace", workspace)

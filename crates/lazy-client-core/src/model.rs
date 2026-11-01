@@ -464,6 +464,8 @@ pub enum ActionKind {
     LoadCommands(WorkspaceId),
     /// Running a slash command in a conversation.
     RunCommand(ConversationId),
+    /// Setting an app's events (D38).
+    AppEvents(lazy_domain::AppId),
     /// Adding a custom emoji (one at a time).
     AddCustomEmoji,
     RenameCustomEmoji(EmojiId),

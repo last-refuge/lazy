@@ -35,6 +35,12 @@ use crate::form::{self, ButtonKind};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::Theme;
 
+/// The events an app can choose (D38), with what they are called here.
+const EVENT_TYPES: [(&str, &str); 2] = [
+    ("app_mention", "Messages that name it (@name)"),
+    ("message", "Every message in its channels"),
+];
+
 /// What the panel asks of the dialog around it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppsPanelEvent {
@@ -62,6 +68,9 @@ pub struct AppsPanel {
     command_url: Entity<TextInput>,
     command_description: Entity<TextInput>,
     command_usage: Entity<TextInput>,
+    /// The events address, and the kinds chosen, as being edited (D38).
+    events_url: Entity<TextInput>,
+    event_types: Vec<&'static str>,
     scopes: Vec<AppScope>,
     /// The signing secret is showing (it was asked for).
     secret_shown: bool,
@@ -78,6 +87,9 @@ pub struct AppsPanel {
     delete_focus: FocusHandle,
     add_command_focus: FocusHandle,
     secret_focus: FocusHandle,
+    events_save_focus: FocusHandle,
+    events_off_focus: FocusHandle,
+    event_type_focus: HashMap<&'static str, FocusHandle>,
     manage_focus: HashMap<AppId, FocusHandle>,
     remove_command_focus: HashMap<lazy_domain::AppCommandId, FocusHandle>,
     scope_focus: HashMap<AppScope, FocusHandle>,
@@ -106,7 +118,25 @@ impl AppsPanel {
             single_line_field("e.g. Deploy a service", "Description", 200, cx);
         let command_usage =
             single_line_field("e.g. [service] [environment]", "Usage hint", 100, cx);
+        let events_url = single_line_field(
+            "https://your-app.example/slack/events",
+            "Events address",
+            2048,
+            cx,
+        );
         let mut subscriptions = Vec::new();
+        subscriptions.push(cx.subscribe_in(
+            &events_url,
+            window,
+            |this, _input, event: &TextInputEvent, _window, cx| match event {
+                TextInputEvent::Submit => this.save_events(cx),
+                TextInputEvent::Tab { backwards } => cx.emit(AppsPanelEvent::Tab {
+                    backwards: *backwards,
+                }),
+                TextInputEvent::Changed => cx.notify(),
+                _ => {}
+            },
+        ));
         for input in [
             &command_name,
             &command_url,
@@ -159,6 +189,8 @@ impl AppsPanel {
             command_url,
             command_description,
             command_usage,
+            events_url,
+            event_types: vec!["app_mention"],
             scopes: AppScope::DEFAULT.to_vec(),
             secret_shown: false,
             secret_copied: false,
@@ -173,6 +205,9 @@ impl AppsPanel {
             delete_focus: cx.focus_handle().tab_stop(true),
             add_command_focus: cx.focus_handle().tab_stop(true),
             secret_focus: cx.focus_handle().tab_stop(true),
+            events_save_focus: cx.focus_handle().tab_stop(true),
+            events_off_focus: cx.focus_handle().tab_stop(true),
+            event_type_focus: HashMap::new(),
             manage_focus: HashMap::new(),
             remove_command_focus: HashMap::new(),
             scope_focus: HashMap::new(),
@@ -202,6 +237,7 @@ impl AppsPanel {
             &self.command_url,
             &self.command_description,
             &self.command_usage,
+            &self.events_url,
         ]
         .iter()
         .any(|input| input.read(cx).is_composing())
@@ -219,6 +255,7 @@ impl AppsPanel {
             kinds.push(ActionKind::DeleteApp(*app));
             kinds.push(ActionKind::AppCommand(*app));
             kinds.push(ActionKind::LoadAppSigningSecret(*app));
+            kinds.push(ActionKind::AppEvents(*app));
             for channel in self.channel_focus.keys() {
                 kinds.push(ActionKind::AppChannel(*app, *channel));
             }
@@ -315,6 +352,19 @@ impl AppsPanel {
                 | AppsView::ConfirmNewToken(a) | AppsView::ConfirmDelete(a) if a == app
         ) {
             self.secret_shown = false;
+            let events = self.app(app, cx).and_then(|a| a.events);
+            let url = events.as_ref().map(|e| e.url.clone()).unwrap_or_default();
+            self.event_types = match events {
+                Some(events) => EVENT_TYPES
+                    .iter()
+                    .map(|(key, _)| *key)
+                    .filter(|key| events.types.iter().any(|have| have == key))
+                    .collect(),
+                None => vec!["app_mention"],
+            };
+            self.events_url
+                .update(cx, |input, cx| input.set_text(&url, cx));
+            self.dispatch(Input::DismissAction(ActionKind::AppEvents(app)), cx);
         }
         self.copied = false;
         self.view = AppsView::Details(app);
@@ -374,6 +424,15 @@ impl AppsPanel {
         };
         self.waiting = Some((kind, false));
         self.dispatch(input, cx);
+    }
+
+    fn save_events(&mut self, cx: &mut Context<Self>) {
+        let AppsView::Details(app) = self.view else {
+            return;
+        };
+        let url = self.events_url.read(cx).text().trim().to_owned();
+        let types = self.event_types.iter().map(|t| (*t).to_owned()).collect();
+        self.dispatch(Input::SetAppEvents { app, url, types }, cx);
     }
 
     fn make(&mut self, cx: &mut Context<Self>) {
@@ -741,7 +800,13 @@ impl AppsPanel {
             .into_any_element()
     }
 
-    fn details(&mut self, id: AppId, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn details(
+        &mut self,
+        id: AppId,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let colors = theme.colors;
         let this = cx.entity().downgrade();
         let Some(app) = self.app(id, cx) else {
@@ -929,6 +994,7 @@ impl AppsPanel {
             body = body.child(self.error_line(theme, message));
         }
         body = body.child(self.commands_section(&app, theme, cx));
+        body = body.child(self.events_section(&app, theme, window, cx));
         let delete_to = this;
         body.child(div().flex().justify_end().child(form::button(
             theme,
@@ -1142,6 +1208,149 @@ impl AppsPanel {
         section.into_any_element()
     }
 
+    /// Events: where the app is told what happens in its channels, and which kinds.
+    fn events_section(
+        &mut self,
+        app: &App,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let this = cx.entity().downgrade();
+        let id = app.id;
+        let state = self.action(ActionKind::AppEvents(id), cx);
+        let working = state == ActionState::InFlight;
+        let error = match state {
+            ActionState::Failed(message) => Some(message),
+            _ => None,
+        };
+        let status = match &app.events {
+            Some(events) => format!(
+                "On: {} go to {}.",
+                events
+                    .types
+                    .iter()
+                    .map(|t| match t.as_str() {
+                        "app_mention" => "mentions",
+                        "message" => "all messages",
+                        other => other,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" and "),
+                events.url
+            ),
+            None => "Off. Give an address to tell the app what happens in its channels, as \
+                     Slack's Events API does (signed like its commands)."
+                .to_owned(),
+        };
+        let mut toggles = div().flex().flex_wrap().gap_1();
+        for (key, label) in EVENT_TYPES {
+            let focus = Self::handle_for(&mut self.event_type_focus, key, cx);
+            let on = self.event_types.contains(&key);
+            let toggle_to = this.clone();
+            toggles = toggles.child(form::button(
+                theme,
+                format!("apps-event-{key}"),
+                if on {
+                    format!("✓ {label}")
+                } else {
+                    label.to_owned()
+                },
+                if on {
+                    ButtonKind::Primary
+                } else {
+                    ButtonKind::Secondary
+                },
+                !working,
+                &focus,
+                move |_, cx| {
+                    toggle_to
+                        .update(cx, |panel, cx| {
+                            match panel.event_types.iter().position(|t| *t == key) {
+                                Some(at) => {
+                                    panel.event_types.remove(at);
+                                }
+                                None => panel.event_types.push(key),
+                            }
+                            cx.notify();
+                        })
+                        .ok();
+                },
+            ));
+        }
+        let save_to = this.clone();
+        let off_to = this;
+        let has_url = !self.events_url.read(cx).text().trim().is_empty();
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(self.section_title(theme, "Events"))
+            .child(self.note(theme, "apps-events-status", status))
+            .child(form::labeled_field(
+                theme,
+                "Events address",
+                &self.events_url,
+                Some(
+                    "It must answer Slack's url_verification challenge when you save. Messages by \
+                     bots are not sent."
+                        .into(),
+                ),
+                error.map(Into::into),
+                window,
+                cx,
+            ))
+            .child(toggles)
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(form::button(
+                        theme,
+                        "apps-events-save",
+                        if working {
+                            "Checking…"
+                        } else {
+                            "Save events"
+                        },
+                        ButtonKind::Secondary,
+                        !working && has_url && !self.event_types.is_empty(),
+                        &self.events_save_focus,
+                        move |_, cx| {
+                            save_to.update(cx, |panel, cx| panel.save_events(cx)).ok();
+                        },
+                    ))
+                    .when(app.events.is_some(), |row| {
+                        row.child(form::button(
+                            theme,
+                            "apps-events-off",
+                            "Turn off",
+                            ButtonKind::Secondary,
+                            !working,
+                            &self.events_off_focus,
+                            move |_, cx| {
+                                off_to
+                                    .update(cx, |panel, cx| {
+                                        panel
+                                            .events_url
+                                            .update(cx, |input, cx| input.set_text("", cx));
+                                        panel.dispatch(
+                                            Input::SetAppEvents {
+                                                app: id,
+                                                url: String::new(),
+                                                types: Vec::new(),
+                                            },
+                                            cx,
+                                        );
+                                    })
+                                    .ok();
+                            },
+                        ))
+                    }),
+            )
+            .into_any_element()
+    }
+
     fn adding_command(
         &mut self,
         id: AppId,
@@ -1346,7 +1555,7 @@ impl Render for AppsPanel {
             .child(match self.view {
                 AppsView::List => self.list(&theme, cx),
                 AppsView::Making => self.making(&theme, window, cx),
-                AppsView::Details(id) => self.details(id, &theme, cx),
+                AppsView::Details(id) => self.details(id, &theme, window, cx),
                 AppsView::ConfirmNewToken(id) => self.confirm(id, false, &theme, cx),
                 AppsView::ConfirmDelete(id) => self.confirm(id, true, &theme, cx),
                 AppsView::AddingCommand(id) => self.adding_command(id, &theme, window, cx),

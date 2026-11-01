@@ -61,13 +61,16 @@ pub struct Integrations {
 }
 
 /// The kinds of job this server knows how to run. Integrations add theirs here.
-pub fn job_handlers() -> crate::jobs::Registry {
+pub fn job_handlers(services: crate::app_events::Services) -> crate::jobs::Registry {
     crate::jobs::Registry::new()
         .on(crate::github::EVENT_JOB, crate::github::handle_event)
         .on(
             crate::connectors::EVENT_JOB,
             crate::connectors::handle_event,
         )
+        .on(crate::app_events::EVENT_JOB, move |ctx| {
+            crate::app_events::handle_event(services.clone(), ctx)
+        })
 }
 
 /// Connects to Postgres, optionally migrates and seeds, and serves until `shutdown` completes.
@@ -259,10 +262,14 @@ pub async fn serve_all(
     let token = CancellationToken::new();
     let (dispatcher, dispatcher_tasks) = Dispatcher::spawn(pool.clone(), token.child_token());
     let pruner = pruner::spawn(pool.clone(), options.retention, token.child_token());
+    let services = crate::app_events::Services {
+        keys: integrations.credential_keys.clone(),
+        http: crate::github::http_client(),
+    };
     let worker = integrations.jobs.map(|worker_options| {
         crate::jobs::spawn(
             pool.clone(),
-            job_handlers(),
+            job_handlers(services),
             worker_options,
             token.child_token(),
         )

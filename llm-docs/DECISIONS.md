@@ -726,3 +726,25 @@ Both create signed webhooks from their own settings, so both join the D34 framew
 
 **Not yet:** acting on either service (acknowledging or resolving from Lazy needs their APIs and message buttons, 4.4).
 
+## D38. Events for apps (Phase 4, task 4.6)
+
+Goal: an app is told what happens in its channels, as Slack's Events API tells a Slack app, so an assistant that answers when named, or an automation tool's "new message" trigger, can be built on Lazy. No protocol bump: `App.events` and one endpoint are added.
+
+**Subscribing** (`PUT /v1/apps/{id}/events {url, types}`, admins and owners; an empty `url` turns events off):
+- **Types:** `message` (every message a person posts in a channel the bot is in) and `app_mention` (a message that names it).
+- **The address check:** before the address is saved it must answer Slack's `url_verification` challenge, signed like commands (D36) with the app's signing secret (made if there is none). It may answer with the challenge as text or as `{"challenge": ...}`. The address rule is the same as commands': `https://`, or `http://` to this machine.
+
+**Naming an app.** Apps are not people and cannot be mentioned (D16): the composer does not offer them and nobody is notified. A message names an app when its text has `@` followed by the app's name (or the name without spaces), not inside a word. That only selects `app_mention` for that app.
+
+**Queuing.** `messages::send_message` queues one `app.event` job per subscribed app whose bot is in the channel, in the transaction that posts the message, so an event exists exactly when the message does. An app with both types gets `app_mention` when named, `message` otherwise.
+- Messages by bots make no events (any app, webhook, or connector), so two apps cannot answer each other forever.
+- The event id is derived from the app and the message, and is the job's dedupe key.
+
+**Delivering.**
+- **The body:** Slack's `event_callback`: `team_id`, `api_app_id`, `event_id`, `event_time`, and `event` with `type`, `channel`, `channel_type`, `user`, `text` (the message as plain text), `ts` and `event_ts` (the message id), `thread_ts` for a reply, plus Lazy's `channel_name`, `user_name`, `message_id`.
+- **Answering:** the app replies through the bot API (D35) with `channel` and `thread_ts` (`thread_ts` is accepted as a message id).
+- **Signing and retries:** each delivery is signed as commands are. A `2xx` within 3 seconds is delivered; anything else is retried (`X-Slack-Retry-Num`, `X-Slack-Retry-Reason`) up to 4 attempts by the job queue's backoff.
+- **Where the job handler's services come from:** job handlers now receive `app_events::Services` (the credential keys and the HTTPS client) from `app::job_handlers`, in the server and in the `worker` command.
+
+**Not yet:** events beyond new messages (edits, deletes, reactions, members joining), reading history through the bot API, apps in direct messages, and offering apps by name in the composer.
+

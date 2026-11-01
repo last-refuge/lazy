@@ -177,10 +177,12 @@ struct AppRow {
     created_by: Uuid,
     created_at: OffsetDateTime,
     last_used_at: Option<OffsetDateTime>,
+    event_url: Option<String>,
+    event_types: Vec<String>,
 }
 
 const APP_COLUMNS: &str = "id, workspace_id, name, bot_user_id, token_hint, scopes, created_by, \
-     created_at, last_used_at";
+     created_at, last_used_at, event_url, event_types";
 
 /// The channels `bot` is in that `viewer` can read (public ones, and private ones they are in).
 async fn channels_of(
@@ -225,6 +227,7 @@ async fn app_dto(conn: &mut PgConnection, row: AppRow, viewer: UserId) -> Result
         created_at: Timestamp::from(row.created_at),
         last_used_at: row.last_used_at.map(Timestamp::from),
         commands: crate::commands::commands_of(conn, row.id).await?,
+        events: crate::app_events::events_of(row.event_url, row.event_types),
     })
 }
 
