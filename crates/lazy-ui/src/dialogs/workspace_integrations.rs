@@ -772,7 +772,7 @@ impl IntegrationsDialog {
         theme: &Theme,
         key: &'static str,
         name: &str,
-        mark: (&'static str, u32),
+        mark: ui::Mark,
         state: TileState,
         focus: &FocusHandle,
         on_open: impl Fn(&mut Window, &mut gpui::App) + 'static,
@@ -790,7 +790,7 @@ impl IntegrationsDialog {
             .border_1()
             .border_color(colors.border)
             .bg(colors.surface)
-            .child(ui::service_mark(theme, mark.0, mark.1, 34.))
+            .child(ui::service_mark(theme, mark, 34.))
             .child(
                 div()
                     .flex_1()
@@ -1124,12 +1124,7 @@ impl IntegrationsDialog {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(ui::service_mark(
-                        theme,
-                        ui::marks::WEBHOOK.0,
-                        ui::marks::WEBHOOK.1,
-                        34.,
-                    ))
+                    .child(ui::service_mark(theme, ui::marks::WEBHOOK, 34.))
                     .child(
                         div()
                             .flex_1()

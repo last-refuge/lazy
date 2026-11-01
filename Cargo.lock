@@ -3491,6 +3491,7 @@ dependencies = [
  "lazy-domain",
  "lazy-protocol",
  "proptest",
+ "resvg",
  "time",
  "tracing",
  "unicode-segmentation",

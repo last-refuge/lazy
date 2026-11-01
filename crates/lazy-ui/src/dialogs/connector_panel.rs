@@ -527,7 +527,6 @@ impl ConnectorPanel {
 
     fn header(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let leave_to = cx.entity().downgrade();
-        let (glyph, color) = ui::marks::of(self.provider);
         let status = self.status(cx);
         ui::header(
             theme,
@@ -539,7 +538,7 @@ impl ConnectorPanel {
                     .update(cx, |_, cx| cx.emit(ConnectorPanelEvent::Leave))
                     .ok();
             },
-            Some(ui::service_mark(theme, glyph, color, 36.)),
+            Some(ui::service_mark(theme, ui::marks::of(self.provider), 36.)),
             self.provider.label().to_owned(),
             Some(self.state_chip(status.as_ref(), theme)),
         )

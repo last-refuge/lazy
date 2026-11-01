@@ -40,6 +40,7 @@ pub mod search_text;
 pub mod search_view;
 pub mod selection;
 pub mod server_row;
+pub mod service_logos;
 pub mod shell;
 pub mod sidebar;
 pub mod sign_in;
