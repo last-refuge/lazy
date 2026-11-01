@@ -4,7 +4,7 @@ The desktop client ships as installers for Linux, macOS, and Windows, built by a
 by hand (like CI, it never runs on a push): **Actions, release, Run workflow**, or
 
 ```sh
-gh workflow run release -f version=0.8.1 -f publish=true
+gh workflow run release -f version=0.8.2 -f publish=true
 ```
 
 `version` is stamped into the apps (Help, Diagnostics shows it) and into the file names;
@@ -43,6 +43,10 @@ startup on Coolify: its runtime image had no CA certificates, so building the HT
 GitHub failed and the fallback panicked. The image now carries `ca-certificates`, and a server
 that cannot make HTTPS requests runs on with GitHub unavailable. The client is unchanged from
 0.8.0; the protocol is still 14.
+
+Release 0.8.2 (2026-11-01) draws link underlines at 45% of the link color, so a line of links
+reads as text (the GitHub feed's look was polished on the server at the same time). The protocol
+is still 14.
 
 ## What you get
 
