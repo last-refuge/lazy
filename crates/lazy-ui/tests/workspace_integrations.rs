@@ -588,3 +588,256 @@ fn losing_the_admin_role_closes_the_dialog(cx: &mut TestAppContext) {
     world.reach(cx, WorkspaceRole::Member);
     assert!(world.dialog(cx).is_none());
 }
+
+// ----- GitHub (D32) -----
+
+fn github_status(
+    world: &World,
+    connected: bool,
+    installed: bool,
+) -> lazy_protocol::GithubStatusResponse {
+    lazy_protocol::GithubStatusResponse {
+        available: true,
+        connection: connected.then(|| lazy_protocol::GithubConnection {
+            app_slug: "lazy-test".into(),
+            html_url: "https://github.com/apps/lazy-test".into(),
+            owner: "last-refuge".into(),
+            bot_user_id: UserId::generate(),
+            created_by: world.me.id,
+            created_at: Timestamp::now(),
+        }),
+        installations: if installed {
+            vec![lazy_protocol::GithubInstallation {
+                account: "last-refuge".into(),
+                all_repositories: true,
+                suspended: false,
+            }]
+        } else {
+            Vec::new()
+        },
+        subscriptions: Vec::new(),
+        deliveries: if installed {
+            vec![lazy_protocol::GithubDelivery {
+                id: 41,
+                event: "issues".into(),
+                action: Some("opened".into()),
+                repository: Some("last-refuge/lazy".into()),
+                state: lazy_protocol::GithubDeliveryState::Failed,
+                attempts: 6,
+                last_error: Some("the database failed".into()),
+                received_at: Timestamp::now(),
+            }]
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+impl World {
+    fn github_arrives(
+        &self,
+        cx: &mut VisualTestContext,
+        status: lazy_protocol::GithubStatusResponse,
+    ) {
+        self.dispatch(
+            cx,
+            Input::ActionResult {
+                kind: ActionKind::LoadGithub(self.workspace),
+                result: Ok(ActionOutcome::Github(Box::new(status))),
+            },
+        );
+        draw(cx);
+    }
+
+    fn open_github(&self, cx: &mut VisualTestContext, status: lazy_protocol::GithubStatusResponse) {
+        self.open(cx);
+        self.list_arrives(cx, vec![]);
+        self.github_arrives(cx, status.clone());
+        self.click(cx, "github-open-panel");
+        assert_eq!(self.view(cx), IntegrationsView::Github);
+        self.github_arrives(cx, status);
+    }
+}
+
+#[gpui::test]
+fn the_github_card_says_where_things_stand_and_opens_the_github_view(cx: &mut TestAppContext) {
+    let (world, cx) = start(cx);
+    world.reach(cx, WorkspaceRole::Admin);
+    world.open(cx);
+    assert!(
+        world
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::LoadGithub { .. })),
+        "opening Integrations reads GitHub's status"
+    );
+    world.github_arrives(cx, github_status(&world, false, false));
+    assert!(world.on_screen(cx, "github-card-status"));
+    world.click(cx, "github-open-panel");
+    assert_eq!(world.view(cx), IntegrationsView::Github);
+    assert!(world.on_screen(cx, "github-panel"));
+    // Escape from the GitHub overview returns to the list, not out of the dialog.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(world.view(cx), IntegrationsView::List);
+    assert!(world.dialog(cx).is_some());
+}
+
+#[gpui::test]
+fn connecting_opens_the_browser_with_the_setup_address_and_forgets_it(cx: &mut TestAppContext) {
+    let (world, cx) = start(cx);
+    world.reach(cx, WorkspaceRole::Admin);
+    world.open_github(cx, github_status(&world, false, false));
+    world.take_effects();
+    let panel = world
+        .dialog(cx)
+        .unwrap()
+        .read_with(cx, |d, _| d.github_panel())
+        .unwrap();
+    cx.update(|window, app| {
+        let handle = panel.read(app).organization_input().focus_handle(app);
+        window.focus(&handle, app);
+    });
+    cx.simulate_input("last-refuge");
+    cx.simulate_keystrokes("enter");
+    let asked: Vec<String> = world
+        .take_effects()
+        .into_iter()
+        .filter_map(|e| match e {
+            Effect::StartGithubSetup { request, .. } => Some(request.organization),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(asked, vec!["last-refuge".to_owned()]);
+    let url = "https://chat.example/github/setup/0011-secret";
+    world.dispatch(
+        cx,
+        Input::ActionResult {
+            kind: ActionKind::StartGithubSetup(world.workspace),
+            result: Ok(ActionOutcome::GithubSetup(SecretUrl::new(url.to_owned()))),
+        },
+    );
+    draw(cx);
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some(url),
+        "the browser takes over"
+    );
+    assert!(
+        world
+            .model
+            .read_with(cx, |m, _| m.core().github_setup_url().is_none()),
+        "and the address is forgotten"
+    );
+    assert!(
+        world.on_screen(cx, "github-continue"),
+        "it says what to do in the browser"
+    );
+}
+
+#[gpui::test]
+fn installed_github_follows_a_repository_and_retries_a_failed_delivery(cx: &mut TestAppContext) {
+    let (world, cx) = start(cx);
+    world.reach(cx, WorkspaceRole::Admin);
+    world.open_github(cx, github_status(&world, true, true));
+    assert!(world.on_screen(cx, "github-connected"));
+    assert!(world.on_screen(cx, "github-no-subscriptions"));
+    world.take_effects();
+
+    // Retry on the failed delivery.
+    world.click(cx, "github-retry-0");
+    assert!(
+        world
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::RetryGithubDelivery { delivery } if *delivery == 41))
+    );
+
+    // Add a repository: the open channel (#general) is chosen; type and Follow.
+    world.click(cx, "github-add");
+    let panel = world
+        .dialog(cx)
+        .unwrap()
+        .read_with(cx, |d, _| d.github_panel())
+        .unwrap();
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.view()),
+        lazy_ui::dialogs::GithubView::Adding
+    );
+    cx.simulate_input("last-refuge/lazy");
+    // Turn Comments on.
+    world.click(cx, "github-event-comments");
+    world.click(cx, "github-follow");
+    let follows: Vec<_> = world
+        .take_effects()
+        .into_iter()
+        .filter_map(|e| match e {
+            Effect::GithubSubscribe {
+                conversation,
+                request,
+            } => Some((conversation, request.repository, request.events)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(follows.len(), 1);
+    assert_eq!(follows[0].0, world.general);
+    assert_eq!(follows[0].1, "last-refuge/lazy");
+    assert!(
+        follows[0]
+            .2
+            .contains(&lazy_domain::github::GithubEvent::Comments)
+    );
+    assert!(
+        follows[0]
+            .2
+            .contains(&lazy_domain::github::GithubEvent::PullRequest)
+    );
+    world.dispatch(
+        cx,
+        Input::ActionResult {
+            kind: ActionKind::GithubSubscribe(world.general),
+            result: Ok(ActionOutcome::Done),
+        },
+    );
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.view()),
+        lazy_ui::dialogs::GithubView::Overview,
+        "back to the overview, which reloads"
+    );
+    assert!(
+        world
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::LoadGithub { .. }))
+    );
+}
+
+#[gpui::test]
+fn disconnecting_is_confirmed_first(cx: &mut TestAppContext) {
+    let (world, cx) = start(cx);
+    world.reach(cx, WorkspaceRole::Admin);
+    world.open_github(cx, github_status(&world, true, false));
+    assert!(
+        world.on_screen(cx, "github-install"),
+        "not installed: Install on GitHub"
+    );
+    world.take_effects();
+    world.click(cx, "github-disconnect");
+    assert!(world.on_screen(cx, "github-disconnect-question"));
+    assert!(
+        world
+            .take_effects()
+            .iter()
+            .all(|e| !matches!(e, Effect::DisconnectGithub { .. })),
+        "nothing happens before yes"
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(!world.on_screen(cx, "github-disconnect-question"));
+    world.click(cx, "github-disconnect");
+    world.click(cx, "github-disconnect-confirm");
+    assert!(
+        world
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::DisconnectGithub { .. }))
+    );
+}

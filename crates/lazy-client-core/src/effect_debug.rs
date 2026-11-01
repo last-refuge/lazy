@@ -203,6 +203,30 @@ impl fmt::Debug for Effect {
                 .debug_struct("NewWebhookAddress")
                 .field("webhook", webhook)
                 .finish(),
+            Effect::LoadGithub { workspace } => f
+                .debug_struct("LoadGithub")
+                .field("workspace", workspace)
+                .finish(),
+            Effect::StartGithubSetup { workspace, .. } => f
+                .debug_struct("StartGithubSetup")
+                .field("workspace", workspace)
+                .finish_non_exhaustive(),
+            Effect::GithubSubscribe { conversation, .. } => f
+                .debug_struct("GithubSubscribe")
+                .field("conversation", conversation)
+                .finish_non_exhaustive(),
+            Effect::GithubUnsubscribe { subscription } => f
+                .debug_struct("GithubUnsubscribe")
+                .field("subscription", subscription)
+                .finish(),
+            Effect::RetryGithubDelivery { delivery } => f
+                .debug_struct("RetryGithubDelivery")
+                .field("delivery", delivery)
+                .finish(),
+            Effect::DisconnectGithub { workspace } => f
+                .debug_struct("DisconnectGithub")
+                .field("workspace", workspace)
+                .finish(),
             Effect::PersistView(v0) => f.debug_tuple("PersistView").field(v0).finish(),
             Effect::PersistThreadDrafts(v0) => f
                 .debug_tuple("PersistThreadDrafts")

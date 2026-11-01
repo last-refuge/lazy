@@ -317,6 +317,10 @@ const DIALOG_FILES: &[(&str, &str)] = &[
     ("delete_message", "ShellDialog::DeleteMessage"),
     ("details", "ShellDialog::Details"),
     ("diagnostics", "ShellDialog::Diagnostics"),
+    (
+        "github_panel",
+        "a view of ShellDialog::Integrations (GitHub; not a dialog of its own)",
+    ),
     ("groups", "ShellDialog::Groups"),
     (
         "integrations",

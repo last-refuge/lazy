@@ -10,6 +10,7 @@ mod custom_emoji;
 mod delete_message;
 mod details;
 mod diagnostics;
+mod github_panel;
 mod groups;
 mod integrations;
 mod invitations;
@@ -31,6 +32,7 @@ pub use details::{DetailsDialog, DetailsRequest};
 pub use diagnostics::{
     DesktopInfo, DiagnosticsDialog, report_text, sanitize_server_url, set_desktop_info,
 };
+pub use github_panel::{GithubPanel, GithubPanelEvent, GithubView};
 pub use groups::GroupsDialog;
 pub use integrations::{IntegrationsEvent, IntegrationsSection};
 pub use invitations::InvitationsDialog;

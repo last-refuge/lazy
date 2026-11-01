@@ -344,10 +344,10 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [ ] No arbitrary remote HTML
   - [ ] Interactive actions with authorization rechecked on each use
 - [ ] 4.5 First provider integration (GitHub)
-  - [ ] Installation flow and scopes (server: manifest flow, installations from signed events, D32; the app's screens and a real GitHub run are still to do)
+  - [ ] Installation flow and scopes (manifest flow, installations from signed events, and the app's screens, D32; a run against the real GitHub is still to do)
   - [X] Provider webhook signature verification (D32)
   - [ ] Event-to-rich-message mapping (Markdown messages for seven kinds of activity, D32; declarative rich blocks are 4.4)
-  - [ ] Channel subscriptions (server API, D32; the app's screens are still to do)
+  - [ ] Channel subscriptions (server and app, D32; not yet used against the real GitHub)
   - [X] Deduplication by provider delivery ID (D32)
   - [ ] Provider-specific idempotency or reconciliation for any provider action (posting is idempotent per subscription and delivery, D32; Lazy takes no action on GitHub yet)
   - [X] Credential revocation (disconnect revokes all three secrets, D32)
@@ -360,8 +360,8 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [ ] Authorization recheck and size, time, and redirect bounds
   - [ ] Cached previews that respect conversation access
 - [ ] 4.8 Administration UI
-  - [ ] Install and configure integrations (incoming webhooks: workspace Integrations dialog with add, list, and health, D30; provider installs still to do)
-  - [ ] Manage channel subscriptions
+  - [ ] Install and configure integrations (incoming webhooks, D30; GitHub connect, install and subscriptions, D32; not yet run against the real GitHub)
+  - [ ] Manage channel subscriptions (GitHub, D32; not yet run against the real GitHub)
   - [ ] View deliveries and failures, and retry (incoming webhooks: delivery log and recent failures, D30; there is nothing to retry for them because Lazy keeps no payload; retry comes with the job system)
   - [ ] Rotate and revoke credentials (incoming webhooks: new address and delete, D30; provider credentials still to do)
 - [ ] 4.9 Tests

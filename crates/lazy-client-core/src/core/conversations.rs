@@ -389,6 +389,12 @@ impl ClientCore {
                 | ActionKind::LoadWorkspaceWebhooks(_)
                 | ActionKind::LoadWebhookDeliveries(_)
                 | ActionKind::NewWebhookAddress(_) => super::webhooks::webhook_error(kind, error),
+                ActionKind::LoadGithub(_)
+                | ActionKind::StartGithubSetup(_)
+                | ActionKind::GithubSubscribe(_)
+                | ActionKind::GithubUnsubscribe(_)
+                | ActionKind::RetryGithubDelivery(_)
+                | ActionKind::DisconnectGithub(_) => super::github::github_error(kind, error),
                 ActionKind::AddCustomEmoji
                 | ActionKind::RenameCustomEmoji(_)
                 | ActionKind::DeleteCustomEmoji(_) => super::emoji::emoji_error(error),
@@ -1011,6 +1017,15 @@ impl ClientCore {
                 | ActionKind::NewWebhookAddress(_),
                 outcome,
             ) => self.webhook_action_result(kind, outcome, out),
+            (
+                ActionKind::LoadGithub(_)
+                | ActionKind::StartGithubSetup(_)
+                | ActionKind::GithubSubscribe(_)
+                | ActionKind::GithubUnsubscribe(_)
+                | ActionKind::RetryGithubDelivery(_)
+                | ActionKind::DisconnectGithub(_),
+                outcome,
+            ) => self.github_action_result(kind, outcome, out),
             (ActionKind::RenameCustomEmoji(_) | ActionKind::DeleteCustomEmoji(_), outcome) => {
                 self.emoji_action_result(kind, outcome, out)
             }

@@ -1816,6 +1816,134 @@ fn with_integrations(
     draw(cx, win);
 }
 
+/// A GitHub status for the Integrations dialog: `stage` 0 is unavailable, 1 not connected,
+/// 2 connected but not installed, 3 installed with subscriptions and deliveries.
+fn github_status(cast: &Cast, stage: u8) -> lazy_protocol::GithubStatusResponse {
+    use lazy_domain::github::GithubEvent as E;
+    use lazy_protocol::GithubDeliveryState as S;
+    let ago = |minutes: i64| {
+        Timestamp::from(time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes))
+    };
+    let connection = (stage >= 2).then(|| lazy_protocol::GithubConnection {
+        app_slug: "lazy-chat-lazyto-day".to_owned(),
+        html_url: "https://github.com/apps/lazy-chat-lazyto-day".to_owned(),
+        owner: "last-refuge".to_owned(),
+        bot_user_id: cast.deploy.id,
+        created_by: cast.me.id,
+        created_at: ago(60 * 24),
+    });
+    let installed = stage >= 3;
+    let delivery = |id: i64,
+                    event: &str,
+                    action: Option<&str>,
+                    state,
+                    attempts,
+                    error: Option<&str>,
+                    minutes| {
+        lazy_protocol::GithubDelivery {
+            id,
+            event: event.to_owned(),
+            action: action.map(str::to_owned),
+            repository: Some("last-refuge/lazy".to_owned()),
+            state,
+            attempts,
+            last_error: error.map(str::to_owned),
+            received_at: ago(minutes),
+        }
+    };
+    lazy_protocol::GithubStatusResponse {
+        available: stage >= 1,
+        connection,
+        installations: if installed {
+            vec![lazy_protocol::GithubInstallation {
+                account: "last-refuge".to_owned(),
+                all_repositories: true,
+                suspended: false,
+            }]
+        } else {
+            Vec::new()
+        },
+        subscriptions: if installed {
+            vec![
+                lazy_protocol::GithubSubscription {
+                    id: lazy_domain::GithubSubscriptionId::generate(),
+                    conversation_id: cast.engineering,
+                    channel_name: ChannelName::parse("engineering").unwrap(),
+                    repository: "last-refuge/lazy".to_owned(),
+                    events: E::DEFAULT.to_vec(),
+                    created_by: cast.me.id,
+                    created_at: ago(60 * 20),
+                },
+                lazy_protocol::GithubSubscription {
+                    id: lazy_domain::GithubSubscriptionId::generate(),
+                    conversation_id: cast.general,
+                    channel_name: ChannelName::parse("general").unwrap(),
+                    repository: "last-refuge/lazy".to_owned(),
+                    events: vec![E::Releases],
+                    created_by: cast.me.id,
+                    created_at: ago(60 * 19),
+                },
+            ]
+        } else {
+            Vec::new()
+        },
+        deliveries: if installed {
+            vec![
+                delivery(9, "pull_request", Some("opened"), S::Posted, 1, None, 3),
+                delivery(
+                    8,
+                    "push",
+                    None,
+                    S::Queued,
+                    2,
+                    Some("the database failed (pool timed out)"),
+                    9,
+                ),
+                delivery(
+                    7,
+                    "issues",
+                    Some("closed"),
+                    S::Failed,
+                    6,
+                    Some("the database failed (pool timed out)"),
+                    52,
+                ),
+                delivery(6, "release", Some("published"), S::Posted, 1, None, 60 * 5),
+            ]
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+/// Opens Integrations with GitHub at `stage`, and (if `panel`) its GitHub view.
+fn github_scene(
+    cx: &mut HeadlessAppContext,
+    model: &Entity<AppModel>,
+    cast: &Cast,
+    win: &WindowHandle<RootView>,
+    stage: u8,
+    panel: bool,
+) {
+    integrations_scene(cx, model, cast, win, Some(workspace_webhooks(cast)));
+    let answer = |cx: &mut HeadlessAppContext| {
+        dispatch(
+            cx,
+            model,
+            Input::ActionResult {
+                kind: ActionKind::LoadGithub(cast.workspace),
+                result: Ok(ActionOutcome::Github(Box::new(github_status(cast, stage)))),
+            },
+        );
+    };
+    answer(cx);
+    if panel {
+        with_integrations(cx, win, |dialog, window, cx| dialog.open_github(window, cx));
+        answer(cx);
+    }
+    draw(cx, win);
+}
+
 /// Opens the invitations dialog and answers its request with `result`.
 fn invitations_scene(
     cx: &mut HeadlessAppContext,
@@ -8451,6 +8579,79 @@ fn main() {
             build: &|model, cast, cx, rec, win| {
                 reach_chat(cx, model, cast, rec, true);
                 integrations_scene(cx, model, cast, win, Some(Vec::new()));
+            },
+        },
+        Scene {
+            name: "4b-01-integrations-github-card-light",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                github_scene(cx, model, cast, win, 3, false);
+            },
+        },
+        Scene {
+            name: "4b-02-github-connect-dark",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                github_scene(cx, model, cast, win, 1, true);
+            },
+        },
+        Scene {
+            name: "4b-03-github-not-installed-light",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                github_scene(cx, model, cast, win, 2, true);
+            },
+        },
+        Scene {
+            name: "4b-04-github-installed-light",
+            width: 1100.0,
+            height: 1000.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                github_scene(cx, model, cast, win, 3, true);
+            },
+        },
+        Scene {
+            name: "4b-05-github-adding-dark",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                github_scene(cx, model, cast, win, 3, true);
+                win.update(cx, |root, window, app| {
+                    let shell = root.shell().expect("the shell").clone();
+                    let dialog = shell.read(app).integrations_dialog().expect("open");
+                    let panel = dialog.read(app).github_panel().expect("the GitHub view");
+                    panel.update(app, |panel, cx| {
+                        panel.start_adding(window, cx);
+                        panel.repository_input().update(cx, |input, cx| {
+                            input.set_text("last-refuge/lazy-website", cx)
+                        });
+                    });
+                })
+                .expect("the window");
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4b-06-github-unavailable-narrow-light",
+            width: 560.0,
+            height: 760.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                github_scene(cx, model, cast, win, 0, true);
             },
         },
         Scene {

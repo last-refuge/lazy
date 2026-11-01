@@ -110,6 +110,12 @@ pub enum Change {
     WorkspaceWebhooksChanged {
         workspace: WorkspaceId,
     },
+    /// `ClientCore::github` of this workspace changed.
+    GithubChanged {
+        workspace: WorkspaceId,
+    },
+    /// `ClientCore::github_setup_url` was set or cleared.
+    GithubSetupChanged,
     /// `ClientCore::webhook_deliveries` of this webhook changed.
     WebhookDeliveriesChanged {
         webhook: WebhookId,

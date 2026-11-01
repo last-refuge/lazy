@@ -33,6 +33,7 @@ mod conversations;
 mod diagnostics;
 mod discovery;
 mod emoji;
+mod github;
 mod groups;
 mod inbox;
 mod mentions;
@@ -243,6 +244,10 @@ pub struct ClientCore {
     webhook_lists: HashMap<ConversationId, Vec<lazy_protocol::Webhook>>,
     /// The webhooks of each workspace, with how each is doing, as last loaded.
     workspace_webhooks: HashMap<WorkspaceId, Vec<lazy_protocol::WorkspaceWebhook>>,
+    /// The GitHub status of each workspace, as last loaded (D32).
+    github: HashMap<WorkspaceId, lazy_protocol::GithubStatusResponse>,
+    /// The one-time address that continues connecting GitHub. Never cached or saved.
+    github_setup_url: Option<crate::model::SecretUrl>,
     /// The delivery log of each webhook looked at, as last loaded.
     webhook_deliveries: HashMap<WebhookId, Vec<lazy_protocol::WebhookDelivery>>,
     /// The webhook just created, with its one-time address. Never cached or saved.
@@ -385,6 +390,8 @@ impl ClientCore {
             webhook_lists: HashMap::new(),
             workspace_webhooks: HashMap::new(),
             webhook_deliveries: HashMap::new(),
+            github: HashMap::new(),
+            github_setup_url: None,
             created_webhook: None,
             draft_selections: HashMap::new(),
             thread_selections: HashMap::new(),
@@ -651,6 +658,23 @@ impl ClientCore {
                 self.load_webhook_deliveries(webhook, &mut out)
             }
             Input::NewWebhookAddress(webhook) => self.new_webhook_address(webhook, &mut out),
+            Input::LoadGithub(workspace) => self.load_github(workspace, &mut out),
+            Input::StartGithubSetup {
+                workspace,
+                organization,
+            } => self.start_github_setup(workspace, &organization, &mut out),
+            Input::DismissGithubSetup => self.dismiss_github_setup(&mut out),
+            Input::GithubSubscribe {
+                conversation,
+                repository,
+                events,
+            } => self.github_subscribe(conversation, &repository, events, &mut out),
+            Input::GithubUnsubscribe(id) => self.github_unsubscribe(id, &mut out),
+            Input::RetryGithubDelivery {
+                workspace,
+                delivery,
+            } => self.retry_github_delivery(workspace, delivery, &mut out),
+            Input::DisconnectGithub(workspace) => self.disconnect_github(workspace, &mut out),
             Input::DismissCreatedWebhook => self.dismiss_created_webhook(&mut out),
             Input::SetDraftSelection {
                 conversation,

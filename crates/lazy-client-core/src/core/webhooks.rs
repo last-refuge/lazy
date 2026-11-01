@@ -259,6 +259,8 @@ impl ClientCore {
 
     /// Forgets everything held about webhooks (the session ended).
     pub(super) fn clear_webhooks(&mut self) {
+        self.github.clear();
+        self.github_setup_url = None;
         self.webhook_lists.clear();
         self.workspace_webhooks.clear();
         self.webhook_deliveries.clear();

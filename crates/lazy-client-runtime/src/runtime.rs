@@ -1286,6 +1286,92 @@ impl Inner {
                     inner.emit(Input::ActionResult { kind, result }).await;
                 });
             }
+            Effect::LoadGithub { workspace } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::github(workspace);
+                    let result = inner
+                        .retry_read(|| inner.api.get::<lazy_protocol::GithubStatusResponse>(&path))
+                        .await
+                        .map(|status| ActionOutcome::Github(Box::new(status)));
+                    let kind = ActionKind::LoadGithub(workspace);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::StartGithubSetup { workspace, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: each answer is a different one-time address.
+                    let result = inner
+                        .api
+                        .post::<lazy_protocol::GithubSetupResponse, _>(
+                            &paths::github_setup(workspace),
+                            &request,
+                        )
+                        .await
+                        .map(|setup| ActionOutcome::GithubSetup(SecretUrl::new(setup.url)));
+                    let kind = ActionKind::StartGithubSetup(workspace);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::GithubSubscribe {
+                conversation,
+                request,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // The same repository again replaces the events, so a repeat is harmless.
+                    let path = paths::github_subscriptions(conversation);
+                    let result = inner
+                        .retry_read(|| {
+                            inner
+                                .api
+                                .post::<lazy_protocol::GithubSubscriptionResponse, _>(
+                                    &path, &request,
+                                )
+                        })
+                        .await
+                        .map(|_| ActionOutcome::Done);
+                    let kind = ActionKind::GithubSubscribe(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::GithubUnsubscribe { subscription } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::github_subscription(subscription);
+                    let result = inner
+                        .retry_read(|| inner.api.delete_unit(&path))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::GithubUnsubscribe(subscription);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::RetryGithubDelivery { delivery } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let result = inner
+                        .api
+                        .post_unit(&paths::github_delivery_retry(delivery))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::RetryGithubDelivery(delivery);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::DisconnectGithub { workspace } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::github(workspace);
+                    let result = inner
+                        .retry_read(|| inner.api.delete_unit(&path))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::DisconnectGithub(workspace);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
             Effect::PersistView(view) => {
                 if let Some(persistence) = self.persistence() {
                     persistence.queue_view(view);
