@@ -421,3 +421,8 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
     - disconnecting (secrets erased, bot gone, deliveries refused) and connecting again.
   - The deactivated-versus-stranger boundary test now includes the GitHub status, setup and subscribe endpoints. `cargo fmt --all --check` passes; clippy shows only the warning already in `lazy-client-runtime/tests/updates.rs`.
 - *Not checked by anyone:* any of it against the real GitHub (the manifest page and its fields, the app's name rules, installing, real payloads and signatures), and the app's screens, which don't exist yet (slice 2b).
+- *Measured (slice 2b, the app's screens):* the full suite passed 2,747 tests with 0 failures.
+  - New: 5 client-core tests (`tests/github.rs`), covering who may manage, the status, a setup address kept out of debug strings, subscriptions checked before asking, and reloads after changes.
+  - New: 4 UI tests in `lazy-ui/tests/workspace_integrations.rs`, covering the card and view, Escape back to the list, Connect opening the browser at the setup address and forgetting it, Follow with chosen activity, Retry, and Disconnect behind a confirmation.
+  - The dialog audit covers the new panel's file.
+- *Observed in offscreen renders* (`.dev/screens/4b-01` to `4b-06`): the card, connect, not installed, installed (subscriptions and deliveries), adding, and unavailable at 560 px. The ✓ on selected activity chips draws as √ in DM Sans; selection also shows by fill.

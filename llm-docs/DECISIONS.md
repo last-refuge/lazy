@@ -598,3 +598,15 @@ Quotes are at most 280 characters over 3 lines. New subscriptions follow pull re
 - **Disconnect.** `DELETE /v1/workspaces/{id}/github` revokes the three credentials, marks the app disconnected, deletes the subscriptions, and has the bot leave each channel. The app stays on GitHub until an owner deletes it there (GitHub has no API to delete one). Connecting again replaces the row.
 
 **Not yet:** the app's screens (2b); repository pickers (the admin types `owner/name`, as with Slack's `/github subscribe`); GitHub API calls with the stored private key (listing repositories, acting on GitHub); links that unfurl.
+
+**Slice 2b: the app's screens.**
+- **The card.** Integrations opens with a GitHub card (its state in one line, failed deliveries in danger color), then the incoming webhooks under their own heading.
+- **The GitHub view.** Its own panel inside the dialog (`dialogs/github_panel.rs`). It shows the state and the next step:
+  - unavailable without a credentials key;
+  - not connected: the organization and **Connect GitHub**;
+  - connected but not installed: **Install on GitHub** and Refresh;
+  - installed: channels following repositories with Remove; **Add a repository**; recent deliveries with Retry on failed or unknown ones; **Disconnect…** behind a confirmation.
+- **The setup address** is opened in the browser as soon as it arrives and forgotten. It's never shown, cached or logged (`SecretUrl`). The panel then says what to do in the browser.
+- **Adding** chooses the channel (the open one first), takes `owner/name` or a GitHub address, and toggles the kinds of activity (the defaults are pre-chosen).
+- **Keyboard.** Escape steps back one view; from the GitHub overview it returns to the list.
+- **Reloading.** Each change reloads the status, because the server decides how it looks.

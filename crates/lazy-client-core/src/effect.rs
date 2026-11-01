@@ -209,6 +209,35 @@ pub enum Effect {
     NewWebhookAddress {
         webhook: WebhookId,
     },
+    /// Read the workspace's GitHub status. Answered by `ActionResult { kind: LoadGithub }` with
+    /// `ActionOutcome::Github`. Idempotent; the runtime may retry it.
+    LoadGithub {
+        workspace: WorkspaceId,
+    },
+    /// Start connecting GitHub. Answered with `ActionOutcome::GithubSetup`. Never repeated by
+    /// the runtime (each answer is a new one-time address); asking again is the person's choice.
+    StartGithubSetup {
+        workspace: WorkspaceId,
+        request: lazy_protocol::StartGithubSetupRequest,
+    },
+    /// Subscribe a channel. Answered with `ActionOutcome::Done`. Idempotent (the same
+    /// repository replaces the events); the runtime may retry it.
+    GithubSubscribe {
+        conversation: ConversationId,
+        request: lazy_protocol::CreateGithubSubscriptionRequest,
+    },
+    /// Remove a subscription. Idempotent; the runtime may retry it.
+    GithubUnsubscribe {
+        subscription: lazy_domain::GithubSubscriptionId,
+    },
+    /// Run a delivery again. One attempt (a repeat is refused as `conflict` once it runs).
+    RetryGithubDelivery {
+        delivery: i64,
+    },
+    /// Disconnect GitHub. Idempotent; the runtime may retry it.
+    DisconnectGithub {
+        workspace: WorkspaceId,
+    },
     /// Save what the person was looking at, replacing the previous save. The runtime may
     /// debounce.
     PersistView(ViewState),

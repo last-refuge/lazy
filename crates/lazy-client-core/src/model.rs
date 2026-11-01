@@ -421,6 +421,16 @@ pub enum ActionKind {
     LoadWebhookDeliveries(WebhookId),
     /// Giving a webhook a new address (the old one stops working).
     NewWebhookAddress(WebhookId),
+    /// Loading a workspace's GitHub connection, subscriptions and deliveries (D32).
+    LoadGithub(WorkspaceId),
+    /// Starting to connect GitHub.
+    StartGithubSetup(WorkspaceId),
+    /// Subscribing a channel to a repository.
+    GithubSubscribe(ConversationId),
+    GithubUnsubscribe(lazy_domain::GithubSubscriptionId),
+    /// Running a failed GitHub delivery again.
+    RetryGithubDelivery(i64),
+    DisconnectGithub(WorkspaceId),
     /// Adding a custom emoji (one at a time).
     AddCustomEmoji,
     RenameCustomEmoji(EmojiId),
@@ -593,6 +603,10 @@ pub enum ActionOutcome {
     WorkspaceWebhooks(Vec<lazy_protocol::WorkspaceWebhook>),
     /// A webhook's delivery log, newest first.
     WebhookDeliveries(Vec<lazy_protocol::WebhookDelivery>),
+    /// A workspace's GitHub connection, subscriptions and deliveries.
+    Github(Box<lazy_protocol::GithubStatusResponse>),
+    /// The one-time address that continues connecting GitHub in a browser.
+    GithubSetup(SecretUrl),
     /// A custom emoji after it was renamed.
     CustomEmoji(CustomEmoji),
     /// The workspace after its name or settings were changed.

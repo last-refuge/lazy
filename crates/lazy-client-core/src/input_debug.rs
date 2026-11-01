@@ -203,6 +203,31 @@ impl fmt::Debug for Input {
                 f.debug_tuple("LoadWebhookDeliveries").field(v0).finish()
             }
             Input::NewWebhookAddress(v0) => f.debug_tuple("NewWebhookAddress").field(v0).finish(),
+            Input::LoadGithub(v0) => f.debug_tuple("LoadGithub").field(v0).finish(),
+            Input::StartGithubSetup { workspace, .. } => f
+                .debug_struct("StartGithubSetup")
+                .field("workspace", workspace)
+                .finish_non_exhaustive(),
+            Input::DismissGithubSetup => f.write_str("DismissGithubSetup"),
+            Input::GithubSubscribe {
+                conversation,
+                events,
+                ..
+            } => f
+                .debug_struct("GithubSubscribe")
+                .field("conversation", conversation)
+                .field("events", events)
+                .finish_non_exhaustive(),
+            Input::GithubUnsubscribe(v0) => f.debug_tuple("GithubUnsubscribe").field(v0).finish(),
+            Input::RetryGithubDelivery {
+                workspace,
+                delivery,
+            } => f
+                .debug_struct("RetryGithubDelivery")
+                .field("workspace", workspace)
+                .field("delivery", delivery)
+                .finish(),
+            Input::DisconnectGithub(v0) => f.debug_tuple("DisconnectGithub").field(v0).finish(),
             Input::DismissCreatedWebhook => f.write_str("DismissCreatedWebhook"),
             Input::SetDraftSelection {
                 conversation,

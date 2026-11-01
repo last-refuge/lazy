@@ -38,6 +38,7 @@ use lazy_domain::{ConversationId, ConversationKind, MAX_WEBHOOKS_PER_CONVERSATIO
 use lazy_domain::{MAX_WEBHOOK_DELIVERIES_KEPT, WorkspaceId};
 use lazy_protocol::{WebhookDelivery, WebhookDeliveryOutcome, WorkspaceWebhook};
 
+use super::github_panel::{GithubPanel, GithubPanelEvent};
 use super::{any_composing, single_line_field};
 use crate::app_model::{AppEvent, AppModel};
 use crate::fonts;
@@ -61,6 +62,8 @@ pub enum IntegrationsView {
     },
     ConfirmNewAddress(WebhookId),
     ConfirmDelete(WebhookId),
+    /// GitHub (D32), drawn by [`GithubPanel`].
+    Github,
 }
 
 pub struct IntegrationsDialog {
@@ -93,6 +96,9 @@ pub struct IntegrationsDialog {
     channel_focus: HashMap<ConversationId, FocusHandle>,
     list_scroll: ScrollHandle,
     log_scroll: ScrollHandle,
+    github_focus: FocusHandle,
+    /// The GitHub view, made the first time it is opened.
+    github: Option<Entity<GithubPanel>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -145,6 +151,7 @@ impl IntegrationsDialog {
                 model.dispatch(Input::DismissCreatedWebhook, cx);
             }
             model.dispatch(Input::LoadWorkspaceWebhooks(workspace), cx);
+            model.dispatch(Input::LoadGithub(workspace), cx);
         });
         let mut trap = ModalTrap::new(cx);
         let add_focus = cx.focus_handle().tab_stop(true);
@@ -176,6 +183,8 @@ impl IntegrationsDialog {
             channel_focus: HashMap::new(),
             list_scroll: ScrollHandle::new(),
             log_scroll: ScrollHandle::new(),
+            github_focus: cx.focus_handle().tab_stop(true),
+            github: None,
             _subscriptions: subscriptions,
         }
     }
@@ -388,9 +397,64 @@ impl IntegrationsDialog {
         }
     }
 
+    /// Opens the GitHub view (making it the first time).
+    pub fn open_github(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = match &self.github {
+            Some(panel) => {
+                let workspace = self.workspace;
+                self.model.update(cx, |model, cx| {
+                    model.dispatch(Input::LoadGithub(workspace), cx)
+                });
+                panel.clone()
+            }
+            None => {
+                let model = self.model.clone();
+                let workspace = self.workspace;
+                let panel = cx.new(|cx| GithubPanel::new(model, workspace, window, cx));
+                let events = cx.subscribe_in(
+                    &panel,
+                    window,
+                    |this, _panel, event: &GithubPanelEvent, window, cx| match event {
+                        GithubPanelEvent::Tab { backwards } => {
+                            this.trap.tab(*backwards, window, cx)
+                        }
+                        GithubPanelEvent::Leave => {
+                            this.view = IntegrationsView::List;
+                            window.focus(&this.github_focus, cx);
+                            cx.notify();
+                        }
+                    },
+                );
+                self._subscriptions.push(events);
+                self.github = Some(panel.clone());
+                panel
+            }
+        };
+        self.view = IntegrationsView::Github;
+        let focus = panel.read(cx).first_focus();
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// The GitHub view, while it exists. For tests.
+    pub fn github_panel(&self) -> Option<Entity<GithubPanel>> {
+        self.github.clone()
+    }
+
     /// Escape: back one view, or close from the list.
     fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if any_composing(&[&self.name], cx) {
+            return;
+        }
+        if self.view == IntegrationsView::Github {
+            let Some(panel) = self.github.clone() else {
+                return self.show_list(window, cx);
+            };
+            if !panel.update(cx, |panel, cx| panel.back(window, cx)) {
+                self.view = IntegrationsView::List;
+                window.focus(&self.github_focus, cx);
+                cx.notify();
+            }
             return;
         }
         match self.view {
@@ -400,6 +464,7 @@ impl IntegrationsDialog {
             IntegrationsView::ConfirmNewAddress(id) | IntegrationsView::ConfirmDelete(id) => {
                 self.open_details(id, window, cx)
             }
+            IntegrationsView::Github => {}
         }
     }
 
@@ -409,6 +474,9 @@ impl IntegrationsDialog {
         let mut kinds = vec![ActionKind::LoadWorkspaceWebhooks(self.workspace)];
         if let Some(channel) = self.channel {
             kinds.push(ActionKind::CreateWebhook(channel));
+        }
+        if let Some(panel) = &self.github {
+            kinds.extend(panel.read(cx).kinds());
         }
         for id in self.manage_focus.keys() {
             kinds.push(ActionKind::NewWebhookAddress(*id));
@@ -521,6 +589,115 @@ impl IntegrationsDialog {
             .into_any_element()
     }
 
+    /// GitHub's card at the top of the list: where it stands, and the way in.
+    fn github_card(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme.colors;
+        let status = self.model.read(cx).core().github(self.workspace).cloned();
+        let (line, color, button) = match &status {
+            None => (
+                "Connect a GitHub organization to post its activity.".to_owned(),
+                colors.text_muted,
+                "GitHub…",
+            ),
+            Some(s) if !s.available => (
+                "Needs this server's credentials key before it can connect.".to_owned(),
+                colors.text_muted,
+                "GitHub…",
+            ),
+            Some(s) => match &s.connection {
+                None => (
+                    "Not connected. Post pull requests, issues, commits and more into channels."
+                        .to_owned(),
+                    colors.text_muted,
+                    "Connect…",
+                ),
+                Some(_) if s.installations.is_empty() => (
+                    "Connected, but not installed on GitHub yet.".to_owned(),
+                    colors.warning,
+                    "Finish setup…",
+                ),
+                Some(c) => {
+                    let failed = s
+                        .deliveries
+                        .iter()
+                        .filter(|d| {
+                            matches!(
+                                d.state,
+                                lazy_protocol::GithubDeliveryState::Failed
+                                    | lazy_protocol::GithubDeliveryState::Unknown
+                            )
+                        })
+                        .count();
+                    let followed = s.subscriptions.len();
+                    let mut line = format!(
+                        "Connected to {} · {followed} {} following a repository",
+                        c.owner,
+                        if followed == 1 { "channel" } else { "channels" }
+                    );
+                    if failed > 0 {
+                        line.push_str(&format!(
+                            " · {failed} failed {}",
+                            if failed == 1 {
+                                "delivery"
+                            } else {
+                                "deliveries"
+                            }
+                        ));
+                        (line, colors.danger, "Manage…")
+                    } else {
+                        (line, colors.text_muted, "Manage…")
+                    }
+                }
+            },
+        };
+        let open_to = cx.entity().downgrade();
+        div()
+            .debug_selector(|| "github-card".into())
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_2()
+            .rounded(theme.radii.medium)
+            .border_1()
+            .border_color(colors.border)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_size(theme.type_scale.body)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.text)
+                            .child("GitHub"),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "github-card-status".into())
+                            .text_size(theme.type_scale.small)
+                            .text_color(color)
+                            .child(line),
+                    ),
+            )
+            .child(form::button(
+                theme,
+                "github-open-panel",
+                button,
+                ButtonKind::Secondary,
+                true,
+                &self.github_focus,
+                move |window, cx| {
+                    open_to
+                        .update(cx, |dialog, cx| dialog.open_github(window, cx))
+                        .ok();
+                },
+            ))
+            .into_any_element()
+    }
+
     fn list_view(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let colors = theme.colors;
         let this = cx.entity().downgrade();
@@ -625,6 +802,14 @@ impl IntegrationsDialog {
             .flex()
             .flex_col()
             .gap_3()
+            .child(self.github_card(theme, cx))
+            .child(
+                div()
+                    .text_size(theme.type_scale.small)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(colors.text_muted)
+                    .child("Incoming webhooks"),
+            )
             .child(self.note(
                 theme,
                 "integrations-intro",
@@ -1360,6 +1545,10 @@ impl Render for IntegrationsDialog {
             IntegrationsView::Address { back } => self.address_view(&theme, back, window, cx),
             IntegrationsView::ConfirmNewAddress(id) => self.confirm_view(id, false, &theme, cx),
             IntegrationsView::ConfirmDelete(id) => self.confirm_view(id, true, &theme, cx),
+            IntegrationsView::Github => match &self.github {
+                Some(panel) => panel.clone().into_any_element(),
+                None => self.list_view(&theme, cx),
+            },
         };
         let body = div()
             .debug_selector(|| "workspace-integrations".into())

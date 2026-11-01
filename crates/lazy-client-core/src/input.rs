@@ -261,6 +261,30 @@ pub enum Input {
     LoadWorkspaceWebhooks(WorkspaceId),
     /// Load a webhook's delivery log into `ClientCore::webhook_deliveries`.
     LoadWebhookDeliveries(WebhookId),
+    /// Load the workspace's GitHub connection, subscriptions and deliveries into
+    /// `ClientCore::github` (admins and owners, D32).
+    LoadGithub(WorkspaceId),
+    /// Start connecting GitHub for an organization. The address to open in a browser arrives in
+    /// `ClientCore::github_setup_url`.
+    StartGithubSetup {
+        workspace: WorkspaceId,
+        organization: String,
+    },
+    /// Forget the setup address (it was opened, or the view closed).
+    DismissGithubSetup,
+    /// Make a channel follow a repository (or change what it follows).
+    GithubSubscribe {
+        conversation: ConversationId,
+        repository: String,
+        events: Vec<lazy_domain::github::GithubEvent>,
+    },
+    GithubUnsubscribe(lazy_domain::GithubSubscriptionId),
+    /// Run a failed or unknown GitHub delivery again.
+    RetryGithubDelivery {
+        workspace: WorkspaceId,
+        delivery: i64,
+    },
+    DisconnectGithub(WorkspaceId),
     /// Give a webhook a new address. The old one stops working at once; the new one arrives in
     /// `ClientCore::created_webhook`, to be shown once. Progress is
     /// `action(ActionKind::NewWebhookAddress(webhook))`.
