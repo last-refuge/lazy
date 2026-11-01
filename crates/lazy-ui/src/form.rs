@@ -20,6 +20,8 @@ pub enum ButtonKind {
     Primary,
     Secondary,
     Danger,
+    /// No fill and no border until hovered: a quiet link-like action ("‹ All integrations").
+    Ghost,
 }
 
 /// A text button that is a tab stop. When `enabled` is false it looks inert and ignores clicks
@@ -63,6 +65,12 @@ pub fn button(
             colors.danger,
             colors.danger_surface,
             colors.danger,
+        ),
+        ButtonKind::Ghost => (
+            gpui::transparent_black(),
+            colors.text_muted,
+            colors.surface_hover,
+            gpui::transparent_black(),
         ),
     };
     div()

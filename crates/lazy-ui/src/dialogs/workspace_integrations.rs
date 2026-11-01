@@ -41,6 +41,7 @@ use lazy_protocol::{WebhookDelivery, WebhookDeliveryOutcome, WorkspaceWebhook};
 use super::apps_panel::{AppsPanel, AppsPanelEvent};
 use super::connector_panel::{ConnectorPanel, ConnectorPanelEvent};
 use super::github_panel::{GithubPanel, GithubPanelEvent};
+use super::integration_ui as ui;
 use super::{any_composing, single_line_field};
 use crate::app_model::{AppEvent, AppModel};
 use crate::fonts;
@@ -762,188 +763,127 @@ impl IntegrationsDialog {
             .into_any_element()
     }
 
-    /// GitHub's card at the top of the list: where it stands, and the way in.
-    fn github_card(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    /// A service's tile in the list: its mark and name, where it stands, failures if any, and the
+    /// one way in. `key` names its parts for tests (`{key}-card`, `{key}-card-status`,
+    /// `{key}-open-panel`).
+    #[allow(clippy::too_many_arguments)]
+    fn tile(
+        &self,
+        theme: &Theme,
+        key: &'static str,
+        name: &str,
+        mark: (&'static str, u32),
+        state: TileState,
+        focus: &FocusHandle,
+        on_open: impl Fn(&mut Window, &mut gpui::App) + 'static,
+    ) -> AnyElement {
         let colors = theme.colors;
-        let status = self.model.read(cx).core().github(self.workspace).cloned();
-        let (line, color, button) = match &status {
-            None => (
-                "Connect a GitHub organization to post its activity.".to_owned(),
-                colors.text_muted,
-                "GitHub…",
-            ),
-            Some(s) if !s.available => (
-                "Needs this server's credentials key before it can connect.".to_owned(),
-                colors.text_muted,
-                "GitHub…",
-            ),
-            Some(s) => match &s.connection {
-                None => (
-                    "Not connected. Post pull requests, issues, commits and more into channels."
-                        .to_owned(),
-                    colors.text_muted,
-                    "Connect…",
-                ),
-                Some(_) if s.installations.is_empty() => (
-                    "Connected, but not installed on GitHub yet.".to_owned(),
-                    colors.warning,
-                    "Finish setup…",
-                ),
-                Some(c) => {
-                    let failed = s
-                        .deliveries
-                        .iter()
-                        .filter(|d| {
-                            matches!(
-                                d.state,
-                                lazy_protocol::GithubDeliveryState::Failed
-                                    | lazy_protocol::GithubDeliveryState::Unknown
+        div()
+            .debug_selector(move || format!("{key}-card"))
+            .flex()
+            .items_center()
+            .gap_3()
+            .min_w_0()
+            .px_3()
+            .py_2p5()
+            .rounded(theme.radii.panel)
+            .border_1()
+            .border_color(colors.border)
+            .bg(colors.surface)
+            .child(ui::service_mark(theme, mark.0, mark.1, 34.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(theme.type_scale.body)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(colors.text)
+                                    .child(name.to_owned()),
                             )
-                        })
-                        .count();
-                    let followed = s.subscriptions.len();
-                    let mut line = format!(
-                        "Connected to {} · {followed} {} following a repository",
-                        c.owner,
-                        if followed == 1 { "channel" } else { "channels" }
-                    );
-                    if failed > 0 {
-                        line.push_str(&format!(
-                            " · {failed} failed {}",
-                            if failed == 1 {
-                                "delivery"
-                            } else {
-                                "deliveries"
-                            }
-                        ));
-                        (line, colors.danger, "Manage…")
-                    } else {
-                        (line, colors.text_muted, "Manage…")
-                    }
-                }
+                            .when(state.failed > 0, |row| {
+                                row.child(ui::chip(
+                                    theme,
+                                    format!("{} failed", state.failed),
+                                    ui::Tone::Problem,
+                                ))
+                            }),
+                    )
+                    .child(ui::status_line(
+                        theme,
+                        format!("{key}-card-status"),
+                        state.status,
+                        state.tone,
+                    )),
+            )
+            .child(form::button(
+                theme,
+                format!("{key}-open-panel"),
+                state.action,
+                // Filled only when it needs the admin; otherwise a quiet way in.
+                if state.tone == ui::Tone::Attention {
+                    ButtonKind::Primary
+                } else {
+                    ButtonKind::Secondary
+                },
+                true,
+                focus,
+                on_open,
+            ))
+            .into_any_element()
+    }
+
+    fn github_tile(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let status = self.model.read(cx).core().github(self.workspace).cloned();
+        let state = match &status {
+            None => TileState::quiet("Repositories' activity", "Connect"),
+            Some(s) if !s.available => TileState::quiet("Needs the credentials key", "Details"),
+            Some(s) => match &s.connection {
+                None => TileState::quiet("Not connected", "Connect"),
+                Some(_) if s.installations.is_empty() => TileState {
+                    status: "Install it on GitHub to finish".into(),
+                    tone: ui::Tone::Attention,
+                    failed: 0,
+                    action: "Finish setup",
+                },
+                Some(c) => TileState::live(
+                    format!("{} · {}", c.owner, channels_word(s.subscriptions.len())),
+                    failed_count(s.deliveries.iter().map(|d| d.state)),
+                ),
             },
         };
         let open_to = cx.entity().downgrade();
-        div()
-            .debug_selector(|| "github-card".into())
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .rounded(theme.radii.medium)
-            .border_1()
-            .border_color(colors.border)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_size(theme.type_scale.body)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(colors.text)
-                            .child("GitHub"),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| "github-card-status".into())
-                            .text_size(theme.type_scale.small)
-                            .text_color(color)
-                            .child(line),
-                    ),
-            )
-            .child(form::button(
-                theme,
-                "github-open-panel",
-                button,
-                ButtonKind::Secondary,
-                true,
-                &self.github_focus,
-                move |window, cx| {
-                    open_to
-                        .update(cx, |dialog, cx| dialog.open_github(window, cx))
-                        .ok();
-                },
-            ))
-            .into_any_element()
+        self.tile(
+            theme,
+            "github",
+            "GitHub",
+            ui::marks::GITHUB,
+            state,
+            &self.github_focus,
+            move |window, cx| {
+                open_to
+                    .update(cx, |dialog, cx| dialog.open_github(window, cx))
+                    .ok();
+            },
+        )
     }
 
-    /// The apps card in the list: how many, and the way in.
-    fn apps_card(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let colors = theme.colors;
-        let count = self
-            .model
-            .read(cx)
-            .core()
-            .apps(self.workspace)
-            .map(<[lazy_protocol::App]>::len);
-        let line = match count {
-            None | Some(0) => {
-                "Bots with tokens that post through Lazy's API, in its format or Slack's."
-                    .to_owned()
-            }
-            Some(1) => "1 app".to_owned(),
-            Some(n) => format!("{n} apps"),
-        };
-        let open_to = cx.entity().downgrade();
-        div()
-            .debug_selector(|| "apps-card".into())
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .rounded(theme.radii.medium)
-            .border_1()
-            .border_color(colors.border)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_size(theme.type_scale.body)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(colors.text)
-                            .child("Apps and bots"),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| "apps-card-status".into())
-                            .text_size(theme.type_scale.small)
-                            .text_color(colors.text_muted)
-                            .child(line),
-                    ),
-            )
-            .child(form::button(
-                theme,
-                "apps-open-panel",
-                "Manage…",
-                ButtonKind::Secondary,
-                true,
-                &self.apps_focus,
-                move |window, cx| {
-                    open_to
-                        .update(cx, |dialog, cx| dialog.open_apps(window, cx))
-                        .ok();
-                },
-            ))
-            .into_any_element()
-    }
-
-    /// A connector's card in the list: where it stands, and the way in.
-    fn connector_card(
+    fn connector_tile(
         &self,
         provider: ConnectorProvider,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let colors = theme.colors;
         let status = self
             .model
             .read(cx)
@@ -951,123 +891,97 @@ impl IntegrationsDialog {
             .connector(self.workspace, provider)
             .cloned();
         let what = match provider {
-            ConnectorProvider::Linear => "issues, status changes and project updates",
-            ConnectorProvider::Jira => "issues, status changes and comments",
-            ConnectorProvider::Sentry => "new issues, regressions and alerts",
-            ConnectorProvider::PagerDuty => "incidents as they're triggered and resolved",
-            ConnectorProvider::Unknown => "activity",
+            ConnectorProvider::Linear => "Issues and project updates",
+            ConnectorProvider::Jira => "Issues and comments",
+            ConnectorProvider::Sentry => "Errors and alerts",
+            ConnectorProvider::PagerDuty => "Incidents",
+            ConnectorProvider::Unknown => "Activity",
         };
-        let (line, color, button) = match &status {
-            None => (
-                format!("Post {what} into channels."),
-                colors.text_muted,
-                format!("{}…", provider.label()),
-            ),
-            Some(s) if !s.available => (
-                "Needs this server's credentials key before it can connect.".to_owned(),
-                colors.text_muted,
-                format!("{}…", provider.label()),
-            ),
+        let state = match &status {
+            None => TileState::quiet(what, "Connect"),
+            Some(s) if !s.available => TileState::quiet("Needs the credentials key", "Details"),
             Some(s) => match &s.connection {
-                None => (
-                    format!("Not connected. Post {what} into channels."),
-                    colors.text_muted,
-                    "Connect…".to_owned(),
+                None => TileState::quiet(what, "Connect"),
+                Some(c) if !c.secret_set => TileState {
+                    status: "Needs its webhook".into(),
+                    tone: ui::Tone::Attention,
+                    failed: 0,
+                    action: "Finish setup",
+                },
+                Some(_) => TileState::live(
+                    channels_word(s.subscriptions.len()),
+                    failed_count(s.deliveries.iter().map(|d| d.state)),
                 ),
-                Some(c) if !c.secret_set => (
-                    format!(
-                        "Connected, but the webhook in {} isn't set up yet.",
-                        provider.label()
-                    ),
-                    colors.warning,
-                    "Finish setup…".to_owned(),
-                ),
-                Some(_) => {
-                    let failed = s
-                        .deliveries
-                        .iter()
-                        .filter(|d| {
-                            matches!(
-                                d.state,
-                                lazy_protocol::GithubDeliveryState::Failed
-                                    | lazy_protocol::GithubDeliveryState::Unknown
-                            )
-                        })
-                        .count();
-                    let followed = s.subscriptions.len();
-                    let mut line = format!(
-                        "Connected · {followed} {} following it",
-                        if followed == 1 { "channel" } else { "channels" }
-                    );
-                    let mut color = colors.text_muted;
-                    if failed > 0 {
-                        line.push_str(&format!(
-                            " · {failed} failed {}",
-                            if failed == 1 {
-                                "delivery"
-                            } else {
-                                "deliveries"
-                            }
-                        ));
-                        color = colors.danger;
-                    }
-                    (line, color, "Manage…".to_owned())
-                }
             },
         };
         let open_to = cx.entity().downgrade();
-        let card = format!("{}-card", provider.as_str());
-        let card_status = format!("{}-card-status", provider.as_str());
+        let key: &'static str = match provider {
+            ConnectorProvider::Linear => "linear",
+            ConnectorProvider::Jira => "jira",
+            ConnectorProvider::Sentry => "sentry",
+            ConnectorProvider::PagerDuty => "pagerduty",
+            ConnectorProvider::Unknown => "unknown",
+        };
         let focus = self
             .connector_focus
             .get(&provider)
             .cloned()
             .unwrap_or_else(|| self.github_focus.clone());
-        div()
-            .debug_selector(move || card.clone())
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .rounded(theme.radii.medium)
-            .border_1()
-            .border_color(colors.border)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_size(theme.type_scale.body)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(colors.text)
-                            .child(provider.label()),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(move || card_status.clone())
-                            .text_size(theme.type_scale.small)
-                            .text_color(color)
-                            .child(line),
-                    ),
-            )
-            .child(form::button(
-                theme,
-                format!("{}-open-panel", provider.as_str()),
-                button,
-                ButtonKind::Secondary,
-                true,
-                &focus,
-                move |window, cx| {
-                    open_to
-                        .update(cx, |dialog, cx| dialog.open_connector(provider, window, cx))
-                        .ok();
-                },
-            ))
-            .into_any_element()
+        self.tile(
+            theme,
+            key,
+            provider.label(),
+            ui::marks::of(provider),
+            state,
+            &focus,
+            move |window, cx| {
+                open_to
+                    .update(cx, |dialog, cx| dialog.open_connector(provider, window, cx))
+                    .ok();
+            },
+        )
+    }
+
+    fn apps_tile(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let apps = self
+            .model
+            .read(cx)
+            .core()
+            .apps(self.workspace)
+            .map(<[lazy_protocol::App]>::to_vec);
+        let state = match apps.as_deref() {
+            None | Some([]) => {
+                TileState::quiet("Bots with a token, commands, and events", "Make an app")
+            }
+            Some(apps) => {
+                let commands: usize = apps.iter().map(|a| a.commands.len()).sum();
+                let mut status = match apps.len() {
+                    1 => "1 app".to_owned(),
+                    n => format!("{n} apps"),
+                };
+                if commands > 0 {
+                    status.push_str(&format!(
+                        " · {commands} slash command{}",
+                        if commands == 1 { "" } else { "s" }
+                    ));
+                }
+                TileState::live(status, 0)
+            }
+        };
+        let open_to = cx.entity().downgrade();
+        self.tile(
+            theme,
+            "apps",
+            "Apps and bots",
+            ui::marks::APPS,
+            state,
+            &self.apps_focus,
+            move |window, cx| {
+                open_to
+                    .update(cx, |dialog, cx| dialog.open_apps(window, cx))
+                    .ok();
+            },
+        )
     }
 
     fn list_view(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -1116,9 +1030,10 @@ impl IntegrationsDialog {
                     .gap_3()
                     .px_3()
                     .py_2()
-                    .rounded(theme.radii.medium)
+                    .rounded(theme.radii.panel)
                     .border_1()
                     .border_color(colors.border)
+                    .bg(colors.surface)
                     .child(
                         div()
                             .flex_1()
@@ -1174,26 +1089,68 @@ impl IntegrationsDialog {
             .flex()
             .flex_col()
             .gap_3()
-            .child(self.github_card(theme, cx))
-            .children(
-                ConnectorProvider::ALL
-                    .into_iter()
-                    .map(|provider| self.connector_card(provider, theme, cx)),
-            )
-            .child(self.apps_card(theme, cx))
+            .child(ui::section(
+                theme,
+                "Services",
+                Some("Post what happens in your team's tools into the channels you choose.".into()),
+            ))
             .child(
                 div()
-                    .text_size(theme.type_scale.small)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(colors.text_muted)
-                    .child("Incoming webhooks"),
+                    .debug_selector(|| "integrations-services".into())
+                    .grid()
+                    .grid_cols(2)
+                    .gap_2()
+                    .child(self.github_tile(theme, cx))
+                    .children(
+                        ConnectorProvider::ALL
+                            .into_iter()
+                            .map(|provider| self.connector_tile(provider, theme, cx)),
+                    ),
             )
-            .child(self.note(
+            .child(ui::divider(theme))
+            .child(ui::section(
                 theme,
-                "integrations-intro",
-                "Incoming webhooks let a tool post into a channel as an app. Each has a secret \
-                 address; anything that has it can post.",
+                "Build your own",
+                Some(
+                    "Your own programs: an app with a token, slash commands and events, or a \
+                     webhook address that posts into one channel."
+                        .into(),
+                ),
             ))
+            .child(self.apps_tile(theme, cx))
+            .child(
+                div()
+                    .pt_1()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(ui::service_mark(
+                        theme,
+                        ui::marks::WEBHOOK.0,
+                        ui::marks::WEBHOOK.1,
+                        34.,
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_size(theme.type_scale.body)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(colors.text)
+                                    .child("Incoming webhooks"),
+                            )
+                            .child(self.note(
+                                theme,
+                                "integrations-intro",
+                                "A secret address that posts into one channel as an app. Tools \
+                                 with a Slack option can use it too.",
+                            )),
+                    ),
+            )
             .when(loading && entries.is_empty(), |view| {
                 view.child(self.note(theme, "integrations-loading", "Loading integrations…"))
             })
@@ -1905,6 +1862,55 @@ pub fn outcome_words(
 }
 
 /// A body's size for people: bytes up to a kilobyte, then kilobytes.
+/// What a service's tile says.
+struct TileState {
+    status: String,
+    tone: ui::Tone,
+    failed: usize,
+    action: &'static str,
+}
+
+impl TileState {
+    fn quiet(status: impl Into<String>, action: &'static str) -> Self {
+        Self {
+            status: status.into(),
+            tone: ui::Tone::Quiet,
+            failed: 0,
+            action,
+        }
+    }
+
+    fn live(status: String, failed: usize) -> Self {
+        Self {
+            status,
+            // Failures have their own badge; the line still says what is set up.
+            tone: ui::Tone::Good,
+            failed,
+            action: "Manage",
+        }
+    }
+}
+
+fn channels_word(n: usize) -> String {
+    match n {
+        0 => "No channels yet".to_owned(),
+        1 => "1 channel".to_owned(),
+        n => format!("{n} channels"),
+    }
+}
+
+fn failed_count(states: impl Iterator<Item = lazy_protocol::GithubDeliveryState>) -> usize {
+    states
+        .filter(|s| {
+            matches!(
+                s,
+                lazy_protocol::GithubDeliveryState::Failed
+                    | lazy_protocol::GithubDeliveryState::Unknown
+            )
+        })
+        .count()
+}
+
 fn size_label(bytes: u32) -> String {
     if bytes < 1024 {
         format!("{bytes} bytes")
@@ -1944,7 +1950,7 @@ impl Render for IntegrationsDialog {
         dialog_overlay(
             &theme,
             "Integrations",
-            640.,
+            720.,
             &self.trap,
             body,
             "Close",
