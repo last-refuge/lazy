@@ -241,6 +241,12 @@ pub struct Config {
     pub attachments_dir: PathBuf,
     /// The largest attachment, in bytes.
     pub max_attachment_bytes: u64,
+    /// The keys integration credentials are sealed with (see [`crate::credentials`]). Without a
+    /// current key, integrations that need credentials are unavailable.
+    pub credential_keys: crate::credentials::CredentialKeys,
+    /// Run a job worker in this process (see [`crate::jobs`]). Off when `lazy-server worker`
+    /// runs the jobs instead.
+    pub run_jobs: bool,
 }
 
 impl std::fmt::Debug for Config {
@@ -268,6 +274,8 @@ impl std::fmt::Debug for Config {
             )
             .field("attachments_dir", &self.attachments_dir)
             .field("max_attachment_bytes", &self.max_attachment_bytes)
+            .field("credential_keys", &self.credential_keys)
+            .field("run_jobs", &self.run_jobs)
             .finish()
     }
 }
@@ -290,6 +298,8 @@ impl Config {
             public_url: None,
             attachments_dir: PathBuf::from("attachments"),
             max_attachment_bytes: lazy_domain::attachment::MAX_ATTACHMENT_BYTES,
+            credential_keys: crate::credentials::CredentialKeys::none(),
+            run_jobs: true,
         }
     }
 }
@@ -346,6 +356,11 @@ pub struct IntegrationOptions {
     /// See [`Config::setup_code`]. (Not about integrations; kept here so that adding it does not
     /// change a struct other crates construct.)
     pub setup_code: Option<SetupCode>,
+    /// The keys integration credentials are sealed with; none by default.
+    pub credential_keys: crate::credentials::CredentialKeys,
+    /// A job worker in this process, with these settings; `None` (the default, and what tests
+    /// get unless they ask) runs none.
+    pub jobs: Option<crate::jobs::WorkerOptions>,
 }
 
 /// Where the bytes of attachments live.

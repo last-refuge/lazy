@@ -396,3 +396,11 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
 
 - *Observed by the user:* `chat.lazyto.day` was redeployed from `main` at `b5570dc` (migration 0016) with two 0.6.0 clients connected. The update went well, and the clients disconnected and reconnected without trouble. This was the first real redeploy with clients connected; the graceful shutdown and the clients' reconnect and catch-up had only been tested automatically before.
 - *Not checked by anyone:* the Integrations dialog against the real server. It needs a 0.7.0 client.
+
+## Durable jobs and encrypted credentials (D31, 2026-10-31)
+
+- *Measured:* `scripts/test.sh --no-fail-fast -- --test-threads=12` passed 2,725 tests with 0 failures, including 9 new job-queue tests (`tests/jobs.rs`) and 5 new credential tests (`tests/credentials.rs`), plus unit tests in both modules.
+  - The job tests cover: deduplication, retryable backoff to failure, definitive and unknown outcomes and manual retry, a concurrency bound of 3, two workers never running a job twice (40 jobs), a dead worker's lease being reclaimed (and settled as unknown on the last attempt), lease renewal across three lease lengths, shutdown draining with put-back, delays, and cleanup.
+  - The credential tests cover: a round trip with no plaintext in the row, a ciphertext copied into another row refusing to open, revoke and replace, no key configured, and a rotation with `rewrap_all`, including a key dropped too early.
+  - `cargo fmt --all --check` passes; clippy shows only the warning already in `lazy-client-runtime/tests/updates.rs`.
+- *Not checked by anyone:* the `worker` and `rewrap-credentials` commands as real processes; a key set in Coolify; behaviour across a real redeploy with jobs in flight (none exist until a connector enqueues them).

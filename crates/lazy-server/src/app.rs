@@ -48,6 +48,15 @@ pub struct Integrations {
     pub limiter: WebhookLimiter,
     /// See [`crate::SetupCode`].
     pub setup_code: Option<crate::config::SetupCode>,
+    /// The keys integration credentials are sealed with (D31).
+    pub credentials: crate::credentials::CredentialKeys,
+    /// Wakes this process's job worker after an enqueue (does nothing if it runs none).
+    pub jobs: crate::jobs::Waker,
+}
+
+/// The kinds of job this server knows how to run. Integrations add theirs here.
+pub fn job_handlers() -> crate::jobs::Registry {
+    crate::jobs::Registry::new()
 }
 
 /// Connects to Postgres, optionally migrates and seeds, and serves until `shutdown` completes.
@@ -78,6 +87,8 @@ pub async fn run(
             RegistrationPolicy::InviteOnly => "invite_only",
         },
         setup_code_set = config.setup_code.is_some(),
+        credentials_key = config.credential_keys.current_id(),
+        run_jobs = config.run_jobs,
         "starting"
     );
     let pool = db::connect(&config.database_url, config.max_db_connections).await?;
@@ -132,6 +143,8 @@ pub async fn run(
     let integrations = IntegrationOptions {
         public_url: config.public_url,
         setup_code: config.setup_code,
+        credential_keys: config.credential_keys,
+        jobs: config.run_jobs.then(crate::jobs::WorkerOptions::default),
         ..IntegrationOptions::default()
     };
     let attachments = AttachmentOptions {
@@ -235,6 +248,17 @@ pub async fn serve_all(
     let token = CancellationToken::new();
     let (dispatcher, dispatcher_tasks) = Dispatcher::spawn(pool.clone(), token.child_token());
     let pruner = pruner::spawn(pool.clone(), options.retention, token.child_token());
+    let worker = integrations.jobs.map(|worker_options| {
+        crate::jobs::spawn(
+            pool.clone(),
+            job_handlers(),
+            worker_options,
+            token.child_token(),
+        )
+    });
+    let waker = worker
+        .as_ref()
+        .map_or_else(crate::jobs::Waker::none, crate::jobs::Worker::waker);
     let state = AppState {
         pool,
         passwords: PasswordService::new(options.password_cost)?,
@@ -246,6 +270,8 @@ pub async fn serve_all(
             public_url,
             limiter: WebhookLimiter::new(integrations.webhook_rate),
             setup_code: integrations.setup_code,
+            credentials: integrations.credential_keys,
+            jobs: waker,
         }),
         attachments: Arc::clone(&attachments),
         search,
@@ -278,5 +304,8 @@ pub async fn serve_all(
     dispatcher_tasks.join().await;
     pruner.join().await;
     attachment_jobs.join().await;
+    if let Some(worker) = worker {
+        worker.join().await;
+    }
     served.map_err(|e| AppError::internal(format!("server error: {e}")))
 }

@@ -14,6 +14,7 @@ const ALLOWED_FIELDS: &[&str] = &[
     "request_id",
     "user_id",
     "webhook_id",
+    "job_id",
     // counters, sizes, durations
     "seq",
     "deleted",
@@ -29,10 +30,19 @@ const ALLOWED_FIELDS: &[&str] = &[
     "bytes_out",
     "slow",
     "migration_version",
+    "attempt",
+    "released",
+    "job_kinds",
+    "rewrapped",
+    "current",
+    "missing_key",
     // fixed vocabulary
     "method",
     "route",
     "error_code",
+    // a job's kind (a fixed name in the code, e.g. `github.event`) and its failure class
+    "job_kind",
+    "error_class",
     "place",
     "thread",
     // configuration, never secret: addresses without credentials ([`describe_url`] and
@@ -53,6 +63,9 @@ const ALLOWED_FIELDS: &[&str] = &[
     "max_db_connections",
     "max_attachment_bytes",
     "public_url",
+    // the credentials key's id (8 hex digits of its SHA-256), never the key; and a flag
+    "credentials_key",
+    "run_jobs",
     // what kind of failure: only ever `.describe()`d
     "error",
 ];

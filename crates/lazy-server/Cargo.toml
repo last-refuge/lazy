@@ -21,6 +21,8 @@ testing = ["dep:tempfile"]
 lazy-domain.workspace = true
 lazy-protocol.workspace = true
 argon2.workspace = true
+# Integration credentials are sealed with XChaCha20-Poly1305 (the client's files use it too).
+chacha20poly1305.workspace = true
 axum.workspace = true
 bytes = "1"
 clap.workspace = true
@@ -47,6 +49,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 # `v5`: an Idempotency-Key becomes an operation id, a UUID v5 of (webhook id, key).
 uuid = { workspace = true, features = ["v5"] }
+# Credentials in memory are zeroed when dropped (already in the lockfile through chacha20poly1305).
+zeroize = { version = "1", features = ["alloc"] }
 
 [dev-dependencies]
 # Integration tests use the in-process test server.

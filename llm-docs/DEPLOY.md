@@ -89,7 +89,8 @@ Based on Coolify's documented conventions for Docker Compose applications (the `
    generated for you. **Read `SERVICE_PASSWORD_SETUPCODE` here**: it is the setup code you type when
    you create the owner account. Optional overrides: `LAZY_SEED_REGISTRATION` (`invite_only` or
    `open`), `LAZY_OPEN_WORKSPACE_CREATION`, `LAZY_EVENT_RETENTION_DAYS`, `LAZY_MAX_ATTACHMENT_BYTES`,
-   `LAZY_LOG`, `LAZY_LOG_FORMAT`.
+   `LAZY_LOG`, `LAZY_LOG_FORMAT`. For integrations that hold credentials (GitHub), add
+   `LAZY_CREDENTIALS_KEY` (see "The credentials key" below).
 5. **Deploy.** The first build takes a few minutes. Both services show healthy (the container has
    its own health check, `lazy-server healthcheck`).
 6. Install a client, choose `https://chat.example.com` as the server, create the owner account with
@@ -122,6 +123,9 @@ All of these are also command-line options (`lazy-server serve --help`).
 | `LAZY_SEED_REGISTRATION` | `open` (`invite_only` in the compose files) | who may register on the workspace the server creates |
 | `LAZY_OPEN_REGISTRATION` | `true` | `false` closes registration entirely, invitations included |
 | `LAZY_OPEN_WORKSPACE_CREATION` | `true` | whether any signed-in person may create a workspace of their own |
+| `LAZY_CREDENTIALS_KEY` | none | 64 hex digits (`openssl rand -hex 32`) that seal integration credentials; without it the server runs and integrations that hold credentials are off |
+| `LAZY_CREDENTIALS_OLD_KEYS` | none | previous keys, comma-separated, during a rotation |
+| `LAZY_RUN_JOBS` | `true` | run the job worker in the server; set `false` if `lazy-server worker` runs it in a container of its own |
 | `LAZY_ATTACHMENTS_DIR` | `/data/attachments` in the image | where uploads are kept (a volume) |
 | `LAZY_MAX_ATTACHMENT_BYTES` | 25 MiB | largest upload; the proxy must allow it too |
 | `LAZY_EVENT_RETENTION_DAYS` | 30 | days of event history kept (the newest 1,000 per workspace always stay); 0 keeps all |
@@ -155,3 +159,26 @@ All of these are also command-line options (`lazy-server serve --help`).
 - No TLS between the server and Postgres (same machine or private network only).
 - Only the amd64 image is built by the workflow.
 - Not exercised yet on a real Coolify; the compose file follows its documented conventions.
+
+## The credentials key
+
+Integrations that act for a workspace (GitHub, and later bot tokens) keep their secrets in the
+database sealed with XChaCha20-Poly1305 under `LAZY_CREDENTIALS_KEY`, which is never stored in the
+database (D31). A database backup alone is therefore useless to an attacker, and useless to you
+without the key: **keep a copy of the key somewhere other than the server and its backups** (a
+password manager). If the key is lost, every stored credential is lost and each integration must be
+connected again; messages and everything else are unaffected.
+
+- **Set it:** `openssl rand -hex 32`, then in Coolify add `LAZY_CREDENTIALS_KEY` with that value and
+  redeploy. The startup log shows `credentials_key=` and 8 hex digits (an id of the key, not the key).
+- **Rotate it:** make a new key current, put the old one in `LAZY_CREDENTIALS_OLD_KEYS`, redeploy,
+  then run `lazy-server rewrap-credentials` in the container (Coolify: the service's terminal). It
+  reports how many it re-sealed; when it reports none sealed by a missing key, remove the old key
+  and redeploy.
+
+## Jobs
+
+The server runs background jobs (integration deliveries) from a queue in Postgres, in the server
+process by default. To isolate them, run a second container with the same image and environment and
+the command `lazy-server worker`, and set `LAZY_RUN_JOBS=false` on the server. Any number of workers
+may share the queue.

@@ -29,6 +29,12 @@ enum Command {
     Serve(ServeArgs),
     /// Apply database migrations and exit.
     Migrate(DatabaseArgs),
+    /// Run only the job worker (integration deliveries and other background work), for a process
+    /// of its own. Start the server with `--run-jobs false` alongside it.
+    Worker(WorkerArgs),
+    /// Re-seal every integration credential under the current credentials key, so that previous
+    /// keys can be removed. Safe to run while the server runs, and to run again.
+    RewrapCredentials(RewrapArgs),
     /// Exit 0 only if a running server answers `GET /healthz` with 200 within 3 seconds. For a
     /// container's HEALTHCHECK; needs no curl and no database.
     Healthcheck(HealthcheckArgs),
@@ -44,6 +50,53 @@ struct HealthcheckArgs {
     /// Where the server listens, to derive the address from.
     #[arg(long, env = "LAZY_LISTEN", default_value = "127.0.0.1:8080")]
     listen: String,
+}
+
+/// The keys integration credentials are sealed with (D31).
+#[derive(Args)]
+struct KeyArgs {
+    /// The current credentials key: 64 hex digits (`openssl rand -hex 32`). Without it, the server
+    /// runs and integrations that need credentials are unavailable. Keep it outside the database
+    /// and its backups; losing it loses every stored credential. Prefer the environment variable.
+    #[arg(long, env = "LAZY_CREDENTIALS_KEY", hide_env_values = true)]
+    credentials_key: Option<String>,
+    /// Previous credentials keys, comma-separated, that only open what they sealed (for a
+    /// rotation; remove them after `rewrap-credentials`).
+    #[arg(long, env = "LAZY_CREDENTIALS_OLD_KEYS", hide_env_values = true)]
+    credentials_old_keys: Option<String>,
+}
+
+impl KeyArgs {
+    fn keys(&self) -> Result<lazy_server::credentials::CredentialKeys, lazy_server::AppError> {
+        lazy_server::credentials::CredentialKeys::parse(
+            self.credentials_key.as_deref(),
+            self.credentials_old_keys.as_deref(),
+        )
+        .map_err(|reason| {
+            lazy_server::AppError::internal(format!(
+                "{reason} (LAZY_CREDENTIALS_KEY or LAZY_CREDENTIALS_OLD_KEYS); the server did not start"
+            ))
+        })
+    }
+}
+
+#[derive(Args)]
+struct WorkerArgs {
+    #[command(flatten)]
+    database: DatabaseArgs,
+    #[command(flatten)]
+    keys: KeyArgs,
+    /// Jobs at once.
+    #[arg(long, env = "LAZY_JOB_CONCURRENCY", default_value_t = 4)]
+    concurrency: usize,
+}
+
+#[derive(Args)]
+struct RewrapArgs {
+    #[command(flatten)]
+    database: DatabaseArgs,
+    #[command(flatten)]
+    keys: KeyArgs,
 }
 
 #[derive(Args)]
@@ -98,6 +151,11 @@ struct ServeArgs {
     /// to other users of the machine.
     #[arg(long, env = "LAZY_SETUP_CODE", hide_env_values = true)]
     setup_code: Option<String>,
+    #[command(flatten)]
+    keys: KeyArgs,
+    /// Run the job worker in this process. Set it to false when `lazy-server worker` runs it.
+    #[arg(long, env = "LAZY_RUN_JOBS", default_value_t = true, action = clap::ArgAction::Set)]
+    run_jobs: bool,
 }
 
 fn parse_registration(text: &str) -> Result<lazy_domain::workspace::RegistrationPolicy, String> {
@@ -120,6 +178,8 @@ async fn main() -> ExitCode {
     let result = match cli.command {
         Command::Serve(args) => serve(args).await,
         Command::Migrate(args) => migrate(args).await,
+        Command::Worker(args) => worker(args).await,
+        Command::RewrapCredentials(args) => rewrap(args).await,
         Command::Healthcheck(_) => unreachable!("handled above"),
     };
     match result {
@@ -176,7 +236,51 @@ async fn serve(args: ServeArgs) -> Result<(), lazy_server::AppError> {
     config.public_url = args.public_url;
     config.attachments_dir = args.attachments_dir;
     config.max_attachment_bytes = args.max_attachment_bytes;
+    config.credential_keys = args.keys.keys()?;
+    config.run_jobs = args.run_jobs;
     lazy_server::run(config, shutdown_signal()).await
+}
+
+async fn worker(args: WorkerArgs) -> Result<(), lazy_server::AppError> {
+    // Checked so a bad key stops this process as it would the server, though no handler uses it
+    // yet.
+    let _keys = args.keys.keys()?;
+    let pool = db::connect(&args.database.database_url, 4).await?;
+    let stop = tokio_util::sync::CancellationToken::new();
+    let worker = lazy_server::jobs::spawn(
+        pool.clone(),
+        lazy_server::app::job_handlers(),
+        lazy_server::jobs::WorkerOptions {
+            concurrency: args.concurrency.max(1),
+            ..lazy_server::jobs::WorkerOptions::default()
+        },
+        stop.clone(),
+    );
+    shutdown_signal().await;
+    stop.cancel();
+    worker.join().await;
+    pool.close().await;
+    Ok(())
+}
+
+async fn rewrap(args: RewrapArgs) -> Result<(), lazy_server::AppError> {
+    let keys = args.keys.keys()?;
+    let pool = db::connect(&args.database.database_url, 2).await?;
+    let report = lazy_server::credentials::rewrap_all(&pool, &keys).await?;
+    pool.close().await;
+    tracing::info!(
+        rewrapped = report.rewrapped,
+        current = report.current,
+        missing_key = report.missing_key,
+        "credentials re-sealed under the current key"
+    );
+    if report.missing_key > 0 {
+        return Err(lazy_server::AppError::internal(format!(
+            "{} credentials were sealed by a key that is not configured; they were left as they are",
+            report.missing_key
+        )));
+    }
+    Ok(())
 }
 
 async fn migrate(args: DatabaseArgs) -> Result<(), lazy_server::AppError> {
@@ -231,7 +335,10 @@ mod tests {
         argv.extend_from_slice(extra);
         match Cli::try_parse_from(argv).expect("valid arguments").command {
             Command::Serve(args) => args,
-            Command::Migrate(_) | Command::Healthcheck(_) => panic!("expected the serve command"),
+            Command::Migrate(_)
+            | Command::Healthcheck(_)
+            | Command::Worker(_)
+            | Command::RewrapCredentials(_) => panic!("expected the serve command"),
         }
     }
 
