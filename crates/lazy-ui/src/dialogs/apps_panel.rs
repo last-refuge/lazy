@@ -541,12 +541,7 @@ impl AppsPanel {
                 })
                 .ok();
             },
-            Some(ui::service_mark(
-                theme,
-                ui::marks::APPS.0,
-                ui::marks::APPS.1,
-                36.,
-            )),
+            Some(ui::service_mark(theme, ui::marks::APPS, 36.)),
             title,
             None,
         )

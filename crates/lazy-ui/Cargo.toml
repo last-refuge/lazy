@@ -17,6 +17,8 @@ jiff.workspace = true
 time.workspace = true
 # The decoder gpui already links; the same version and formats, so nothing new is built.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# Service logos in the Integrations dialog are SVGs, drawn once at start (already built by gpui).
+resvg = { version = "0.46", default-features = false }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

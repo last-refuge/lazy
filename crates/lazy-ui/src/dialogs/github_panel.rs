@@ -417,12 +417,7 @@ impl GithubPanel {
                     .update(cx, |_, cx| cx.emit(GithubPanelEvent::Leave))
                     .ok();
             },
-            Some(ui::service_mark(
-                theme,
-                ui::marks::GITHUB.0,
-                ui::marks::GITHUB.1,
-                36.,
-            )),
+            Some(ui::service_mark(theme, ui::marks::GITHUB, 36.)),
             "GitHub".into(),
             state,
         )

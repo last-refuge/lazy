@@ -32,23 +32,32 @@ fn tone_color(theme: &Theme, tone: Tone) -> Hsla {
     }
 }
 
-/// A service's mark: its initial on its brand color, in a rounded square (there are no logos to
-/// ship, and a colored initial is easy to tell apart at a glance).
-pub fn service_mark(theme: &Theme, glyph: &'static str, color: u32, size: f32) -> AnyElement {
+/// A service's mark: its logo (or, without one, its initial) in white on its brand color, in a
+/// rounded square.
+pub fn service_mark(theme: &Theme, mark: Mark, size: f32) -> AnyElement {
+    let logo = mark.logo.and_then(crate::service_logos::logo);
     div()
         .flex_none()
         .size(px(size))
         .rounded(theme.radii.medium)
-        .bg(rgb(color))
+        .bg(rgb(mark.color))
         .border_1()
         .border_color(theme.colors.border)
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(size * 0.5))
-        .font_weight(FontWeight::BOLD)
-        .text_color(rgb(0xffffff))
-        .child(glyph)
+        .map(|tile| match logo {
+            Some(logo) => tile.child(
+                gpui::img(logo)
+                    .size(px((size * 0.6).round()))
+                    .object_fit(gpui::ObjectFit::Contain),
+            ),
+            None => tile
+                .text_size(px(size * 0.5))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0xffffff))
+                .child(mark.glyph),
+        })
         .into_any_element()
 }
 
@@ -249,25 +258,40 @@ pub fn divider(theme: &Theme) -> AnyElement {
     div().h(px(1.)).bg(theme.colors.border).into_any_element()
 }
 
-/// The marks of the services Lazy connects to: an initial and a color close to the service's own.
+/// How a service is marked: an initial (when there is no logo), its color, and its logo's name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mark {
+    pub glyph: &'static str,
+    pub color: u32,
+    pub logo: Option<&'static str>,
+}
+
+/// The marks of the services Lazy connects to, in their brand colors (as Simple Icons lists them),
+/// and Lazy's own for apps and webhooks.
 pub mod marks {
-    pub const GITHUB: (&str, u32) = ("G", 0x24292f);
-    pub const LINEAR: (&str, u32) = ("L", 0x5e6ad2);
-    pub const JIRA: (&str, u32) = ("J", 0x0c66e4);
-    pub const SENTRY: (&str, u32) = ("S", 0x362d59);
-    pub const PAGERDUTY: (&str, u32) = ("P", 0x048a24);
-    pub const APPS: (&str, u32) = ("A", 0x2f6f5e);
-    pub const WEBHOOK: (&str, u32) = ("W", 0x6b5b3e);
+    use super::Mark;
+
+    const fn mark(glyph: &'static str, color: u32, logo: Option<&'static str>) -> Mark {
+        Mark { glyph, color, logo }
+    }
+
+    pub const GITHUB: Mark = mark("G", 0x181717, Some("github"));
+    pub const LINEAR: Mark = mark("L", 0x5e6ad2, Some("linear"));
+    pub const JIRA: Mark = mark("J", 0x0052cc, Some("jira"));
+    pub const SENTRY: Mark = mark("S", 0x362d59, Some("sentry"));
+    pub const PAGERDUTY: Mark = mark("P", 0x06ac38, Some("pagerduty"));
+    pub const APPS: Mark = mark("A", 0x2f6f5e, None);
+    pub const WEBHOOK: Mark = mark("W", 0x6b5b3e, None);
 
     use lazy_domain::connector::ConnectorProvider;
 
-    pub fn of(provider: ConnectorProvider) -> (&'static str, u32) {
+    pub fn of(provider: ConnectorProvider) -> Mark {
         match provider {
             ConnectorProvider::Linear => LINEAR,
             ConnectorProvider::Jira => JIRA,
             ConnectorProvider::Sentry => SENTRY,
             ConnectorProvider::PagerDuty => PAGERDUTY,
-            ConnectorProvider::Unknown => ("?", 0x6b7280),
+            ConnectorProvider::Unknown => mark("?", 0x6b7280, None),
         }
     }
 }
