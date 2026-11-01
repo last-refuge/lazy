@@ -142,6 +142,20 @@ pub mod paths {
     pub const CONNECTOR_DELIVERY_RETRY_ROUTE: &str = "/v1/connector-deliveries/{delivery_id}/retry";
     /// Where a provider posts its signed deliveries. Public; not part of the API.
     pub const CONNECTOR_WEBHOOK_ROUTE: &str = "/connectors/{provider}/{connector_id}";
+    /// `GET` the workspace's apps; `POST` makes one (its token answered once). Admins and owners
+    /// (D35).
+    pub const APPS_ROUTE: &str = "/v1/workspaces/{workspace_id}/apps";
+    /// `PATCH` an app's scopes; `DELETE` deletes it.
+    pub const APP_ROUTE: &str = "/v1/apps/{app_id}";
+    /// `POST` gives an app a new token (the old one stops working), answered once.
+    pub const APP_TOKEN_ROUTE: &str = "/v1/apps/{app_id}/token";
+    /// `PUT` adds the app's bot to a channel; `DELETE` takes it out.
+    pub const APP_CHANNEL_ROUTE: &str = "/v1/apps/{app_id}/channels/{conversation_id}";
+    /// The bot API: `Authorization: Bearer lzb_...` (an app's token), not a session.
+    pub const BOT_ME_ROUTE: &str = "/v1/bot/me";
+    pub const BOT_CONVERSATIONS_ROUTE: &str = "/v1/bot/conversations";
+    pub const BOT_JOIN_ROUTE: &str = "/v1/bot/conversations/{conversation_id}/join";
+    pub const BOT_MESSAGES_ROUTE: &str = "/v1/bot/messages";
     /// `POST` delivers a message through an incoming webhook. Public: the secret in the path is
     /// the only credential, so it carries no `Authorization` header.
     pub const HOOK_ROUTE: &str = "/hooks/{webhook_id}/{secret}";
@@ -341,6 +355,26 @@ pub mod paths {
 
     pub fn connector_subscription(subscription_id: lazy_domain::ConnectorSubscriptionId) -> String {
         format!("/v1/connector-subscriptions/{subscription_id}")
+    }
+
+    pub fn apps(workspace_id: WorkspaceId) -> String {
+        format!("/v1/workspaces/{workspace_id}/apps")
+    }
+
+    pub fn app(app_id: lazy_domain::AppId) -> String {
+        format!("/v1/apps/{app_id}")
+    }
+
+    pub fn app_token(app_id: lazy_domain::AppId) -> String {
+        format!("/v1/apps/{app_id}/token")
+    }
+
+    pub fn app_channel(app_id: lazy_domain::AppId, conversation_id: ConversationId) -> String {
+        format!("/v1/apps/{app_id}/channels/{conversation_id}")
+    }
+
+    pub fn bot_join(conversation_id: ConversationId) -> String {
+        format!("/v1/bot/conversations/{conversation_id}/join")
     }
 
     pub fn connector_delivery_retry(delivery_id: i64) -> String {
@@ -1235,6 +1269,91 @@ pub struct GithubStatusResponse {
     pub subscriptions: Vec<GithubSubscription>,
     /// The newest deliveries first, at most 50.
     pub deliveries: Vec<GithubDelivery>,
+}
+
+/// A channel an app's bot is in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppChannel {
+    pub conversation_id: ConversationId,
+    pub name: ChannelName,
+}
+
+/// An app of the workspace (D35): a bot, and the token a program uses as it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct App {
+    pub id: lazy_domain::AppId,
+    pub name: String,
+    pub bot_user_id: UserId,
+    pub scopes: Vec<lazy_domain::app::AppScope>,
+    /// The last four characters of the current token, to tell tokens apart. Empty if none.
+    pub token_hint: String,
+    /// The channels its bot is in that the caller can read, by name.
+    pub channels: Vec<AppChannel>,
+    pub created_by: UserId,
+    pub created_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<Timestamp>,
+}
+
+/// Response of `GET /v1/workspaces/{id}/apps`: the apps, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppsResponse {
+    pub apps: Vec<App>,
+}
+
+/// `POST /v1/workspaces/{id}/apps`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateAppRequest {
+    pub name: String,
+    pub scopes: Vec<lazy_domain::app::AppScope>,
+}
+
+/// An app just made or given a new token, with the token: shown once, kept only as a hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreatedAppResponse {
+    pub app: App,
+    pub token: String,
+}
+
+/// `PATCH /v1/apps/{id}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateAppRequest {
+    pub scopes: Vec<lazy_domain::app::AppScope>,
+}
+
+/// `GET /v1/bot/me`: the app the token belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BotMeResponse {
+    pub app_id: lazy_domain::AppId,
+    pub name: String,
+    pub bot_user_id: UserId,
+    pub workspace_id: WorkspaceId,
+    pub scopes: Vec<lazy_domain::app::AppScope>,
+}
+
+/// `GET /v1/bot/conversations` (`channels:read`): the channels the bot is in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BotConversationsResponse {
+    pub conversations: Vec<AppChannel>,
+}
+
+/// `POST /v1/bot/messages` (`chat:write`). `channel` is a conversation id or a channel name
+/// (`deploys` or `#deploys`) the bot is in. The message is `text` in Lazy's syntax, or Slack's
+/// body (`text` as `mrkdwn`, `blocks`, `attachments`; D33); `thread_root` replies in a thread.
+/// An `Idempotency-Key` header makes a retry post once. Rate-limited per app (`Retry-After`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostBotMessageRequest {
+    pub channel: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_root: Option<MessageId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BotMessageResponse {
+    pub message_id: MessageId,
+    pub conversation_id: ConversationId,
 }
 
 /// A webhook connector of the workspace (D34): where the provider posts, and whether the signing

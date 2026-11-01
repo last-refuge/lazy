@@ -140,6 +140,17 @@ pub fn router(state: AppState) -> Router {
         )
         .route(paths::CONNECTOR_DELIVERY_RETRY_ROUTE, post(connector_retry))
         .route(paths::CONNECTOR_WEBHOOK_ROUTE, post(connector_webhook))
+        .route(paths::APPS_ROUTE, get(apps_list).post(apps_create))
+        .route(paths::APP_ROUTE, patch(app_update).delete(app_delete))
+        .route(paths::APP_TOKEN_ROUTE, post(app_new_token))
+        .route(
+            paths::APP_CHANNEL_ROUTE,
+            put(app_add_channel).delete(app_remove_channel),
+        )
+        .route(paths::BOT_ME_ROUTE, get(bot_me))
+        .route(paths::BOT_CONVERSATIONS_ROUTE, get(bot_conversations))
+        .route(paths::BOT_JOIN_ROUTE, post(bot_join))
+        .route(paths::BOT_MESSAGES_ROUTE, post(bot_post))
         .route(paths::HOOK_ROUTE, post(incoming_webhook))
         .route(
             paths::EMOJI_ROUTE,
@@ -603,6 +614,132 @@ async fn connector_retry(
 ) -> Result<StatusCode, AppError> {
     crate::connectors::retry_delivery(&state, principal.user_id, delivery_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ----- Apps and the bot API (D35) -----
+
+async fn apps_list(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(workspace_id): ApiPath<WorkspaceId>,
+) -> Result<Json<lazy_protocol::AppsResponse>, AppError> {
+    let apps = crate::apps::list(&state, principal.user_id, workspace_id).await?;
+    Ok(Json(lazy_protocol::AppsResponse { apps }))
+}
+
+async fn apps_create(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(workspace_id): ApiPath<WorkspaceId>,
+    ApiJson(request): ApiJson<lazy_protocol::CreateAppRequest>,
+) -> Result<Json<lazy_protocol::CreatedAppResponse>, AppError> {
+    crate::apps::create(&state, principal.user_id, workspace_id, request)
+        .await
+        .map(Json)
+}
+
+async fn app_update(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(app_id): ApiPath<lazy_domain::AppId>,
+    ApiJson(request): ApiJson<lazy_protocol::UpdateAppRequest>,
+) -> Result<Json<lazy_protocol::App>, AppError> {
+    crate::apps::set_scopes(&state, principal.user_id, app_id, &request.scopes)
+        .await
+        .map(Json)
+}
+
+async fn app_delete(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(app_id): ApiPath<lazy_domain::AppId>,
+) -> Result<StatusCode, AppError> {
+    crate::apps::delete(&state, principal.user_id, app_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn app_new_token(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(app_id): ApiPath<lazy_domain::AppId>,
+) -> Result<Json<lazy_protocol::CreatedAppResponse>, AppError> {
+    crate::apps::new_token_for(&state, principal.user_id, app_id)
+        .await
+        .map(Json)
+}
+
+async fn app_add_channel(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath((app_id, conversation_id)): ApiPath<(lazy_domain::AppId, ConversationId)>,
+) -> Result<Json<lazy_protocol::App>, AppError> {
+    crate::apps::add_channel(&state, principal.user_id, app_id, conversation_id)
+        .await
+        .map(Json)
+}
+
+async fn app_remove_channel(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath((app_id, conversation_id)): ApiPath<(lazy_domain::AppId, ConversationId)>,
+) -> Result<Json<lazy_protocol::App>, AppError> {
+    crate::apps::remove_channel(&state, principal.user_id, app_id, conversation_id)
+        .await
+        .map(Json)
+}
+
+async fn bot_me(BotAuth(bot): BotAuth) -> Json<lazy_protocol::BotMeResponse> {
+    Json(crate::apps::me(&bot))
+}
+
+async fn bot_conversations(
+    State(state): State<AppState>,
+    BotAuth(bot): BotAuth,
+) -> Result<Json<lazy_protocol::BotConversationsResponse>, AppError> {
+    crate::apps::conversations_of(&state, &bot).await.map(Json)
+}
+
+async fn bot_join(
+    State(state): State<AppState>,
+    BotAuth(bot): BotAuth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+) -> Result<StatusCode, AppError> {
+    crate::apps::join(&state, &bot, conversation_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/bot/messages`: rate-limited per app before the body is read; the body is Lazy's
+/// `{channel, text}` or Slack's, as JSON or a `payload` form.
+async fn bot_post(
+    State(state): State<AppState>,
+    BotAuth(bot): BotAuth,
+    headers: HeaderMap,
+    body: axum::body::Body,
+) -> Result<Json<lazy_protocol::BotMessageResponse>, HookFailure> {
+    if let Err(refused) = state
+        .integrations
+        .app_limiter
+        .take(crate::apps::limiter_key(bot.app_id))
+    {
+        return Err(HookFailure::RateLimited(refused.wait));
+    }
+    let bytes = axum::body::to_bytes(body, MAX_WEBHOOK_BODY_BYTES)
+        .await
+        .map_err(|_| {
+            AppError::new(
+                ErrorCode::PayloadTooLarge,
+                format!("the body can be at most {MAX_WEBHOOK_BODY_BYTES} bytes"),
+            )
+        })?;
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    let body = crate::slack_compat::parse_body(content_type, &bytes).ok_or_else(|| {
+        AppError::invalid("the body must be JSON like {\"channel\": \"...\", \"text\": \"...\"}")
+    })?;
+    Ok(Json(
+        crate::apps::post_message(&state, &bot, &headers, &body).await?,
+    ))
 }
 
 /// A provider's signed deliveries. Public: each is checked against the connection's secret.
@@ -1393,6 +1530,33 @@ impl FromRequestParts<AppState> for Auth {
             info.note_user(principal.user_id);
         }
         Ok(Auth(principal))
+    }
+}
+
+/// An app's bot token (`Authorization: Bearer lzb_...`, D35). A session token is refused here, as
+/// a bot token is refused by [`Auth`].
+pub struct BotAuth(pub crate::apps::BotPrincipal);
+
+impl FromRequestParts<AppState> for BotAuth {
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, AppError> {
+        let header = parts
+            .headers
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(AppError::unauthenticated)?;
+        let (scheme, token) = header
+            .split_once(' ')
+            .ok_or_else(AppError::unauthenticated)?;
+        if !scheme.eq_ignore_ascii_case("bearer") {
+            return Err(AppError::unauthenticated());
+        }
+        let bot = crate::apps::authenticate(&state.pool, token.trim()).await?;
+        if let Some(info) = parts.extensions.get::<logging::RequestInfo>() {
+            info.note_user(bot.bot_user_id);
+        }
+        Ok(BotAuth(bot))
     }
 }
 

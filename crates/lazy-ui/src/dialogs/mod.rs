@@ -4,6 +4,7 @@
 //! performs I/O.
 
 mod add_workspace;
+mod apps_panel;
 mod browse;
 mod connector_panel;
 mod create_channel;
@@ -25,6 +26,7 @@ mod workspace_integrations;
 mod workspace_settings;
 
 pub use add_workspace::{AddWorkspaceDialog, Way};
+pub use apps_panel::{AppsPanel, AppsPanelEvent, AppsView};
 pub use browse::BrowseChannelsDialog;
 pub use connector_panel::{ConnectorPanel, ConnectorPanelEvent, ConnectorView};
 pub use create_channel::CreateChannelDialog;

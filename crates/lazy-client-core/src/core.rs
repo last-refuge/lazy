@@ -28,6 +28,7 @@ use crate::timeline::{DeletedRoot, Timeline};
 use threads::Home;
 
 mod admin;
+mod apps;
 mod attachments;
 mod connectors;
 mod conversations;
@@ -254,6 +255,10 @@ pub struct ClientCore {
         (WorkspaceId, lazy_domain::connector::ConnectorProvider),
         lazy_protocol::ConnectorStatusResponse,
     >,
+    /// The apps of each workspace, as last loaded (D35).
+    apps: HashMap<WorkspaceId, Vec<lazy_protocol::App>>,
+    /// A token just made, for its app, until dismissed. Never cached or saved.
+    app_token: Option<(lazy_domain::AppId, crate::model::SecretUrl)>,
     /// A signing secret Lazy just made, for its provider, until dismissed. Never cached or saved.
     connector_secret: Option<(
         lazy_domain::connector::ConnectorProvider,
@@ -405,6 +410,8 @@ impl ClientCore {
             github_setup_url: None,
             connectors: HashMap::new(),
             connector_secret: None,
+            apps: HashMap::new(),
+            app_token: None,
             created_webhook: None,
             draft_selections: HashMap::new(),
             thread_selections: HashMap::new(),
@@ -721,6 +728,21 @@ impl ClientCore {
                 workspace,
                 provider,
             } => self.disconnect_connector(workspace, provider, &mut out),
+            Input::LoadApps(workspace) => self.load_apps(workspace, &mut out),
+            Input::CreateApp {
+                workspace,
+                name,
+                scopes,
+            } => self.create_app(workspace, &name, scopes, &mut out),
+            Input::NewAppToken(app) => self.new_app_token(app, &mut out),
+            Input::UpdateAppScopes { app, scopes } => self.update_app_scopes(app, scopes, &mut out),
+            Input::SetAppChannel {
+                app,
+                conversation,
+                add,
+            } => self.set_app_channel(app, conversation, add, &mut out),
+            Input::DeleteApp(app) => self.delete_app(app, &mut out),
+            Input::DismissAppToken => self.dismiss_app_token(&mut out),
             Input::DismissCreatedWebhook => self.dismiss_created_webhook(&mut out),
             Input::SetDraftSelection {
                 conversation,

@@ -280,6 +280,35 @@ pub enum Effect {
         workspace: WorkspaceId,
         provider: lazy_domain::connector::ConnectorProvider,
     },
+    /// Read the workspace's apps. Answered with `ActionOutcome::Apps`. Idempotent.
+    LoadApps {
+        workspace: WorkspaceId,
+    },
+    /// Make an app. Answered with `ActionOutcome::AppToken`. One attempt: a repeat would make a
+    /// second app.
+    CreateApp {
+        workspace: WorkspaceId,
+        request: lazy_protocol::CreateAppRequest,
+    },
+    /// New token. Answered with `ActionOutcome::AppToken`. One attempt.
+    NewAppToken {
+        app: lazy_domain::AppId,
+    },
+    /// Answered with `ActionOutcome::App`. Idempotent.
+    UpdateAppScopes {
+        app: lazy_domain::AppId,
+        request: lazy_protocol::UpdateAppRequest,
+    },
+    /// Answered with `ActionOutcome::App`. Idempotent.
+    SetAppChannel {
+        app: lazy_domain::AppId,
+        conversation: ConversationId,
+        add: bool,
+    },
+    /// Idempotent.
+    DeleteApp {
+        app: lazy_domain::AppId,
+    },
     /// Save what the person was looking at, replacing the previous save. The runtime may
     /// debounce.
     PersistView(ViewState),

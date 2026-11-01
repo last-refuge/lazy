@@ -17,6 +17,7 @@ const ALLOWED_FIELDS: &[&str] = &[
     "job_id",
     "github_app_id",
     "connector_id",
+    "app_id",
     // a webhook connector's provider: a fixed name (`linear`, `jira`)
     "provider",
     // counters, sizes, durations

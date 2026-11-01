@@ -38,6 +38,7 @@ use lazy_domain::{ConversationId, ConversationKind, MAX_WEBHOOKS_PER_CONVERSATIO
 use lazy_domain::{MAX_WEBHOOK_DELIVERIES_KEPT, WorkspaceId};
 use lazy_protocol::{WebhookDelivery, WebhookDeliveryOutcome, WorkspaceWebhook};
 
+use super::apps_panel::{AppsPanel, AppsPanelEvent};
 use super::connector_panel::{ConnectorPanel, ConnectorPanelEvent};
 use super::github_panel::{GithubPanel, GithubPanelEvent};
 use super::{any_composing, single_line_field};
@@ -68,6 +69,8 @@ pub enum IntegrationsView {
     Github,
     /// A webhook connector (D34), drawn by [`ConnectorPanel`].
     Connector(ConnectorProvider),
+    /// Apps with bot tokens (D35), drawn by [`AppsPanel`].
+    Apps,
 }
 
 pub struct IntegrationsDialog {
@@ -107,6 +110,9 @@ pub struct IntegrationsDialog {
     connector_focus: HashMap<ConnectorProvider, FocusHandle>,
     /// Each connector's view, made the first time it is opened.
     connectors: HashMap<ConnectorProvider, Entity<ConnectorPanel>>,
+    apps_focus: FocusHandle,
+    /// The apps view, made the first time it is opened.
+    apps: Option<Entity<AppsPanel>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -169,6 +175,7 @@ impl IntegrationsDialog {
                     cx,
                 );
             }
+            model.dispatch(Input::LoadApps(workspace), cx);
         });
         let mut trap = ModalTrap::new(cx);
         let add_focus = cx.focus_handle().tab_stop(true);
@@ -207,6 +214,8 @@ impl IntegrationsDialog {
                 .map(|p| (p, cx.focus_handle().tab_stop(true)))
                 .collect(),
             connectors: HashMap::new(),
+            apps_focus: cx.focus_handle().tab_stop(true),
+            apps: None,
             _subscriptions: subscriptions,
         }
     }
@@ -522,6 +531,53 @@ impl IntegrationsDialog {
         cx.notify();
     }
 
+    /// Opens the apps view (making it the first time).
+    pub fn open_apps(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = match &self.apps {
+            Some(panel) => {
+                let workspace = self.workspace;
+                self.model.update(cx, |model, cx| {
+                    model.dispatch(Input::LoadApps(workspace), cx)
+                });
+                panel.clone()
+            }
+            None => {
+                let model = self.model.clone();
+                let workspace = self.workspace;
+                let panel = cx.new(|cx| AppsPanel::new(model, workspace, window, cx));
+                let events = cx.subscribe_in(
+                    &panel,
+                    window,
+                    |this, _panel, event: &AppsPanelEvent, window, cx| match event {
+                        AppsPanelEvent::Tab { backwards } => this.trap.tab(*backwards, window, cx),
+                        AppsPanelEvent::Leave => this.leave_apps(window, cx),
+                    },
+                );
+                self._subscriptions.push(events);
+                self.apps = Some(panel.clone());
+                panel
+            }
+        };
+        self.view = IntegrationsView::Apps;
+        let focus = panel.read(cx).first_focus();
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn leave_apps(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.apps.clone() {
+            panel.update(cx, |panel, cx| panel.forget_token(cx));
+        }
+        self.view = IntegrationsView::List;
+        window.focus(&self.apps_focus, cx);
+        cx.notify();
+    }
+
+    /// The apps view, while it exists. For tests.
+    pub fn apps_panel(&self) -> Option<Entity<AppsPanel>> {
+        self.apps.clone()
+    }
+
     /// A connector's view, while it exists. For tests.
     pub fn connector_panel(&self, provider: ConnectorProvider) -> Option<Entity<ConnectorPanel>> {
         self.connectors.get(&provider).cloned()
@@ -548,6 +604,15 @@ impl IntegrationsDialog {
             }
             return;
         }
+        if self.view == IntegrationsView::Apps {
+            let Some(panel) = self.apps.clone() else {
+                return self.show_list(window, cx);
+            };
+            if !panel.update(cx, |panel, cx| panel.back(window, cx)) {
+                self.leave_apps(window, cx);
+            }
+            return;
+        }
         if let IntegrationsView::Connector(provider) = self.view {
             let Some(panel) = self.connectors.get(&provider).cloned() else {
                 return self.show_list(window, cx);
@@ -564,7 +629,7 @@ impl IntegrationsDialog {
             IntegrationsView::ConfirmNewAddress(id) | IntegrationsView::ConfirmDelete(id) => {
                 self.open_details(id, window, cx)
             }
-            IntegrationsView::Github | IntegrationsView::Connector(_) => {}
+            IntegrationsView::Github | IntegrationsView::Connector(_) | IntegrationsView::Apps => {}
         }
     }
 
@@ -581,6 +646,10 @@ impl IntegrationsDialog {
         for panel in self.connectors.values() {
             kinds.extend(panel.read(cx).kinds());
             panel.update(cx, |panel, cx| panel.forget_secret(cx));
+        }
+        if let Some(panel) = &self.apps {
+            kinds.extend(panel.read(cx).kinds());
+            panel.update(cx, |panel, cx| panel.forget_token(cx));
         }
         for id in self.manage_focus.keys() {
             kinds.push(ActionKind::NewWebhookAddress(*id));
@@ -796,6 +865,71 @@ impl IntegrationsDialog {
                 move |window, cx| {
                     open_to
                         .update(cx, |dialog, cx| dialog.open_github(window, cx))
+                        .ok();
+                },
+            ))
+            .into_any_element()
+    }
+
+    /// The apps card in the list: how many, and the way in.
+    fn apps_card(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme.colors;
+        let count = self
+            .model
+            .read(cx)
+            .core()
+            .apps(self.workspace)
+            .map(<[lazy_protocol::App]>::len);
+        let line = match count {
+            None | Some(0) => {
+                "Bots with tokens that post through Lazy's API, in its format or Slack's."
+                    .to_owned()
+            }
+            Some(1) => "1 app".to_owned(),
+            Some(n) => format!("{n} apps"),
+        };
+        let open_to = cx.entity().downgrade();
+        div()
+            .debug_selector(|| "apps-card".into())
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_2()
+            .rounded(theme.radii.medium)
+            .border_1()
+            .border_color(colors.border)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_size(theme.type_scale.body)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.text)
+                            .child("Apps and bots"),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "apps-card-status".into())
+                            .text_size(theme.type_scale.small)
+                            .text_color(colors.text_muted)
+                            .child(line),
+                    ),
+            )
+            .child(form::button(
+                theme,
+                "apps-open-panel",
+                "Manage…",
+                ButtonKind::Secondary,
+                true,
+                &self.apps_focus,
+                move |window, cx| {
+                    open_to
+                        .update(cx, |dialog, cx| dialog.open_apps(window, cx))
                         .ok();
                 },
             ))
@@ -1044,6 +1178,7 @@ impl IntegrationsDialog {
                     .into_iter()
                     .map(|provider| self.connector_card(provider, theme, cx)),
             )
+            .child(self.apps_card(theme, cx))
             .child(
                 div()
                     .text_size(theme.type_scale.small)
@@ -1792,6 +1927,10 @@ impl Render for IntegrationsDialog {
                 None => self.list_view(&theme, cx),
             },
             IntegrationsView::Connector(provider) => match self.connectors.get(&provider) {
+                Some(panel) => panel.clone().into_any_element(),
+                None => self.list_view(&theme, cx),
+            },
+            IntegrationsView::Apps => match &self.apps {
                 Some(panel) => panel.clone().into_any_element(),
                 None => self.list_view(&theme, cx),
             },

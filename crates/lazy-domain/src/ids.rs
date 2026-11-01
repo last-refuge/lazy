@@ -90,6 +90,11 @@ uuid_id!(
     Uuid::now_v7()
 );
 uuid_id!(
+    /// An app: a bot a workspace admin made, with a token for Lazy's bot API (D35).
+    AppId,
+    Uuid::now_v7()
+);
+uuid_id!(
     /// A webhook connector's subscription: one team's or project's activity followed in one
     /// channel (D34).
     ConnectorSubscriptionId,

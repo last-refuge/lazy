@@ -311,6 +311,10 @@ fn every_dialog(world: &World) -> Vec<ShellDialog> {
 /// The source files in `src/dialogs`, each with what covers it here.
 const DIALOG_FILES: &[(&str, &str)] = &[
     ("add_workspace", "ShellDialog::AddWorkspace"),
+    (
+        "apps_panel",
+        "a view of ShellDialog::Integrations (apps and bots; not a dialog of its own)",
+    ),
     ("browse", "ShellDialog::BrowseChannels"),
     (
         "connector_panel",

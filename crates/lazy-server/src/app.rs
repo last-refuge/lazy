@@ -46,6 +46,8 @@ pub struct Integrations {
     /// Where webhook addresses start, without a trailing slash.
     pub public_url: String,
     pub limiter: WebhookLimiter,
+    /// The same rate per app, for the bot API's posts (D35).
+    pub app_limiter: WebhookLimiter,
     /// See [`crate::SetupCode`].
     pub setup_code: Option<crate::config::SetupCode>,
     /// The keys integration credentials are sealed with (D31).
@@ -278,6 +280,7 @@ pub async fn serve_all(
         integrations: Arc::new(Integrations {
             public_url,
             limiter: WebhookLimiter::new(integrations.webhook_rate),
+            app_limiter: WebhookLimiter::new(integrations.webhook_rate),
             setup_code: integrations.setup_code,
             credentials: integrations.credential_keys,
             jobs: waker,

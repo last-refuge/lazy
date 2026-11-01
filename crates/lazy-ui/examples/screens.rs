@@ -2112,6 +2112,111 @@ fn connector_scene(
     draw(cx, win);
 }
 
+/// The sample apps' ids, the same in every call.
+fn sample_app_ids() -> (lazy_domain::AppId, lazy_domain::AppId) {
+    static IDS: std::sync::OnceLock<(lazy_domain::AppId, lazy_domain::AppId)> =
+        std::sync::OnceLock::new();
+    *IDS.get_or_init(|| {
+        (
+            lazy_domain::AppId::generate(),
+            lazy_domain::AppId::generate(),
+        )
+    })
+}
+
+/// Two apps: one in #engineering, one in no channel.
+fn sample_apps(cast: &Cast) -> Vec<lazy_protocol::App> {
+    use lazy_domain::app::AppScope;
+    let ago = |minutes: i64| {
+        Timestamp::from(time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes))
+    };
+    vec![
+        lazy_protocol::App {
+            id: sample_app_ids().0,
+            name: "Deploy bot".into(),
+            bot_user_id: cast.deploy.id,
+            scopes: AppScope::DEFAULT.to_vec(),
+            token_hint: "9c3e".into(),
+            channels: vec![lazy_protocol::AppChannel {
+                conversation_id: cast.engineering,
+                name: ChannelName::parse("engineering").unwrap(),
+            }],
+            created_by: cast.me.id,
+            created_at: ago(60 * 24 * 3),
+            last_used_at: Some(ago(12)),
+        },
+        lazy_protocol::App {
+            id: sample_app_ids().1,
+            name: "Standup reminder".into(),
+            bot_user_id: cast.deploy.id,
+            scopes: vec![AppScope::ChatWrite],
+            token_hint: "41b0".into(),
+            channels: Vec::new(),
+            created_by: cast.me.id,
+            created_at: ago(60 * 5),
+            last_used_at: None,
+        },
+    ]
+}
+
+/// Opens Integrations and its apps view. `stage` 0 shows the list, 1 the first app just made with
+/// its token, 2 making an app.
+fn apps_scene(
+    cx: &mut HeadlessAppContext,
+    model: &Entity<AppModel>,
+    cast: &Cast,
+    win: &WindowHandle<RootView>,
+    stage: u8,
+) {
+    integrations_scene(cx, model, cast, win, Some(workspace_webhooks(cast)));
+    let answer = |cx: &mut HeadlessAppContext| {
+        dispatch(
+            cx,
+            model,
+            Input::ActionResult {
+                kind: ActionKind::LoadApps(cast.workspace),
+                result: Ok(ActionOutcome::Apps(sample_apps(cast))),
+            },
+        );
+    };
+    answer(cx);
+    with_integrations(cx, win, |dialog, window, cx| dialog.open_apps(window, cx));
+    answer(cx);
+    match stage {
+        1 => {
+            let app = sample_apps(cast).remove(0);
+            let id = app.id;
+            dispatch(cx, model, Input::NewAppToken(id));
+            dispatch(
+                cx,
+                model,
+                Input::ActionResult {
+                    kind: ActionKind::NewAppToken(id),
+                    result: Ok(ActionOutcome::AppToken(
+                        Box::new(app),
+                        lazy_client_core::SecretUrl::new(
+                            "lzb_5e2a9d0c71f3b84e6a1c0d9f2b7e3a5c8d1f4b6e9a0c2d5f7b3e1a8c4d6f9c3e"
+                                .to_owned(),
+                        ),
+                    )),
+                },
+            );
+            with_integrations(cx, win, |dialog, window, cx| {
+                if let Some(panel) = dialog.apps_panel() {
+                    panel.update(cx, |panel, cx| panel.show_details(id, window, cx));
+                }
+            });
+        }
+        2 => with_integrations(cx, win, |dialog, window, cx| {
+            if let Some(panel) = dialog.apps_panel() {
+                panel.update(cx, |panel, cx| panel.start_making(window, cx));
+            }
+        }),
+        _ => {}
+    }
+    draw(cx, win);
+}
+
 /// Opens the invitations dialog and answers its request with `result`.
 fn invitations_scene(
     cx: &mut HeadlessAppContext,
@@ -8816,6 +8921,36 @@ fn main() {
                     }
                 });
                 draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4e-01-apps-list-light",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                apps_scene(cx, model, cast, win, 0);
+            },
+        },
+        Scene {
+            name: "4e-02-app-token-dark",
+            width: 1100.0,
+            height: 1100.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                apps_scene(cx, model, cast, win, 1);
+            },
+        },
+        Scene {
+            name: "4e-03-app-making-light",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                apps_scene(cx, model, cast, win, 2);
             },
         },
         Scene {

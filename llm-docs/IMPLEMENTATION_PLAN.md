@@ -354,9 +354,9 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [X] Credential revocation (disconnect revokes all three secrets, D32)
   - [ ] More providers: Linear and Jira as webhook connectors (built and tested against stand-in deliveries, D34; not yet run against the real services); Confluence, Figma, Miro to do
 - [ ] 4.6 Bots and commands
-  - [ ] Bot tokens and scopes
+  - [X] Bot tokens and scopes (apps with `chat:write`, `channels:read`, `channels:join`, D35)
   - [ ] Slash commands
-  - [ ] Posting API with rate limits
+  - [X] Posting API with rate limits (`POST /v1/bot/messages`, Lazy's or Slack's body, per-app rate, D35)
 - [ ] 4.7 Link previews
   - [ ] Fetcher with outbound network restrictions
   - [ ] Authorization recheck and size, time, and redirect bounds

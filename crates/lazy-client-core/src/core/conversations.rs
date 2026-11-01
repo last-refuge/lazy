@@ -404,6 +404,12 @@ impl ClientCore {
                 | ActionKind::DisconnectConnector(..) => {
                     super::connectors::connector_error(kind, error)
                 }
+                ActionKind::LoadApps(_)
+                | ActionKind::CreateApp(_)
+                | ActionKind::NewAppToken(_)
+                | ActionKind::UpdateAppScopes(_)
+                | ActionKind::AppChannel(..)
+                | ActionKind::DeleteApp(_) => super::apps::app_error(kind, error),
                 ActionKind::AddCustomEmoji
                 | ActionKind::RenameCustomEmoji(_)
                 | ActionKind::DeleteCustomEmoji(_) => super::emoji::emoji_error(error),
@@ -1045,6 +1051,15 @@ impl ClientCore {
                 | ActionKind::DisconnectConnector(..),
                 outcome,
             ) => self.connector_action_result(kind, outcome, out),
+            (
+                ActionKind::LoadApps(_)
+                | ActionKind::CreateApp(_)
+                | ActionKind::NewAppToken(_)
+                | ActionKind::UpdateAppScopes(_)
+                | ActionKind::AppChannel(..)
+                | ActionKind::DeleteApp(_),
+                outcome,
+            ) => self.app_action_result(kind, outcome, out),
             (ActionKind::RenameCustomEmoji(_) | ActionKind::DeleteCustomEmoji(_), outcome) => {
                 self.emoji_action_result(kind, outcome, out)
             }

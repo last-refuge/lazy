@@ -657,3 +657,29 @@ Goal: Linear and Jira post their activity into channels, set up by an admin from
 
 **Not yet:** link previews for Linear and Jira addresses (4.7), acting on the provider (no API calls are made), Confluence (its Cloud edition has no admin webhook screen; to be decided), and a check that a webhook is set up beyond deliveries arriving.
 
+## D35. Apps with bot tokens, and the bot API (Phase 4, task 4.6)
+
+Goal: a program can act as a bot in Lazy, the way a Slack app does with a bot token, set up by an admin from Integrations alone. It is the base for slash commands, automation tools (Zapier, n8n, Make), and an AI assistant. No protocol bump: only endpoints and types are added.
+
+**Apps.** An admin or owner makes an app in Integrations, Apps and bots (`POST /v1/workspaces/{id}/apps {name, scopes}`). It is a bot user named after the app (APP badge, cannot sign in, as D16) and a token, `lzb_` and 64 hex digits. The token is answered once, and only its SHA-256 and last four characters are kept. A new token (`POST /v1/apps/{id}/token`) replaces the old at once. Deleting (`DELETE /v1/apps/{id}`) stops the token and takes the bot out of every channel; the bot user stays so what it posted keeps its author. A workspace has at most 50 apps.
+
+**Scopes** (named as Slack's): `chat:write` (post and reply in its channels), `channels:read` (list them), `channels:join` (join a public channel by itself). New apps get the first two. Changing them (`PATCH /v1/apps/{id}`) applies to the token's next request.
+
+**Channels.** The admin adds the bot to channels from the app's screen (`PUT`/`DELETE /v1/apps/{id}/channels/{conversation}`), announced as any member added. With `channels:join` the bot can join public channels itself. A private channel it is not in is `not_found` to it, joining or posting.
+
+**The bot API** (`Authorization: Bearer lzb_...`). A bot token is not a session: the ordinary API refuses it, and the bot API refuses sessions, all as `unauthenticated`.
+- `GET /v1/bot/me`: the app, its bot, its workspace and scopes.
+- `GET /v1/bot/conversations`: its channels.
+- `POST /v1/bot/conversations/{id}/join`.
+- `POST /v1/bot/messages`:
+  - `channel` is an id, or the name of a channel it is in;
+  - the message is Lazy's `text` or Slack's body (`mrkdwn`, `blocks`, `attachments`, read as D33), as JSON or a `payload` form;
+  - `thread_root` (or Slack's `thread_ts`, as a message id) replies in a thread;
+  - an `Idempotency-Key` makes a retry post once (its operation id is derived from the app and the key);
+  - each app has its own rate limit, with the webhook rate (D16); over it is `429` with `Retry-After`;
+  - mentions are text and notify nobody, and attachments are not taken, as for a webhook.
+
+`last_used_at` is updated at most once a minute, to tell an idle token without a write per request.
+
+**Not yet:** slash commands (next, D36), reading messages or receiving events, user tokens, OAuth installation for apps made elsewhere, and per-scope rate limits.
+
