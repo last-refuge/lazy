@@ -1,5 +1,6 @@
 //! Request and response bodies for the HTTP API, and the route table.
 
+use lazy_domain::connector::ConnectorProvider;
 use lazy_domain::notification::{
     ConversationNotificationPrefs, NotificationSettings, NotifyLevel, UserStatus,
 };
@@ -16,6 +17,7 @@ use crate::{InviteCode, Password, SessionToken};
 
 /// Route paths. `*_ROUTE` constants are Axum route patterns; the functions build concrete paths.
 pub mod paths {
+    use lazy_domain::connector::ConnectorProvider;
     use lazy_domain::{
         AttachmentId, ConversationId, EmojiId, GroupId, InvitationId, MessageId, OperationId,
         UserId, WebhookId, WorkspaceId,
@@ -124,6 +126,22 @@ pub mod paths {
     pub const GITHUB_CALLBACK_ROUTE: &str = "/github/callback";
     pub const GITHUB_INSTALLED_ROUTE: &str = "/github/installed";
     pub const GITHUB_WEBHOOK_ROUTE: &str = "/github/webhook";
+    /// `GET` a webhook connector's status (D34); `POST` connects it (making its address and bot);
+    /// `DELETE` disconnects it. Admins and owners only. `{provider}` is `linear` or `jira`.
+    pub const CONNECTOR_ROUTE: &str = "/v1/workspaces/{workspace_id}/connectors/{provider}";
+    /// `PUT` sets the connector's signing secret (one the provider made); `POST` makes a new one
+    /// (for a provider whose form takes Lazy's), answered once.
+    pub const CONNECTOR_SECRET_ROUTE: &str =
+        "/v1/workspaces/{workspace_id}/connectors/{provider}/secret";
+    /// `POST` subscribes a channel to a team's or project's activity (or changes what it follows).
+    pub const CONNECTOR_SUBSCRIPTIONS_ROUTE: &str =
+        "/v1/conversations/{conversation_id}/connectors/{provider}/subscriptions";
+    /// `DELETE` removes a connector subscription.
+    pub const CONNECTOR_SUBSCRIPTION_ROUTE: &str = "/v1/connector-subscriptions/{subscription_id}";
+    /// `POST` runs a failed or unknown connector delivery again.
+    pub const CONNECTOR_DELIVERY_RETRY_ROUTE: &str = "/v1/connector-deliveries/{delivery_id}/retry";
+    /// Where a provider posts its signed deliveries. Public; not part of the API.
+    pub const CONNECTOR_WEBHOOK_ROUTE: &str = "/connectors/{provider}/{connector_id}";
     /// `POST` delivers a message through an incoming webhook. Public: the secret in the path is
     /// the only credential, so it carries no `Authorization` header.
     pub const HOOK_ROUTE: &str = "/hooks/{webhook_id}/{secret}";
@@ -295,6 +313,38 @@ pub mod paths {
 
     pub fn github_delivery_retry(delivery_id: i64) -> String {
         format!("/v1/github/deliveries/{delivery_id}/retry")
+    }
+
+    pub fn connector(workspace_id: WorkspaceId, provider: ConnectorProvider) -> String {
+        format!(
+            "/v1/workspaces/{workspace_id}/connectors/{}",
+            provider.as_str()
+        )
+    }
+
+    pub fn connector_secret(workspace_id: WorkspaceId, provider: ConnectorProvider) -> String {
+        format!(
+            "/v1/workspaces/{workspace_id}/connectors/{}/secret",
+            provider.as_str()
+        )
+    }
+
+    pub fn connector_subscriptions(
+        conversation_id: ConversationId,
+        provider: ConnectorProvider,
+    ) -> String {
+        format!(
+            "/v1/conversations/{conversation_id}/connectors/{}/subscriptions",
+            provider.as_str()
+        )
+    }
+
+    pub fn connector_subscription(subscription_id: lazy_domain::ConnectorSubscriptionId) -> String {
+        format!("/v1/connector-subscriptions/{subscription_id}")
+    }
+
+    pub fn connector_delivery_retry(delivery_id: i64) -> String {
+        format!("/v1/connector-deliveries/{delivery_id}/retry")
     }
 
     pub fn hook(webhook_id: WebhookId, secret: &str) -> String {
@@ -1185,6 +1235,93 @@ pub struct GithubStatusResponse {
     pub subscriptions: Vec<GithubSubscription>,
     /// The newest deliveries first, at most 50.
     pub deliveries: Vec<GithubDelivery>,
+}
+
+/// A webhook connector of the workspace (D34): where the provider posts, and whether the signing
+/// secret is set yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorConnection {
+    /// The address to paste into the provider's webhook form. Not a secret: deliveries are
+    /// checked against the signing secret.
+    pub webhook_url: String,
+    /// Whether a signing secret is set. Until it is, deliveries are refused.
+    pub secret_set: bool,
+    /// The bot that posts what the provider sends, named after it.
+    pub bot_user_id: UserId,
+    pub created_by: UserId,
+    pub created_at: Timestamp,
+}
+
+/// One team's or project's activity followed in one channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorSubscription {
+    pub id: lazy_domain::ConnectorSubscriptionId,
+    pub conversation_id: ConversationId,
+    /// The channel's name (an admin may not have joined it).
+    pub channel_name: ChannelName,
+    /// The team or project key, upper case; empty follows everything the webhook sends.
+    pub scope: String,
+    /// Kinds of activity, as [`ConnectorProvider::kinds`] names them.
+    pub events: Vec<String>,
+    pub created_by: UserId,
+    pub created_at: Timestamp,
+}
+
+/// One delivery from a provider, as Lazy handled it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorDelivery {
+    pub id: i64,
+    /// What it was, in a few words ("ENG-12 status change").
+    pub summary: String,
+    /// The team or project key it belongs to, if any.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scope: String,
+    pub state: GithubDeliveryState,
+    pub attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    pub received_at: Timestamp,
+}
+
+/// Response of `GET /v1/workspaces/{id}/connectors/{provider}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorStatusResponse {
+    pub provider: ConnectorProvider,
+    /// Whether this server can hold a signing secret (it has a credentials key, D31).
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectorConnection>,
+    /// Subscriptions in channels the caller can read, by channel then scope.
+    pub subscriptions: Vec<ConnectorSubscription>,
+    /// The newest deliveries first, at most 50.
+    pub deliveries: Vec<ConnectorDelivery>,
+}
+
+/// `PUT /v1/workspaces/{id}/connectors/{provider}/secret`: the signing secret the provider made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetConnectorSecretRequest {
+    pub secret: String,
+}
+
+/// Answer of `POST /v1/workspaces/{id}/connectors/{provider}/secret`: a new secret Lazy made, to
+/// paste into the provider's form. Shown once; Lazy keeps it sealed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorSecretResponse {
+    pub secret: String,
+}
+
+/// `POST /v1/conversations/{id}/connectors/{provider}/subscriptions`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateConnectorSubscriptionRequest {
+    /// A team or project key (or an address holding one); empty follows everything.
+    #[serde(default)]
+    pub scope: String,
+    pub events: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorSubscriptionResponse {
+    pub subscription: ConnectorSubscription,
 }
 
 /// `POST /v1/workspaces/{id}/github/setup`: starts connecting GitHub. The app is created in

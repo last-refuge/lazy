@@ -228,6 +228,70 @@ impl fmt::Debug for Input {
                 .field("delivery", delivery)
                 .finish(),
             Input::DisconnectGithub(v0) => f.debug_tuple("DisconnectGithub").field(v0).finish(),
+            Input::LoadConnector {
+                workspace,
+                provider,
+            } => f
+                .debug_struct("LoadConnector")
+                .field("workspace", workspace)
+                .field("provider", provider)
+                .finish(),
+            Input::ConnectConnector {
+                workspace,
+                provider,
+            } => f
+                .debug_struct("ConnectConnector")
+                .field("workspace", workspace)
+                .field("provider", provider)
+                .finish(),
+            Input::SetConnectorSecret {
+                workspace,
+                provider,
+                ..
+            } => f
+                .debug_struct("SetConnectorSecret")
+                .field("workspace", workspace)
+                .field("provider", provider)
+                .finish_non_exhaustive(),
+            Input::GenerateConnectorSecret {
+                workspace,
+                provider,
+            } => f
+                .debug_struct("GenerateConnectorSecret")
+                .field("workspace", workspace)
+                .field("provider", provider)
+                .finish(),
+            Input::DismissConnectorSecret => f.write_str("DismissConnectorSecret"),
+            Input::ConnectorSubscribe {
+                conversation,
+                provider,
+                events,
+                ..
+            } => f
+                .debug_struct("ConnectorSubscribe")
+                .field("conversation", conversation)
+                .field("provider", provider)
+                .field("events", events)
+                .finish_non_exhaustive(),
+            Input::ConnectorUnsubscribe(v0) => {
+                f.debug_tuple("ConnectorUnsubscribe").field(v0).finish()
+            }
+            Input::RetryConnectorDelivery {
+                workspace,
+                delivery,
+            } => f
+                .debug_struct("RetryConnectorDelivery")
+                .field("workspace", workspace)
+                .field("delivery", delivery)
+                .finish(),
+            Input::DisconnectConnector {
+                workspace,
+                provider,
+            } => f
+                .debug_struct("DisconnectConnector")
+                .field("workspace", workspace)
+                .field("provider", provider)
+                .finish(),
             Input::DismissCreatedWebhook => f.write_str("DismissCreatedWebhook"),
             Input::SetDraftSelection {
                 conversation,

@@ -238,6 +238,48 @@ pub enum Effect {
     DisconnectGithub {
         workspace: WorkspaceId,
     },
+    /// Read a connector's status. Answered with `ActionOutcome::Connector`. Idempotent.
+    LoadConnector {
+        workspace: WorkspaceId,
+        provider: lazy_domain::connector::ConnectorProvider,
+    },
+    /// Connect a connector. Answered with `ActionOutcome::Connector`. Idempotent (connected
+    /// already answers the connection).
+    ConnectConnector {
+        workspace: WorkspaceId,
+        provider: lazy_domain::connector::ConnectorProvider,
+    },
+    /// Set a connector's signing secret. Answered with `ActionOutcome::Done`. Idempotent.
+    SetConnectorSecret {
+        workspace: WorkspaceId,
+        provider: lazy_domain::connector::ConnectorProvider,
+        secret: crate::model::SecretUrl,
+    },
+    /// Make a new signing secret. Answered with `ActionOutcome::ConnectorSecret`. One attempt:
+    /// each answer replaces the last secret.
+    GenerateConnectorSecret {
+        workspace: WorkspaceId,
+        provider: lazy_domain::connector::ConnectorProvider,
+    },
+    /// Subscribe a channel. Answered with `ActionOutcome::Done`. Idempotent.
+    ConnectorSubscribe {
+        conversation: ConversationId,
+        provider: lazy_domain::connector::ConnectorProvider,
+        request: lazy_protocol::CreateConnectorSubscriptionRequest,
+    },
+    /// Remove a subscription. Idempotent.
+    ConnectorUnsubscribe {
+        subscription: lazy_domain::ConnectorSubscriptionId,
+    },
+    /// Run a delivery again. One attempt.
+    RetryConnectorDelivery {
+        delivery: i64,
+    },
+    /// Disconnect a connector. Idempotent.
+    DisconnectConnector {
+        workspace: WorkspaceId,
+        provider: lazy_domain::connector::ConnectorProvider,
+    },
     /// Save what the person was looking at, replacing the previous save. The runtime may
     /// debounce.
     PersistView(ViewState),

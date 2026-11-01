@@ -5,6 +5,7 @@
 
 mod add_workspace;
 mod browse;
+mod connector_panel;
 mod create_channel;
 mod custom_emoji;
 mod delete_message;
@@ -25,6 +26,7 @@ mod workspace_settings;
 
 pub use add_workspace::{AddWorkspaceDialog, Way};
 pub use browse::BrowseChannelsDialog;
+pub use connector_panel::{ConnectorPanel, ConnectorPanelEvent, ConnectorView};
 pub use create_channel::CreateChannelDialog;
 pub use custom_emoji::CustomEmojiDialog;
 pub use delete_message::DeleteMessageDialog;

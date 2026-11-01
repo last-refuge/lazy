@@ -90,6 +90,12 @@ uuid_id!(
     Uuid::now_v7()
 );
 uuid_id!(
+    /// A webhook connector's subscription: one team's or project's activity followed in one
+    /// channel (D34).
+    ConnectorSubscriptionId,
+    Uuid::now_v7()
+);
+uuid_id!(
     /// An invitation to join a workspace. Assigned by the server; it names the invitation, and the
     /// separate code is what a person types.
     InvitationId,

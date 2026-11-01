@@ -261,6 +261,8 @@ impl ClientCore {
     pub(super) fn clear_webhooks(&mut self) {
         self.github.clear();
         self.github_setup_url = None;
+        self.connectors.clear();
+        self.connector_secret = None;
         self.webhook_lists.clear();
         self.workspace_webhooks.clear();
         self.webhook_deliveries.clear();

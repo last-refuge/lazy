@@ -29,6 +29,7 @@ use threads::Home;
 
 mod admin;
 mod attachments;
+mod connectors;
 mod conversations;
 mod diagnostics;
 mod discovery;
@@ -248,6 +249,16 @@ pub struct ClientCore {
     github: HashMap<WorkspaceId, lazy_protocol::GithubStatusResponse>,
     /// The one-time address that continues connecting GitHub. Never cached or saved.
     github_setup_url: Option<crate::model::SecretUrl>,
+    /// Each webhook connector's status, as last loaded (D34).
+    connectors: HashMap<
+        (WorkspaceId, lazy_domain::connector::ConnectorProvider),
+        lazy_protocol::ConnectorStatusResponse,
+    >,
+    /// A signing secret Lazy just made, for its provider, until dismissed. Never cached or saved.
+    connector_secret: Option<(
+        lazy_domain::connector::ConnectorProvider,
+        crate::model::SecretUrl,
+    )>,
     /// The delivery log of each webhook looked at, as last loaded.
     webhook_deliveries: HashMap<WebhookId, Vec<lazy_protocol::WebhookDelivery>>,
     /// The webhook just created, with its one-time address. Never cached or saved.
@@ -392,6 +403,8 @@ impl ClientCore {
             webhook_deliveries: HashMap::new(),
             github: HashMap::new(),
             github_setup_url: None,
+            connectors: HashMap::new(),
+            connector_secret: None,
             created_webhook: None,
             draft_selections: HashMap::new(),
             thread_selections: HashMap::new(),
@@ -675,6 +688,39 @@ impl ClientCore {
                 delivery,
             } => self.retry_github_delivery(workspace, delivery, &mut out),
             Input::DisconnectGithub(workspace) => self.disconnect_github(workspace, &mut out),
+            Input::LoadConnector {
+                workspace,
+                provider,
+            } => self.load_connector(workspace, provider, &mut out),
+            Input::ConnectConnector {
+                workspace,
+                provider,
+            } => self.connect_connector(workspace, provider, &mut out),
+            Input::SetConnectorSecret {
+                workspace,
+                provider,
+                secret,
+            } => self.set_connector_secret(workspace, provider, secret, &mut out),
+            Input::GenerateConnectorSecret {
+                workspace,
+                provider,
+            } => self.generate_connector_secret(workspace, provider, &mut out),
+            Input::DismissConnectorSecret => self.dismiss_connector_secret(&mut out),
+            Input::ConnectorSubscribe {
+                conversation,
+                provider,
+                scope,
+                events,
+            } => self.connector_subscribe(conversation, provider, &scope, events, &mut out),
+            Input::ConnectorUnsubscribe(id) => self.connector_unsubscribe(id, &mut out),
+            Input::RetryConnectorDelivery {
+                workspace,
+                delivery,
+            } => self.retry_connector_delivery(workspace, delivery, &mut out),
+            Input::DisconnectConnector {
+                workspace,
+                provider,
+            } => self.disconnect_connector(workspace, provider, &mut out),
             Input::DismissCreatedWebhook => self.dismiss_created_webhook(&mut out),
             Input::SetDraftSelection {
                 conversation,

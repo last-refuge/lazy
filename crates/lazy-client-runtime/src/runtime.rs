@@ -1372,6 +1372,143 @@ impl Inner {
                     inner.emit(Input::ActionResult { kind, result }).await;
                 });
             }
+            Effect::LoadConnector {
+                workspace,
+                provider,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::connector(workspace, provider);
+                    let result = inner
+                        .retry_read(|| {
+                            inner
+                                .api
+                                .get::<lazy_protocol::ConnectorStatusResponse>(&path)
+                        })
+                        .await
+                        .map(|status| ActionOutcome::Connector(Box::new(status)));
+                    let kind = ActionKind::LoadConnector(workspace, provider);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::ConnectConnector {
+                workspace,
+                provider,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // Connected already answers the connection, so a repeat is harmless.
+                    let path = paths::connector(workspace, provider);
+                    let result = inner
+                        .retry_read(|| {
+                            inner
+                                .api
+                                .post_empty::<lazy_protocol::ConnectorStatusResponse>(&path)
+                        })
+                        .await
+                        .map(|status| ActionOutcome::Connector(Box::new(status)));
+                    let kind = ActionKind::ConnectConnector(workspace, provider);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::SetConnectorSecret {
+                workspace,
+                provider,
+                secret,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::connector_secret(workspace, provider);
+                    let request = lazy_protocol::SetConnectorSecretRequest {
+                        secret: secret.as_str().to_owned(),
+                    };
+                    let result = inner
+                        .retry_read(|| inner.api.put_unit(&path, &request))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::SetConnectorSecret(workspace, provider);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::GenerateConnectorSecret {
+                workspace,
+                provider,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: each answer replaces the secret before it.
+                    let result = inner
+                        .api
+                        .post_empty::<lazy_protocol::ConnectorSecretResponse>(
+                            &paths::connector_secret(workspace, provider),
+                        )
+                        .await
+                        .map(|made| ActionOutcome::ConnectorSecret(SecretUrl::new(made.secret)));
+                    let kind = ActionKind::SetConnectorSecret(workspace, provider);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::ConnectorSubscribe {
+                conversation,
+                provider,
+                request,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::connector_subscriptions(conversation, provider);
+                    let result = inner
+                        .retry_read(|| {
+                            inner
+                                .api
+                                .post::<lazy_protocol::ConnectorSubscriptionResponse, _>(
+                                    &path, &request,
+                                )
+                        })
+                        .await
+                        .map(|_| ActionOutcome::Done);
+                    let kind = ActionKind::ConnectorSubscribe(conversation, provider);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::ConnectorUnsubscribe { subscription } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::connector_subscription(subscription);
+                    let result = inner
+                        .retry_read(|| inner.api.delete_unit(&path))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::ConnectorUnsubscribe(subscription);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::RetryConnectorDelivery { delivery } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let result = inner
+                        .api
+                        .post_unit(&paths::connector_delivery_retry(delivery))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::RetryConnectorDelivery(delivery);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::DisconnectConnector {
+                workspace,
+                provider,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::connector(workspace, provider);
+                    let result = inner
+                        .retry_read(|| inner.api.delete_unit(&path))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::DisconnectConnector(workspace, provider);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
             Effect::PersistView(view) => {
                 if let Some(persistence) = self.persistence() {
                     persistence.queue_view(view);

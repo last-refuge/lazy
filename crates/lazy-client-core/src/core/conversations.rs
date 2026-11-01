@@ -395,6 +395,15 @@ impl ClientCore {
                 | ActionKind::GithubUnsubscribe(_)
                 | ActionKind::RetryGithubDelivery(_)
                 | ActionKind::DisconnectGithub(_) => super::github::github_error(kind, error),
+                ActionKind::LoadConnector(..)
+                | ActionKind::ConnectConnector(..)
+                | ActionKind::SetConnectorSecret(..)
+                | ActionKind::ConnectorSubscribe(..)
+                | ActionKind::ConnectorUnsubscribe(_)
+                | ActionKind::RetryConnectorDelivery(_)
+                | ActionKind::DisconnectConnector(..) => {
+                    super::connectors::connector_error(kind, error)
+                }
                 ActionKind::AddCustomEmoji
                 | ActionKind::RenameCustomEmoji(_)
                 | ActionKind::DeleteCustomEmoji(_) => super::emoji::emoji_error(error),
@@ -1026,6 +1035,16 @@ impl ClientCore {
                 | ActionKind::DisconnectGithub(_),
                 outcome,
             ) => self.github_action_result(kind, outcome, out),
+            (
+                ActionKind::LoadConnector(..)
+                | ActionKind::ConnectConnector(..)
+                | ActionKind::SetConnectorSecret(..)
+                | ActionKind::ConnectorSubscribe(..)
+                | ActionKind::ConnectorUnsubscribe(_)
+                | ActionKind::RetryConnectorDelivery(_)
+                | ActionKind::DisconnectConnector(..),
+                outcome,
+            ) => self.connector_action_result(kind, outcome, out),
             (ActionKind::RenameCustomEmoji(_) | ActionKind::DeleteCustomEmoji(_), outcome) => {
                 self.emoji_action_result(kind, outcome, out)
             }
