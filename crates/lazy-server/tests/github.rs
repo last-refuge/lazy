@@ -610,13 +610,15 @@ async fn deliveries_are_checked_and_posted_once_to_the_channels_that_follow_them
     let texts = bot_texts(app, bot, app.general).await;
     assert_eq!(texts.len(), 2, "{texts:?}");
     assert!(
-        texts[1].starts_with("jasona pushed 2 commits to main in last-refuge/lazy"),
+        texts[1].starts_with(
+            "jasona pushed 2 commits (https://github.com/compare) to main in last-refuge/lazy"
+        ),
         "{}",
         texts[1]
     );
     assert!(
-        texts[1].contains("`1111111` (https://github.com/c/1) First")
-            && texts[1].contains("`2222222` (https://github.com/c/2) Second")
+        texts[1].contains("1111111 (https://github.com/c/1) First")
+            && texts[1].contains("2222222 (https://github.com/c/2) Second")
             && !texts[1].contains("body"),
         "{}",
         texts[1]

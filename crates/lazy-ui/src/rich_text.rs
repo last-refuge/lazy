@@ -424,6 +424,9 @@ pub(crate) fn lay_out(inlines: &[Inline], mentions: &dyn MentionLabels) -> Line 
     line
 }
 
+/// How strongly a link's underline is drawn, relative to the link's color.
+const LINK_UNDERLINE_OPACITY: f32 = 0.45;
+
 /// The GPUI style runs for a laid-out line. `color` is the text color for ordinary text.
 pub(crate) fn runs(line: &Line, theme: &Theme, color: Hsla) -> Vec<TextRun> {
     line.spans
@@ -468,9 +471,11 @@ pub(crate) fn runs(line: &Line, theme: &Theme, color: Hsla) -> Vec<TextRun> {
                 font: face,
                 color,
                 background_color: background,
+                // A link keeps an underline (its color alone would not mark it), drawn fainter
+                // than the text so that a line of several links still reads as text.
                 underline: span.link.then_some(UnderlineStyle {
                     thickness: px(1.),
-                    color: Some(color),
+                    color: Some(color.opacity(LINK_UNDERLINE_OPACITY)),
                     wavy: false,
                 }),
                 strikethrough: marks.strike.then_some(StrikethroughStyle {
