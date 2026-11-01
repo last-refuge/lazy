@@ -1357,6 +1357,10 @@ pub struct SetAppEventsRequest {
     pub url: String,
     #[serde(default)]
     pub types: Vec<String>,
+    /// Save the address without the challenge, for a tool that cannot answer one (Zapier, n8n,
+    /// Make). Deliveries are signed all the same.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skip_check: bool,
 }
 
 /// A slash command an app answers: `/name` goes to `url` (D36).

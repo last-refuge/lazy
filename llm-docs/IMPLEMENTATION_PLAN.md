@@ -358,6 +358,7 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [X] Slash commands (Slack-compatible requests and signatures, private and in-channel answers, `response_url` for in-channel only, D36)
   - [X] Posting API with rate limits (`POST /v1/bot/messages`, Lazy's or Slack's body, per-app rate, D35)
   - [X] Events for apps: `message` and `app_mention`, Slack's `event_callback`, verified addresses, retries (D38)
+  - [X] Automation tools (Zapier, n8n, Make) through incoming webhooks, the bot API, and events with an unchecked address; a guide in DEPLOY.md (D38)
 - [ ] 4.7 Link previews
   - [ ] Fetcher with outbound network restrictions
   - [ ] Authorization recheck and size, time, and redirect bounds

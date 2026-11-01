@@ -374,6 +374,8 @@ pub enum Input {
         app: lazy_domain::AppId,
         url: String,
         types: Vec<String>,
+        /// Save without the address check (a tool that cannot answer one).
+        skip_check: bool,
     },
     /// Give a webhook a new address. The old one stops working at once; the new one arrives in
     /// `ClientCore::created_webhook`, to be shown once. Progress is

@@ -770,9 +770,12 @@ impl ClientCore {
             Input::DismissCommandReply(conversation) => {
                 self.dismiss_command_reply(conversation, &mut out)
             }
-            Input::SetAppEvents { app, url, types } => {
-                self.set_app_events(app, &url, types, &mut out)
-            }
+            Input::SetAppEvents {
+                app,
+                url,
+                types,
+                skip_check,
+            } => self.set_app_events(app, &url, types, skip_check, &mut out),
             Input::DismissCreatedWebhook => self.dismiss_created_webhook(&mut out),
             Input::SetDraftSelection {
                 conversation,

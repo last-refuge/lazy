@@ -8,7 +8,8 @@
 //! person posts in a channel the bot is in) and `app_mention` (a message that names it,
 //! `@App name`). Before the address is saved it must answer Slack's challenge: a signed
 //! `{"type": "url_verification", "challenge": ...}` answered with the challenge, as text or as
-//! `{"challenge": ...}`.
+//! `{"challenge": ...}`. A tool that cannot answer one (Zapier's, n8n's, or Make's catch hooks)
+//! can be saved without it; its deliveries are signed all the same.
 //!
 //! # Delivering
 //!
@@ -97,6 +98,28 @@ fn echoes(answer: &str, challenge: &str) -> bool {
             .is_some_and(|v| v["challenge"] == challenge)
 }
 
+/// Sends Slack's challenge to an events address and checks the answer echoes it.
+async fn check_address(http: &reqwest::Client, url: &str, secret: &[u8]) -> Result<(), AppError> {
+    let challenge = random_hex()?;
+    let body = json!({"token": "", "challenge": challenge, "type": "url_verification"}).to_string();
+    let answered = send(http, url, secret, &body, None).await;
+    match answered {
+        Ok((status, text)) if (200..300).contains(&status) && echoes(&text, &challenge) => {}
+        Ok((status, _)) if !(200..300).contains(&status) => {
+            return Err(AppError::invalid(format!(
+                "the events address answered the challenge with status {status}"
+            )));
+        }
+        Ok(_) => {
+            return Err(AppError::invalid(
+                "the events address did not answer with the challenge",
+            ));
+        }
+        Err(why) => return Err(AppError::invalid(format!("the events address: {why}"))),
+    }
+    Ok(())
+}
+
 /// Sets (or, with an empty address, turns off) an app's events, after its address answers the
 /// challenge. Admins and owners.
 pub async fn set_events(
@@ -138,22 +161,8 @@ pub async fn set_events(
             "this server cannot make HTTPS requests",
         ));
     };
-    let challenge = random_hex()?;
-    let body = json!({"token": "", "challenge": challenge, "type": "url_verification"}).to_string();
-    let answered = send(http, &url, secret.as_bytes(), &body, None).await;
-    match answered {
-        Ok((status, text)) if (200..300).contains(&status) && echoes(&text, &challenge) => {}
-        Ok((status, _)) if !(200..300).contains(&status) => {
-            return Err(AppError::invalid(format!(
-                "the events address answered the challenge with status {status}"
-            )));
-        }
-        Ok(_) => {
-            return Err(AppError::invalid(
-                "the events address did not answer with the challenge",
-            ));
-        }
-        Err(why) => return Err(AppError::invalid(format!("the events address: {why}"))),
+    if !request.skip_check {
+        check_address(http, &url, secret.as_bytes()).await?;
     }
     sqlx::query("UPDATE apps SET event_url = $2, event_types = $3 WHERE id = $1")
         .bind(app.as_uuid())

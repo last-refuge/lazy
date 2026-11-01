@@ -235,3 +235,19 @@ A private answer sent later through `response_url` is not shown yet; answer priv
 
 On an app's screen, **Events**: an address and what to send, **Messages that name it** (`@App name` in a message) and/or **Every message in its channels**. Lazy checks the address with Slack's `url_verification` challenge before saving, then sends each event as Slack's `event_callback`, signed like commands. Reply with `POST /v1/bot/messages` using the event's `channel` and its `ts` as `thread_ts`. Messages written by bots are not sent, so two apps never answer each other in a loop.
 
+### Zapier, n8n and Make
+
+Lazy has no app in their directories yet. Their generic HTTP steps reach everything:
+
+- **Post into Lazy (an action).** Either:
+  - use an incoming webhook's address (Integrations, Add incoming webhook) with their Slack-style "send a webhook" step, or a `POST` of `{"text": "..."}`; or
+  - make an app and `POST https://your-server/v1/bot/messages` with the header `Authorization: Bearer lzb_...` and a JSON body `{"channel": "deploys", "text": "..."}`, which lets one app post in several channels and reply in threads (`thread_ts`).
+- **React to messages (a trigger).**
+  1. Make a catch hook in the tool: Zapier's "Webhooks by Zapier, Catch Hook", n8n's Webhook node (POST), or Make's "Custom webhook".
+  2. On a Lazy app's screen, paste that address under **Events**, choose the events, and tick **Don't check the address**.
+  3. Add the app to the channels to watch.
+
+  Each message arrives as Slack's `event_callback`; the useful fields are `event.text`, `event.user_name`, `event.channel_name`, `event.channel`, and `event.ts` (reply with it as `thread_ts`).
+
+The tool sees every message in those channels, so add the app only where that is wanted.
+

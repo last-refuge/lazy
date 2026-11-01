@@ -748,3 +748,5 @@ Goal: an app is told what happens in its channels, as Slack's Events API tells a
 
 **Not yet:** events beyond new messages (edits, deletes, reactions, members joining), reading history through the bot API, apps in direct messages, and offering apps by name in the composer.
 
+**Addendum (automation tools).** Zapier's, n8n's, and Make's catch hooks cannot answer the challenge, so `SetAppEventsRequest.skip_check` (the app's screen: "Don't check the address") saves an address without it. Deliveries are still signed, and a tool that does not check signatures accepts them anyway. The guide is in DEPLOY.md, "Zapier, n8n and Make".
+
