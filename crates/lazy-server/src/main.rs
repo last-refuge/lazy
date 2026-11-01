@@ -247,14 +247,16 @@ async fn serve(args: ServeArgs) -> Result<(), lazy_server::AppError> {
 }
 
 async fn worker(args: WorkerArgs) -> Result<(), lazy_server::AppError> {
-    // Checked so a bad key stops this process as it would the server, though no handler uses it
-    // yet.
-    let _keys = args.keys.keys()?;
+    // App events open each app's signing secret with these keys (D38).
+    let keys = args.keys.keys()?;
     let pool = db::connect(&args.database.database_url, 4).await?;
     let stop = tokio_util::sync::CancellationToken::new();
     let worker = lazy_server::jobs::spawn(
         pool.clone(),
-        lazy_server::app::job_handlers(),
+        lazy_server::app::job_handlers(lazy_server::app_events::Services {
+            keys,
+            http: lazy_server::github::http_client(),
+        }),
         lazy_server::jobs::WorkerOptions {
             concurrency: args.concurrency.max(1),
             ..lazy_server::jobs::WorkerOptions::default()

@@ -154,6 +154,7 @@ pub fn router(state: AppState) -> Router {
         .route(paths::APP_COMMANDS_ROUTE, post(app_add_command))
         .route(paths::APP_COMMAND_ROUTE, delete(app_remove_command))
         .route(paths::APP_SIGNING_SECRET_ROUTE, get(app_signing_secret))
+        .route(paths::APP_EVENTS_ROUTE, put(app_set_events))
         .route(paths::WORKSPACE_COMMANDS_ROUTE, get(workspace_commands))
         .route(paths::RUN_COMMAND_ROUTE, post(run_command))
         .route(paths::COMMAND_RESPOND_ROUTE, post(command_respond))
@@ -723,6 +724,17 @@ async fn app_signing_secret(
 ) -> Result<Json<lazy_protocol::AppSigningSecretResponse>, AppError> {
     let secret = crate::commands::signing_secret(&state, principal.user_id, app_id).await?;
     Ok(Json(lazy_protocol::AppSigningSecretResponse { secret }))
+}
+
+async fn app_set_events(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(app_id): ApiPath<lazy_domain::AppId>,
+    ApiJson(request): ApiJson<lazy_protocol::SetAppEventsRequest>,
+) -> Result<Json<lazy_protocol::App>, AppError> {
+    crate::app_events::set_events(&state, principal.user_id, app_id, request)
+        .await
+        .map(Json)
 }
 
 async fn workspace_commands(

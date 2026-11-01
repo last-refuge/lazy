@@ -30,6 +30,7 @@ fn app(id: AppId, scopes: Vec<AppScope>) -> App {
         created_at: lazy_domain::Timestamp::from(time::OffsetDateTime::UNIX_EPOCH),
         last_used_at: None,
         commands: Vec::new(),
+        events: None,
     }
 }
 

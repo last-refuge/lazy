@@ -326,6 +326,11 @@ pub enum Effect {
     LoadCommands {
         workspace: WorkspaceId,
     },
+    /// Answered with `ActionOutcome::App`. Idempotent.
+    SetAppEvents {
+        app: lazy_domain::AppId,
+        request: lazy_protocol::SetAppEventsRequest,
+    },
     /// Run a command. Answered with `ActionOutcome::CommandRan`. One attempt: the app acts on
     /// each request.
     RunCommand {

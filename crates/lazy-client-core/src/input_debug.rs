@@ -324,6 +324,11 @@ impl fmt::Debug for Input {
                 .field("command", command)
                 .finish(),
             Input::LoadCommands(v0) => f.debug_tuple("LoadCommands").field(v0).finish(),
+            Input::SetAppEvents { app, types, .. } => f
+                .debug_struct("SetAppEvents")
+                .field("app", app)
+                .field("types", types)
+                .finish_non_exhaustive(),
             Input::DismissCommandReply(v0) => {
                 f.debug_tuple("DismissCommandReply").field(v0).finish()
             }

@@ -166,6 +166,8 @@ pub mod paths {
     pub const WORKSPACE_COMMANDS_ROUTE: &str = "/v1/workspaces/{workspace_id}/commands";
     /// `POST` runs a slash command in a conversation.
     pub const RUN_COMMAND_ROUTE: &str = "/v1/conversations/{conversation_id}/commands";
+    /// `PUT` an app's event subscription (D38).
+    pub const APP_EVENTS_ROUTE: &str = "/v1/apps/{app_id}/events";
     /// Where an app sends a later answer to a command (Slack's `response_url`). Public; the token
     /// is the credential.
     pub const COMMAND_RESPOND_ROUTE: &str = "/commands/respond/{token}";
@@ -392,6 +394,10 @@ pub mod paths {
 
     pub fn app_command(command_id: lazy_domain::AppCommandId) -> String {
         format!("/v1/app-commands/{command_id}")
+    }
+
+    pub fn app_events(app_id: lazy_domain::AppId) -> String {
+        format!("/v1/apps/{app_id}/events")
     }
 
     pub fn app_signing_secret(app_id: lazy_domain::AppId) -> String {
@@ -1329,6 +1335,28 @@ pub struct App {
     /// The slash commands it answers, by name (D36).
     #[serde(default)]
     pub commands: Vec<AppCommand>,
+    /// Where it is told what happens in its channels, if anywhere (D38).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<AppEvents>,
+}
+
+/// An app's event subscription (D38): what it is sent, and where.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppEvents {
+    pub url: String,
+    /// `message` (every message people post in its channels) and `app_mention` (messages that
+    /// name it, `@App name`).
+    pub types: Vec<String>,
+}
+
+/// `PUT /v1/apps/{id}/events`. An empty `url` turns events off. The address must answer Slack's
+/// `url_verification` challenge before it is saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetAppEventsRequest {
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub types: Vec<String>,
 }
 
 /// A slash command an app answers: `/name` goes to `url` (D36).

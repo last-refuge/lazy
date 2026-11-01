@@ -414,7 +414,8 @@ impl ClientCore {
                 | ActionKind::AppCommand(_)
                 | ActionKind::RemoveAppCommand(_)
                 | ActionKind::LoadCommands(_)
-                | ActionKind::RunCommand(_) => super::apps::app_error(kind, error),
+                | ActionKind::RunCommand(_)
+                | ActionKind::AppEvents(_) => super::apps::app_error(kind, error),
                 ActionKind::AddCustomEmoji
                 | ActionKind::RenameCustomEmoji(_)
                 | ActionKind::DeleteCustomEmoji(_) => super::emoji::emoji_error(error),
@@ -1067,7 +1068,8 @@ impl ClientCore {
                 | ActionKind::AppCommand(_)
                 | ActionKind::RemoveAppCommand(_)
                 | ActionKind::LoadCommands(_)
-                | ActionKind::RunCommand(_),
+                | ActionKind::RunCommand(_)
+                | ActionKind::AppEvents(_),
                 outcome,
             ) => self.app_action_result(kind, outcome, out),
             (ActionKind::RenameCustomEmoji(_) | ActionKind::DeleteCustomEmoji(_), outcome) => {

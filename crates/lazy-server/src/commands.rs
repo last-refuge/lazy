@@ -73,7 +73,7 @@ fn random_hex() -> Result<String, AppError> {
 }
 
 /// Whether a command may be sent to `url`: `https://`, or `http://` to this machine only.
-fn url_ok(url: &str) -> bool {
+pub(crate) fn url_ok(url: &str) -> bool {
     if url.len() > 2048 || url.chars().any(char::is_whitespace) {
         return false;
     }

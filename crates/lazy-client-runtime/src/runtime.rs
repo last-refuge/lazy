@@ -1640,6 +1640,18 @@ impl Inner {
                     inner.emit(Input::ActionResult { kind, result }).await;
                 });
             }
+            Effect::SetAppEvents { app, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::app_events(app);
+                    let result = inner
+                        .retry_read(|| inner.api.put::<lazy_protocol::App, _>(&path, &request))
+                        .await
+                        .map(|app| ActionOutcome::App(Box::new(app)));
+                    let kind = ActionKind::AppEvents(app);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
             Effect::LoadCommands { workspace } => {
                 let inner = self.clone();
                 self.spawn(async move {
