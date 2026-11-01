@@ -45,10 +45,22 @@ pub fn heading<E: Styled>(element: E) -> E {
         .font_weight(FontWeight::BOLD)
 }
 
+/// Whether the bundled emoji font (the last of [`FILES`]) is registered. CoreText cannot load it,
+/// so macOS draws emoji with Apple Color Emoji through system fallback.
+pub const BUNDLED_EMOJI: bool = !cfg!(target_os = "macos");
+
 /// Registers the bundled fonts with the text system. A failure is logged and the app falls back
 /// to system fonts.
 pub fn register(cx: &App) {
-    let fonts = FILES.iter().map(|bytes| Cow::Borrowed(*bytes)).collect();
+    let count = if BUNDLED_EMOJI {
+        FILES.len()
+    } else {
+        FILES.len() - 1
+    };
+    let fonts = FILES[..count]
+        .iter()
+        .map(|bytes| Cow::Borrowed(*bytes))
+        .collect();
     if let Err(error) = cx.text_system().add_fonts(fonts) {
         tracing::warn!(%error, "could not load the bundled fonts; using system fonts");
     }

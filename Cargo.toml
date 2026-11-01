@@ -18,7 +18,7 @@ lazy-ui = { path = "crates/lazy-ui" }
 
 # GPUI is pinned to one full Zed revision; `gpui` and `gpui_platform` must stay on the same one.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "e5bdd01cd819d6348ae764e69218adfee3d7edab" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "e5bdd01cd819d6348ae764e69218adfee3d7edab", features = ["wayland", "x11"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "e5bdd01cd819d6348ae764e69218adfee3d7edab", features = ["wayland", "x11", "font-kit"] }
 gpui_wgpu = { git = "https://github.com/zed-industries/zed", rev = "e5bdd01cd819d6348ae764e69218adfee3d7edab" }
 
 # Shared.
