@@ -1088,6 +1088,16 @@ impl Cast {
         ]
     }
 
+    /// GitHub activity as the GitHub app posts it (the server's `github::summarize`).
+    fn github_history(&self) -> Vec<Message> {
+        let bot = &self.deploy;
+        GITHUB_FEED
+            .iter()
+            .enumerate()
+            .map(|(n, text)| self.formatted(bot, text, n as i64 + 1, 60 - n as i64, false))
+            .collect()
+    }
+
     /// The incoming webhooks of `conversation`, oldest first.
     fn webhooks(
         &self,
@@ -8582,6 +8592,26 @@ fn main() {
             },
         },
         Scene {
+            name: "4c-01-github-feed-dark",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat_with(cx, model, cast, rec, cast.github_history());
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4c-02-github-feed-light",
+            width: 1100.0,
+            height: 720.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat_with(cx, model, cast, rec, cast.github_history());
+                draw(cx, win);
+            },
+        },
+        Scene {
             name: "4b-01-integrations-github-card-light",
             width: 1100.0,
             height: 900.0,
@@ -10140,3 +10170,14 @@ fn main() {
         gallery_scene(&out, name, kind, appearance, 900.0, height);
     }
 }
+
+/// What the GitHub app posts for the activity in the owner's screenshot of 2026-11-01, as
+/// `lazy_server::github::summarize` writes it.
+const GITHUB_FEED: &[&str] = &[
+    "**jasona** merged pull request [#7 fix\\(ui\\)\\: render text on macOS](https://github.com/last-refuge/lazy/pull/7) in last\\-refuge/lazy",
+    "**jasona** pushed [1 commit](https://github.com/last-refuge/lazy/compare/a...b) to **main** in last\\-refuge/lazy\n- [9b57118](https://github.com/last-refuge/lazy/commit/9b57118) fix\\(ui\\)\\: render text on macOS \\(\\#7\\)",
+    "Workflow [Notify Lazy \\#23](https://github.com/last-refuge/lazy/actions/runs/23) failed on **main** in last\\-refuge/lazy",
+    "**jasona** opened issue [#11 test](https://github.com/last-refuge/lazy/issues/11) in last\\-refuge/lazy\n\n> testtesttest",
+    "**jasona** closed issue [#11 test](https://github.com/last-refuge/lazy/issues/11) in last\\-refuge/lazy",
+    "**jasona** opened pull request [#12 Remove the lazy\\-notify stopgap now that GitHub posts directly](https://github.com/last-refuge/lazy/pull/12) in last\\-refuge/lazy\n\n> The GitHub connector works end to end against the real GitHub on chat\\.lazyto\\.day \\(0\\.8\\.1\\), so lazy\\-notify\\.yml would only post every event twice\\.\n> • Deletes \\.github/workflows/lazy\\-notify\\.yml\\.\n> • VERIFICATION\\.md records the live run, the two production fixes \\(\\#8 CA certificates, …",
+];
