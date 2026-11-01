@@ -284,6 +284,32 @@ impl fmt::Debug for Input {
                 .field("workspace", workspace)
                 .field("delivery", delivery)
                 .finish(),
+            Input::LoadApps(v0) => f.debug_tuple("LoadApps").field(v0).finish(),
+            Input::CreateApp {
+                workspace, scopes, ..
+            } => f
+                .debug_struct("CreateApp")
+                .field("workspace", workspace)
+                .field("scopes", scopes)
+                .finish_non_exhaustive(),
+            Input::NewAppToken(v0) => f.debug_tuple("NewAppToken").field(v0).finish(),
+            Input::UpdateAppScopes { app, scopes } => f
+                .debug_struct("UpdateAppScopes")
+                .field("app", app)
+                .field("scopes", scopes)
+                .finish(),
+            Input::SetAppChannel {
+                app,
+                conversation,
+                add,
+            } => f
+                .debug_struct("SetAppChannel")
+                .field("app", app)
+                .field("conversation", conversation)
+                .field("add", add)
+                .finish(),
+            Input::DeleteApp(v0) => f.debug_tuple("DeleteApp").field(v0).finish(),
+            Input::DismissAppToken => f.write_str("DismissAppToken"),
             Input::DisconnectConnector {
                 workspace,
                 provider,

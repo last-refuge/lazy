@@ -444,6 +444,17 @@ pub enum ActionKind {
     /// Running a failed connector delivery again.
     RetryConnectorDelivery(i64),
     DisconnectConnector(WorkspaceId, ConnectorProvider),
+    /// Loading a workspace's apps (D35).
+    LoadApps(WorkspaceId),
+    /// Making an app (its token arrives once).
+    CreateApp(WorkspaceId),
+    /// Giving an app a new token.
+    NewAppToken(lazy_domain::AppId),
+    /// Changing an app's scopes.
+    UpdateAppScopes(lazy_domain::AppId),
+    /// Adding an app's bot to a channel, or taking it out.
+    AppChannel(lazy_domain::AppId, ConversationId),
+    DeleteApp(lazy_domain::AppId),
     /// Adding a custom emoji (one at a time).
     AddCustomEmoji,
     RenameCustomEmoji(EmojiId),
@@ -624,6 +635,12 @@ pub enum ActionOutcome {
     Connector(Box<lazy_protocol::ConnectorStatusResponse>),
     /// A signing secret Lazy made, to paste into the provider's form once.
     ConnectorSecret(SecretUrl),
+    /// A workspace's apps, oldest first.
+    Apps(Vec<lazy_protocol::App>),
+    /// An app just made or given a new token, with the token to show once.
+    AppToken(Box<lazy_protocol::App>, SecretUrl),
+    /// An app after a change.
+    App(Box<lazy_protocol::App>),
     /// A custom emoji after it was renamed.
     CustomEmoji(CustomEmoji),
     /// The workspace after its name or settings were changed.

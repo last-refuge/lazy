@@ -277,6 +277,30 @@ impl fmt::Debug for Effect {
                 .debug_struct("RetryConnectorDelivery")
                 .field("delivery", delivery)
                 .finish(),
+            Effect::LoadApps { workspace } => f
+                .debug_struct("LoadApps")
+                .field("workspace", workspace)
+                .finish(),
+            Effect::CreateApp { workspace, .. } => f
+                .debug_struct("CreateApp")
+                .field("workspace", workspace)
+                .finish_non_exhaustive(),
+            Effect::NewAppToken { app } => f.debug_struct("NewAppToken").field("app", app).finish(),
+            Effect::UpdateAppScopes { app, .. } => f
+                .debug_struct("UpdateAppScopes")
+                .field("app", app)
+                .finish_non_exhaustive(),
+            Effect::SetAppChannel {
+                app,
+                conversation,
+                add,
+            } => f
+                .debug_struct("SetAppChannel")
+                .field("app", app)
+                .field("conversation", conversation)
+                .field("add", add)
+                .finish(),
+            Effect::DeleteApp { app } => f.debug_struct("DeleteApp").field("app", app).finish(),
             Effect::DisconnectConnector {
                 workspace,
                 provider,

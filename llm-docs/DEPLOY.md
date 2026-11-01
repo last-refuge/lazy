@@ -204,3 +204,17 @@ Needs `LAZY_CREDENTIALS_KEY` and `LAZY_PUBLIC_URL` (as for GitHub). An admin ope
 - **Jira:** someone with the Administer Jira permission opens Settings, System, WebHooks, **Create a WebHook**, pastes the address, chooses **Make a secret** in Lazy and pastes that into the Secret field, ticks Issue created and updated and Comment created (a JQL filter can narrow it), and saves.
 
 Then **Add a channel** chooses which team (Linear) or project (Jira) goes where. Disconnecting in Lazy does not delete the webhook in Linear or Jira; delete it there too.
+
+## Apps and the bot API
+
+An admin makes an app in **Integrations, Apps and bots**: a name and what it may do. Lazy shows its token once; copy it then. Add the bot to channels from the app's screen. A program then posts as the bot:
+
+```sh
+curl -X POST https://chat.example.com/v1/bot/messages \
+  -H "Authorization: Bearer lzb_..." -H "Content-Type: application/json" \
+  -H "Idempotency-Key: deploy-4821" \
+  -d '{"channel": "deploys", "text": "Deployed *v1.4.2*"}'
+```
+
+The body can also be Slack's (`text` in `mrkdwn`, `blocks`, `attachments`), so code written for Slack's `chat.postMessage` mostly works with the address and token changed. `GET /v1/bot/me` says which app a token is; `GET /v1/bot/conversations` lists its channels. Too many posts too fast answer `429` with `Retry-After`. A lost token cannot be shown again: make a new one in the app's screen.
+

@@ -327,6 +327,29 @@ pub enum Input {
         workspace: WorkspaceId,
         provider: lazy_domain::connector::ConnectorProvider,
     },
+    /// Load the workspace's apps into `ClientCore::apps` (admins and owners, D35).
+    LoadApps(WorkspaceId),
+    /// Make an app. Its token arrives in `ClientCore::app_token`, to be shown once.
+    CreateApp {
+        workspace: WorkspaceId,
+        name: String,
+        scopes: Vec<lazy_domain::app::AppScope>,
+    },
+    /// Give an app a new token (the old one stops working); it arrives in `app_token`.
+    NewAppToken(lazy_domain::AppId),
+    UpdateAppScopes {
+        app: lazy_domain::AppId,
+        scopes: Vec<lazy_domain::app::AppScope>,
+    },
+    /// Add an app's bot to a channel (`add`) or take it out.
+    SetAppChannel {
+        app: lazy_domain::AppId,
+        conversation: ConversationId,
+        add: bool,
+    },
+    DeleteApp(lazy_domain::AppId),
+    /// Forget the token just shown.
+    DismissAppToken,
     /// Give a webhook a new address. The old one stops working at once; the new one arrives in
     /// `ClientCore::created_webhook`, to be shown once. Progress is
     /// `action(ActionKind::NewWebhookAddress(webhook))`.

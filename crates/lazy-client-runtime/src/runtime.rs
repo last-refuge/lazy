@@ -1509,6 +1509,97 @@ impl Inner {
                     inner.emit(Input::ActionResult { kind, result }).await;
                 });
             }
+            Effect::LoadApps { workspace } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::apps(workspace);
+                    let result = inner
+                        .retry_read(|| inner.api.get::<lazy_protocol::AppsResponse>(&path))
+                        .await
+                        .map(|list| ActionOutcome::Apps(list.apps));
+                    let kind = ActionKind::LoadApps(workspace);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::CreateApp { workspace, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: a repeat would make a second app.
+                    let result = inner
+                        .api
+                        .post::<lazy_protocol::CreatedAppResponse, _>(
+                            &paths::apps(workspace),
+                            &request,
+                        )
+                        .await
+                        .map(|made| {
+                            ActionOutcome::AppToken(Box::new(made.app), SecretUrl::new(made.token))
+                        });
+                    let kind = ActionKind::CreateApp(workspace);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::NewAppToken { app } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: each answer replaces the token before it.
+                    let result = inner
+                        .api
+                        .post_empty::<lazy_protocol::CreatedAppResponse>(&paths::app_token(app))
+                        .await
+                        .map(|made| {
+                            ActionOutcome::AppToken(Box::new(made.app), SecretUrl::new(made.token))
+                        });
+                    let kind = ActionKind::NewAppToken(app);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::UpdateAppScopes { app, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::app(app);
+                    let result = inner
+                        .retry_read(|| inner.api.patch::<lazy_protocol::App, _>(&path, &request))
+                        .await
+                        .map(|app| ActionOutcome::App(Box::new(app)));
+                    let kind = ActionKind::UpdateAppScopes(app);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::SetAppChannel {
+                app,
+                conversation,
+                add,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::app_channel(app, conversation);
+                    let result = if add {
+                        inner
+                            .retry_read(|| inner.api.put::<lazy_protocol::App, _>(&path, &()))
+                            .await
+                    } else {
+                        inner
+                            .retry_read(|| inner.api.delete::<lazy_protocol::App>(&path))
+                            .await
+                    }
+                    .map(|app| ActionOutcome::App(Box::new(app)));
+                    let kind = ActionKind::AppChannel(app, conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::DeleteApp { app } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::app(app);
+                    let result = inner
+                        .retry_read(|| inner.api.delete_unit(&path))
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::DeleteApp(app);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
             Effect::PersistView(view) => {
                 if let Some(persistence) = self.persistence() {
                     persistence.queue_view(view);

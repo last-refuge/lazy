@@ -11,6 +11,7 @@ pub mod access;
 pub mod accounts;
 pub mod admin;
 pub mod app;
+pub mod apps;
 pub mod attachments;
 pub mod bootstrap;
 pub mod config;

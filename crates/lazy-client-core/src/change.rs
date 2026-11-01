@@ -123,6 +123,12 @@ pub enum Change {
     },
     /// `ClientCore::connector_secret` was set or cleared.
     ConnectorSecretChanged,
+    /// `ClientCore::apps` of this workspace changed.
+    AppsChanged {
+        workspace: WorkspaceId,
+    },
+    /// `ClientCore::app_token` was set or cleared.
+    AppTokenChanged,
     /// `ClientCore::webhook_deliveries` of this webhook changed.
     WebhookDeliveriesChanged {
         webhook: WebhookId,

@@ -263,6 +263,8 @@ impl ClientCore {
         self.github_setup_url = None;
         self.connectors.clear();
         self.connector_secret = None;
+        self.apps.clear();
+        self.app_token = None;
         self.webhook_lists.clear();
         self.workspace_webhooks.clear();
         self.webhook_deliveries.clear();

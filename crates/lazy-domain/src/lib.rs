@@ -3,6 +3,7 @@
 //! Nothing here performs I/O or depends on a UI toolkit, so the same code runs on the server,
 //! on every desktop client, and on future phone clients.
 
+pub mod app;
 pub mod attachment;
 pub mod authz;
 pub mod connector;
@@ -30,8 +31,9 @@ pub use conversation::{ConversationFacts, ConversationKind, ParticipantError, Pa
 pub use document::{Block, DocumentError, Inline, Marks, MessageDocument};
 pub use emoji::{MAX_CUSTOM_EMOJI, MAX_REACTION_KINDS, ReactionEmoji};
 pub use ids::{
-    AttachmentId, ConnectorSubscriptionId, ConversationId, EmojiId, EventSeq, GithubSubscriptionId,
-    GroupId, InvitationId, MessageId, OperationId, UserId, WebhookId, WorkspaceId,
+    AppId, AttachmentId, ConnectorSubscriptionId, ConversationId, EmojiId, EventSeq,
+    GithubSubscriptionId, GroupId, InvitationId, MessageId, OperationId, UserId, WebhookId,
+    WorkspaceId,
 };
 pub use mention::{MapDirectory, MentionDirectory, MentionTarget, NoMentions};
 pub use message::{MAX_THREAD_REPLIERS_LISTED, MessageFacts, Permalink};
