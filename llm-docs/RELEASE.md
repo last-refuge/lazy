@@ -4,7 +4,7 @@ The desktop client ships as installers for Linux, macOS, and Windows, built by a
 by hand (like CI, it never runs on a push): **Actions, release, Run workflow**, or
 
 ```sh
-gh workflow run release -f version=0.8.0 -f publish=true
+gh workflow run release -f version=0.8.1 -f publish=true
 ```
 
 `version` is stamped into the apps (Help, Diagnostics shows it) and into the file names;
@@ -37,6 +37,12 @@ Release 0.8.0 (2026-10-31) adds the GitHub connector's screens in Integrations (
 still 14, so 0.7.0 and 0.8.0 both work with any current server. The GitHub view needs a server with
 migrations 0017 and 0018, and connecting needs `LAZY_CREDENTIALS_KEY` set on it; against an older
 server the GitHub card says it didn't load.
+
+Release 0.8.1 (2026-11-01) replaces 0.8.0, which was never published. 0.8.0's server crashed at
+startup on Coolify: its runtime image had no CA certificates, so building the HTTPS client for
+GitHub failed and the fallback panicked. The image now carries `ca-certificates`, and a server
+that cannot make HTTPS requests runs on with GitHub unavailable. The client is unchanged from
+0.8.0; the protocol is still 14.
 
 ## What you get
 
