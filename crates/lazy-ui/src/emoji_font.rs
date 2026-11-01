@@ -55,8 +55,15 @@ pub fn drawable_tone(emoji: &'static Emoji, tone: SkinTone) -> &'static Emoji {
 const EMOJI_PRESENTATION: char = '\u{fe0f}';
 
 /// The face emoji are drawn with.
+///
+/// Without the bundled font ([`crate::fonts::BUNDLED_EMOJI`]) this is the text face and the
+/// system's fallback draws the emoji.
 pub fn face() -> Font {
-    font(FAMILY)
+    if crate::fonts::BUNDLED_EMOJI {
+        font(FAMILY)
+    } else {
+        font(TEXT_FAMILY)
+    }
 }
 
 /// Whether one grapheme cluster is an emoji that should be drawn in color.
@@ -170,6 +177,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn is_emoji_font(run: &TextRun) -> bool {
         run.font.family.as_ref() == FAMILY
     }
@@ -208,6 +216,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn each_emoji_gets_its_own_font_and_the_rest_keeps_its_own() {
         let text = "ship 🚢 now ❤️❤️ ok 日本語";
         let runs = with_emoji_font(text, vec![run(text.len())]);
@@ -239,6 +248,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn a_whole_cluster_is_one_piece() {
         let text = "👨‍👩‍👧‍👦🏳️‍🌈1️⃣🇨🇦";
         let runs = with_emoji_font(text, vec![run(text.len())]);
@@ -247,6 +257,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn runs_with_different_styles_are_split_independently() {
         let text = "a🎉b🎉";
         let runs = with_emoji_font(text, vec![run(1), run(4), run(1), run(4)]);
@@ -268,6 +279,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn bare_text_presentation_symbols_stay_text() {
         let text = "I ❤ it ☀";
         let runs = with_emoji_font(text, vec![run(text.len())]);
