@@ -339,6 +339,7 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [ ] Signature verification, timestamp checks, and replay protection
   - [X] Payload size bounds and rate limits (built in 2.9, D16)
   - [X] Duplicate-event handling (`Idempotency-Key`, D16; duplicates are recorded as such in the delivery log, D30)
+  - [X] Slack-compatible bodies: `mrkdwn`, `<url|label>`, blocks, legacy attachments, form-encoded `payload` (D33)
 - [ ] 4.4 Rich messages and actions
   - [ ] Versioned declarative block schema rendered with native components
   - [ ] No arbitrary remote HTML

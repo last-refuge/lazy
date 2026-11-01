@@ -610,3 +610,25 @@ Quotes are at most 280 characters over 3 lines. New subscriptions follow pull re
 - **Adding** chooses the channel (the open one first), takes `owner/name` or a GitHub address, and toggles the kinds of activity (the defaults are pre-chosen).
 - **Keyboard.** Escape steps back one view; from the GitHub overview it returns to the list.
 - **Reloading.** Each change reloads the status, because the server decides how it looks.
+
+## D33. Slack-compatible incoming webhooks (Phase 4, task 4.3)
+
+Goal: tools that post to chat through a built-in "Slack" option (Coolify, Grafana, Sentry, Alertmanager, Jenkins, uptime monitors) can be pointed at a Lazy webhook address and post readable messages, with no adapter in between. The address, secret, rate limit, `Idempotency-Key`, delivery log, and bot (D16, D30) are unchanged; only how the body is read changes. No protocol bump: `IncomingWebhookRequest.text` merely becomes optional, and clients never send this body.
+
+**Reading the body** (`lazy-server/src/slack_compat.rs`, pure functions, unit-tested):
+- JSON, or a form whose `payload` field is JSON (older tools send that).
+- `text` is read as Slack `mrkdwn`. Lazy's own syntax shares Slack's emphasis, code, and quote markers, so Lazy-style text reads as before. What Slack writes differently is rewritten:
+  - `<url|label>` and `<url>` become links (only allowed schemes, as everywhere; anything else, like `a <b> c`, stays as written);
+  - `<@U…|name>`, `<#C…|name>`, `<!channel>`, `<!here>`, `<!everyone>`, and `<!subteam^…|@handle>` become text;
+  - `<!date^…|fallback>` becomes its fallback;
+  - `&amp;`, `&lt;`, `&gt;` are decoded;
+  - code fenced on one line becomes a code block.
+- `mrkdwn: false` makes `text` plain (every markup character escaped).
+- `blocks` (Block Kit) are the message, and `text` is then only their fallback, as in Slack. Mapped: `header` (bold), `section` text, fields and a link-button accessory, `context` (joined with ·), `image` (a link), `actions` (link buttons only), `rich_text` (sections with styles, lists, quotes, preformatted), and `divider` (a paragraph break). Unknown blocks and interactive elements without a link are dropped: a webhook cannot answer clicks.
+- Legacy `attachments`: the pretext as a paragraph, then everything else as a quote, the nearest thing to Slack's colored bar. That covers author, linked title (bold), text, fields as `*Title:* value`, blocks, image (a link), and footer (italic). Only a `fallback` is shown when nothing else is. Colors are not shown.
+- `channel`, `username`, and `icon_*` are ignored. The webhook's own channel and name are used, as Slack does for app webhooks.
+
+**Mentions stay text** (D16): `<!channel>` reads "@channel" and notifies nobody. A message's text limits still apply, and a body with nothing to show is `invalid_request` ("there is nothing to post"), which the delivery log records as before.
+
+**Not yet:** colors (no colored bar in Lazy's documents), images shown inline (attachments are uploads only), interactive buttons (4.4), and threading by `thread_ts`. The reply is Lazy's JSON (`{"message_id": …}`), not Slack's plain `ok`; tools check only the status.
+

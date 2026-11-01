@@ -1166,6 +1166,26 @@ fn bare_survives(url: &str, following: &str) -> bool {
     )
 }
 
+/// Markdown source that shows `text` exactly as written: every character that would read as markup
+/// (emphasis, code, links, mentions, emoji names, and quotes or lists at a line's start) is
+/// escaped. Line breaks are kept.
+pub fn escape_plain(text: &str) -> String {
+    text.split('\n')
+        .map(|line| escape_text(line, true))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Markdown source for a link showing `text` and opening `url`: `[text](url)` with both escaped
+/// so that it parses back to exactly that link. If no source can (an address that is not allowed,
+/// or one with an unbalanced parenthesis), the text alone, escaped.
+pub fn link_source(url: &str, text: &str) -> String {
+    if !crate::document::link_is_allowed(url) || text.trim().is_empty() {
+        return escape_text(text, false);
+    }
+    link_to_markdown(url, text, false)
+}
+
 /// A link as text that parses back to the same link, or, if no such text exists (an address
 /// containing an unbalanced parenthesis, say), just its escaped display text.
 fn link_to_markdown(url: &str, text: &str, allow_bare: bool) -> String {

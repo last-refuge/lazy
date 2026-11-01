@@ -25,6 +25,8 @@ argon2.workspace = true
 aws-lc-rs = "1"
 # Integration credentials are sealed with XChaCha20-Poly1305 (the client's files use it too).
 chacha20poly1305.workspace = true
+# Slack-style webhook bodies sent as a form (`payload=<json>`); already built for reqwest.
+form_urlencoded = "1"
 axum.workspace = true
 bytes = "1"
 clap.workspace = true

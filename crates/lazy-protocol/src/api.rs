@@ -1219,12 +1219,19 @@ pub struct GithubSubscriptionResponse {
 /// Body of `POST /hooks/{id}/{secret}`. `text` is composer source: formatting and `:shortcode:`
 /// emoji work, mentions do not (a webhook cannot notify people by name).
 ///
+/// Slack's incoming-webhook body is accepted as well (D33): `text` in Slack's `mrkdwn` (its
+/// `<url|label>` links and `&amp;` entities included), `blocks`, legacy `attachments`, and
+/// `mrkdwn: false`, as JSON or as a form field `payload`. With `blocks`, `text` is only their
+/// fallback, as in Slack. Fields that cannot apply (`channel`, `username`, `icon_*`) are ignored.
+///
 /// An `Idempotency-Key` header (up to 64 printable ASCII characters) makes a retry post the
 /// message once. A wrong or revoked address is `not_found`, indistinguishable from one that never
 /// existed. Bodies over [`lazy_domain::MAX_WEBHOOK_BODY_BYTES`] are `payload_too_large`; a
 /// webhook that posts too fast is `rate_limited`; an archived conversation is `conflict`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IncomingWebhookRequest {
+    /// May be empty or absent when Slack's `blocks` or `attachments` carry the message.
+    #[serde(default)]
     pub text: String,
 }
 

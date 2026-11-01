@@ -37,6 +37,7 @@ pub mod pruner;
 pub mod realtime;
 pub mod receipts;
 pub mod search;
+pub mod slack_compat;
 pub mod threads;
 pub mod webhooks;
 pub mod workspaces;
