@@ -80,8 +80,8 @@ pub fn button(
         .flex_none()
         .px_4()
         .py_1p5()
-        // The brand's pill button.
-        .rounded(theme.radii.pill)
+        // Square with slightly rounded corners.
+        .rounded(theme.radii.button)
         .border_1()
         .border_color(border)
         .text_size(theme.type_scale.body)

@@ -95,14 +95,16 @@ pub struct Typography {
 }
 
 /// Corner radii: the brand's 8 px for inputs and compact menus (`medium`), 12 px for status panels
-/// and tiles (`panel`), 20 px for major surfaces such as dialogs and cards (`large`), and a pill
-/// for pill buttons. `small` keeps dense rows and chips tight.
+/// and tiles (`panel`), 20 px for major surfaces such as dialogs and cards (`large`), 6 px for
+/// buttons and reaction chips (`button`: square with slightly rounded corners), and a pill for
+/// dots, progress bars, and status chips. `small` keeps dense rows and chips tight.
 #[derive(Debug, Clone, Copy)]
 pub struct Radii {
     pub small: Pixels,
     pub medium: Pixels,
     pub panel: Pixels,
     pub large: Pixels,
+    pub button: Pixels,
     pub pill: Pixels,
 }
 
@@ -197,6 +199,7 @@ impl Theme {
                 medium: px(8.),
                 panel: px(12.),
                 large: px(20.),
+                button: px(6.),
                 pill: px(999.),
             },
         }
@@ -265,6 +268,7 @@ impl Theme {
                 medium: px(8.),
                 panel: px(12.),
                 large: px(20.),
+                button: px(6.),
                 pill: px(999.),
             },
         }
@@ -470,8 +474,8 @@ mod tests {
         for theme in [Theme::light(), Theme::dark()] {
             let r = theme.radii;
             assert_eq!(
-                (r.small, r.medium, r.panel, r.large, r.pill),
-                (px(4.), px(8.), px(12.), px(20.), px(999.))
+                (r.small, r.medium, r.panel, r.large, r.button, r.pill),
+                (px(4.), px(8.), px(12.), px(20.), px(6.), px(999.))
             );
         }
     }

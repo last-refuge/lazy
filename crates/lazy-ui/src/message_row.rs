@@ -895,7 +895,7 @@ fn reaction_chips(props: &RowProps<'_>, id: &ElementId) -> Option<AnyElement> {
                 .gap_1()
                 .h(px(24.))
                 .px_2()
-                .rounded(px(12.))
+                .rounded(theme.radii.button)
                 .border_1()
                 .border_color(if mine {
                     colors.accent
@@ -940,7 +940,7 @@ fn reaction_chips(props: &RowProps<'_>, id: &ElementId) -> Option<AnyElement> {
                 .gap_0p5()
                 .h(px(24.))
                 .px_2()
-                .rounded(px(12.))
+                .rounded(theme.radii.button)
                 .border_1()
                 .border_color(colors.border_strong)
                 .bg(colors.surface_raised)
