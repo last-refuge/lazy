@@ -433,3 +433,42 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
 - *Failed, then fixed:* the server's `public_url` was Coolify's generated `http://…sslip.io` address, not the domain: `SERVICE_URL_LAZY` kept it after the domain was set (Coolify 4.5.3). `LAZY_PUBLIC_URL`, set in Coolify, now wins over it (PR #10).
 - *Observed by the owner:* with `LAZY_CREDENTIALS_KEY` set and 0.8.1 clients, the whole flow worked against the real GitHub. That covers creating the app for `last-refuge` from the manifest, installing it on all repositories, following a repository into a channel, and events posted by the GitHub bot. The `lazy-notify.yml` Actions stopgap was removed afterwards.
 - *Not checked:* a key rotation with `rewrap-credentials` in production; Disconnect and reconnect against the real GitHub; review and comment events; behaviour under a burst of deliveries.
+
+## Rich messages, buttons, and link previews (D40, D41, 2026-11-01)
+
+- *Measured:* the full suite passed 2,813 tests with 0 failures (7 ignored). `cargo fmt --all --check` passes; clippy shows only the warning already in `lazy-client-runtime/tests/updates.rs`; `check-core-deps.sh` passes.
+  - New for D40:
+    - `lazy-domain` `rich` tests: round trips, finding buttons, blocks from a newer server read as unsupported, and bad content refused.
+    - A `slack_compat` test turning Block Kit into rich content, with buttons kept only for apps.
+    - `lazy-server/tests/interactions.rs`, run against a stand-in app that checks Slack's signature. It covers:
+      - a webhook keeping only link buttons;
+      - the interactivity address and who may set it;
+      - links, unknown actions, and wrong blocks refused;
+      - the `block_actions` payload with the stored value and the press id;
+      - a private reply, and a failing app;
+      - a private channel the presser cannot read refused;
+      - a later answer posted and `delete_original`;
+      - `replace_original` editing the message as the bot;
+      - turning presses off.
+    - A client-core test (`tests/apps.rs`): one press at a time, its reply shown like a command's, and failures in the server's words.
+  - New for D41:
+    - Unit tests: addresses (private, metadata, mapped, NAT64, and the rest refused), addresses checked before connecting (ports, credentials, `localhost`, decimal and hex IPv4), and page parsing. The domain's link choice is covered through the server's test.
+    - `lazy-server/tests/link_previews.rs`, run against a stand-in site on 127.0.0.1. It covers:
+      - Open Graph and title extraction, and one fetch per workspace;
+      - a private channel's previews refused to a non-member;
+      - apps' messages and messages without links;
+      - redirects followed;
+      - redirects to private and metadata addresses, loops, 404s, oversized pages, and a 20-second page all giving no preview, the slow one within 10 seconds;
+      - failures remembered;
+      - with the default options, nothing on this machine or the private network reached.
+    - A client-core test (`tests/previews.rs`): asked for once per revision, late answers dropped, and failures not asked again.
+  - The upgrade tests now expect migrations 1 to 25, and the startup log test version 25 (both failed on the first run until updated).
+- *Observed in offscreen renders:*
+  - `.dev/screens-4f/4f-01` to `4f-05`: rich messages in light, dark, and at 640 px (the side button wraps under the text), a press waiting ("Approve…", "Running Approve…"), and an app's private reply.
+  - `.dev/screens-4e/4e-04`: the app's Buttons section.
+  - `.dev/screens-4g/4g-01` to `4g-03`: preview cards.
+- *Not checked by anyone:*
+  - a real Slack app's handler against Lazy's `block_actions`;
+  - previews of real sites, which the tests cannot reach (Miro, GitHub, and sites behind bot protection or consent pages may give nothing);
+  - IPv6-only sites;
+  - the buttons and cards on a real display, by keyboard (the buttons are not tab stops), or with a screen reader.

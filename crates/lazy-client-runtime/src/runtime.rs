@@ -1668,6 +1668,55 @@ impl Inner {
                     inner.emit(Input::ActionResult { kind, result }).await;
                 });
             }
+            Effect::PressButton {
+                conversation,
+                message,
+                request,
+            } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: the app acts on each press it is told of.
+                    let result = inner
+                        .api
+                        .post::<lazy_protocol::RunCommandResponse, _>(
+                            &paths::message_actions(message),
+                            &request,
+                        )
+                        .await
+                        .map(|ran| ActionOutcome::CommandRan(Box::new(ran)));
+                    let kind = ActionKind::RunCommand(conversation);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
+            Effect::LoadPreviews { message, revision } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::message_previews(message);
+                    let result = inner
+                        .retry_read(|| inner.api.get::<lazy_protocol::LinkPreviewsResponse>(&path))
+                        .await
+                        .map(|response| response.previews);
+                    inner
+                        .emit(Input::PreviewsLoaded {
+                            message,
+                            revision,
+                            result,
+                        })
+                        .await;
+                });
+            }
+            Effect::SetAppInteractivity { app, request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    let path = paths::app_interactivity(app);
+                    let result = inner
+                        .retry_read(|| inner.api.put::<lazy_protocol::App, _>(&path, &request))
+                        .await
+                        .map(|app| ActionOutcome::App(Box::new(app)));
+                    let kind = ActionKind::AppInteractivity(app);
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
             Effect::RunCommand {
                 conversation,
                 request,

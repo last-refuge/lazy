@@ -179,10 +179,11 @@ struct AppRow {
     last_used_at: Option<OffsetDateTime>,
     event_url: Option<String>,
     event_types: Vec<String>,
+    interactivity_url: Option<String>,
 }
 
 const APP_COLUMNS: &str = "id, workspace_id, name, bot_user_id, token_hint, scopes, created_by, \
-     created_at, last_used_at, event_url, event_types";
+     created_at, last_used_at, event_url, event_types, interactivity_url";
 
 /// The channels `bot` is in that `viewer` can read (public ones, and private ones they are in).
 async fn channels_of(
@@ -228,6 +229,7 @@ async fn app_dto(conn: &mut PgConnection, row: AppRow, viewer: UserId) -> Result
         last_used_at: row.last_used_at.map(Timestamp::from),
         commands: crate::commands::commands_of(conn, row.id).await?,
         events: crate::app_events::events_of(row.event_url, row.event_types),
+        interactivity_url: row.interactivity_url,
     })
 }
 
@@ -701,8 +703,10 @@ pub async fn post_message(
         // A bot posts words only, as a webhook does.
         attachment_ids: Vec::new(),
     };
+    let rich = crate::slack_compat::to_rich(body, true);
     let message =
-        messages::send_message(&state.pool, bot.bot_user_id, conversation, request).await?;
+        messages::send_message_with(&state.pool, bot.bot_user_id, conversation, request, rich)
+            .await?;
     Ok(BotMessageResponse {
         message_id: message.id,
         conversation_id: conversation,

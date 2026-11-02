@@ -332,6 +332,38 @@ impl fmt::Debug for Input {
             Input::DismissCommandReply(v0) => {
                 f.debug_tuple("DismissCommandReply").field(v0).finish()
             }
+            Input::PressButton {
+                conversation,
+                message,
+                block,
+                action_id,
+                ..
+            } => f
+                .debug_struct("PressButton")
+                .field("conversation", conversation)
+                .field("message", message)
+                .field("block", block)
+                .field("action_id", action_id)
+                .finish_non_exhaustive(),
+            Input::LoadPreviews { message, revision } => f
+                .debug_struct("LoadPreviews")
+                .field("message", message)
+                .field("revision", revision)
+                .finish(),
+            Input::PreviewsLoaded {
+                message,
+                revision,
+                result,
+            } => f
+                .debug_struct("PreviewsLoaded")
+                .field("message", message)
+                .field("revision", revision)
+                .field("count", &result.as_ref().map(Vec::len))
+                .finish_non_exhaustive(),
+            Input::SetAppInteractivity { app, .. } => f
+                .debug_struct("SetAppInteractivity")
+                .field("app", app)
+                .finish_non_exhaustive(),
             Input::DisconnectConnector {
                 workspace,
                 provider,

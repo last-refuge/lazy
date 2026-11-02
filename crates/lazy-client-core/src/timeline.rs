@@ -232,6 +232,7 @@ impl Timeline {
             conversation_id: conversation,
             author_id: item.author_id,
             document,
+            rich: item.rich.clone(),
             created_at,
             revision,
             seq,
@@ -335,6 +336,11 @@ impl Timeline {
             key: ItemKey::Message(message.id),
             author_id: message.author_id,
             document: message.document.clone(),
+            rich: if message.deleted {
+                None
+            } else {
+                message.rich.clone()
+            },
             delivery: Delivery::Confirmed {
                 message_id: message.id,
                 seq: message.seq,
@@ -511,6 +517,7 @@ impl Timeline {
             {
                 latest.revision = revision;
                 latest.document = saved.unwrap_or(standalone.document);
+                latest.rich = standalone.rich;
                 latest.edited_at = standalone.edited_at;
                 latest.mentions = standalone.mentions.clone();
             }
@@ -528,6 +535,7 @@ impl Timeline {
         let mut item = self.items.remove(index);
         item.author_id = message.author_id;
         item.document = latest.document;
+        item.rich = latest.rich;
         item.edited_at = latest.edited_at;
         item.mentions = latest.mentions;
         item.reactions = latest.reactions;
@@ -712,6 +720,11 @@ impl Timeline {
         if message.revision > *revision {
             *revision = message.revision;
             item.edited_at = message.edited_at;
+            item.rich = if message.deleted {
+                None
+            } else {
+                message.rich.clone()
+            };
             item.mentions = message.mentions.clone();
             // Files never change, but a message the row first saw without them is complete now.
             if !message.deleted && item.attachments != message.attachments {
@@ -995,6 +1008,7 @@ impl Timeline {
         let item = &mut self.items[index];
         item.deleted = true;
         item.document = message.document.clone();
+        item.rich = None;
         item.attachments = Vec::new();
         item.edited_at = None;
         item.edit = EditState::None;

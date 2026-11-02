@@ -19,7 +19,9 @@
 //! link, and unknown block types. Mentions are text: a webhook notifies nobody (D16), so
 //! `<!channel>` reads "@channel" and pings no one.
 
+use lazy_domain::MessageDocument;
 use lazy_domain::markdown::{escape_plain, link_source};
+use lazy_domain::rich::{self, Button, ButtonStyle, RichBlock, RichContent};
 use serde_json::Value;
 
 /// Reads a webhook body as JSON, or as a form whose `payload` field is JSON.
@@ -418,6 +420,155 @@ fn quote(markdown: &str) -> String {
         .map(|line| format!("> {line}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+// ----- Rich content ------------------------------------------------------------------------------
+
+/// The rich content (D40) for a body's `blocks`, or `None` if it has none Lazy can draw. The
+/// document from [`to_markdown`] stays the message's fallback text. `interactive` is whether the
+/// sender is an app that can be told about presses: for anyone else (a webhook, a connector)
+/// buttons without a link are dropped, since nothing would answer them. Legacy `attachments`
+/// follow the blocks as sections, so nothing [`to_markdown`] shows is lost.
+pub fn to_rich(body: &Value, interactive: bool) -> Option<RichContent> {
+    let mut out = Vec::new();
+    for (n, block) in body["blocks"].as_array()?.iter().enumerate() {
+        out.extend(rich_block(block, n, interactive));
+    }
+    if out.is_empty() {
+        return None;
+    }
+    for attachment in body["attachments"].as_array().into_iter().flatten() {
+        if let Some(text) = attachment_markdown(attachment).and_then(|m| document(&m)) {
+            out.push(RichBlock::Section {
+                text: Some(text),
+                fields: Vec::new(),
+                accessory: None,
+            });
+        }
+    }
+    out.truncate(rich::MAX_RICH_BLOCKS);
+    RichContent::new(out).ok()
+}
+
+/// Markdown as a document, or `None` if it shows nothing or cannot be sent.
+fn document(markdown: &str) -> Option<MessageDocument> {
+    let source = lazy_domain::emoji::replace_shortcodes(markdown);
+    MessageDocument::from_markdown(&source).ok()
+}
+
+fn rich_text(value: &Value) -> Option<MessageDocument> {
+    text_object(value).and_then(|markdown| document(&markdown))
+}
+
+/// Text on one line, cut to `max` characters with an ellipsis.
+fn clipped(text: &str, max: usize) -> String {
+    let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() <= max {
+        return one_line;
+    }
+    let mut cut: String = one_line.chars().take(max - 1).collect();
+    cut.push('\u{2026}');
+    cut
+}
+
+/// A Block Kit button as a Lazy button: a link, or (for an app) an action.
+fn rich_button(value: &Value, fallback_id: String, interactive: bool) -> Option<Button> {
+    if value["type"] != "button" {
+        return None;
+    }
+    let text = clipped(value["text"]["text"].as_str()?, rich::MAX_BUTTON_TEXT_CHARS);
+    if text.is_empty() {
+        return None;
+    }
+    let url = value["url"]
+        .as_str()
+        .filter(|url| lazy_domain::document::link_is_allowed(url))
+        .map(str::to_owned);
+    if url.is_none() && !interactive {
+        return None;
+    }
+    let action_id = value["action_id"]
+        .as_str()
+        .filter(|id| !id.trim().is_empty())
+        .map_or(fallback_id, |id| clipped(id, rich::MAX_ACTION_ID_CHARS));
+    let style = match value["style"].as_str() {
+        Some("primary") => ButtonStyle::Primary,
+        Some("danger") => ButtonStyle::Danger,
+        _ => ButtonStyle::Default,
+    };
+    Some(Button {
+        action_id,
+        text,
+        value: value["value"]
+            .as_str()
+            .map(|v| v.chars().take(rich::MAX_VALUE_CHARS).collect()),
+        url,
+        style,
+    })
+}
+
+fn rich_block(value: &Value, n: usize, interactive: bool) -> Option<RichBlock> {
+    match value["type"].as_str()? {
+        "header" => {
+            let text = clipped(value["text"]["text"].as_str()?, rich::MAX_HEADER_CHARS);
+            (!text.is_empty()).then_some(RichBlock::Header { text })
+        }
+        "divider" => Some(RichBlock::Divider),
+        "section" => {
+            let text = rich_text(&value["text"]);
+            let fields: Vec<MessageDocument> = value["fields"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(rich_text)
+                .take(rich::MAX_FIELDS)
+                .collect();
+            let accessory = rich_button(&value["accessory"], format!("button-{n}"), interactive);
+            (text.is_some() || !fields.is_empty() || accessory.is_some()).then_some(
+                RichBlock::Section {
+                    text,
+                    fields,
+                    accessory,
+                },
+            )
+        }
+        "context" => {
+            let items: Vec<MessageDocument> = value["elements"]
+                .as_array()?
+                .iter()
+                .filter(|item| item["type"] != "image")
+                .filter_map(rich_text)
+                .take(rich::MAX_CONTEXT_ITEMS)
+                .collect();
+            (!items.is_empty()).then_some(RichBlock::Context { items })
+        }
+        "actions" => {
+            let mut buttons: Vec<Button> = Vec::new();
+            for (i, element) in value["elements"].as_array()?.iter().enumerate() {
+                if let Some(button) = rich_button(element, format!("button-{n}-{i}"), interactive)
+                    && !buttons.iter().any(|b| b.action_id == button.action_id)
+                    && buttons.len() < rich::MAX_BUTTONS
+                {
+                    buttons.push(button);
+                }
+            }
+            let block_id = value["block_id"]
+                .as_str()
+                .filter(|id| !id.trim().is_empty())
+                .map(|id| clipped(id, rich::MAX_ACTION_ID_CHARS));
+            (!buttons.is_empty()).then_some(RichBlock::Actions { block_id, buttons })
+        }
+        // An image is never fetched by the client: it stays a link, as in the text.
+        "image" | "rich_text" => {
+            let text = block(value).and_then(|markdown| document(&markdown))?;
+            Some(RichBlock::Section {
+                text: Some(text),
+                fields: Vec::new(),
+                accessory: None,
+            })
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

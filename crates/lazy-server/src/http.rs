@@ -155,6 +155,9 @@ pub fn router(state: AppState) -> Router {
         .route(paths::APP_COMMAND_ROUTE, delete(app_remove_command))
         .route(paths::APP_SIGNING_SECRET_ROUTE, get(app_signing_secret))
         .route(paths::APP_EVENTS_ROUTE, put(app_set_events))
+        .route(paths::APP_INTERACTIVITY_ROUTE, put(app_set_interactivity))
+        .route(paths::MESSAGE_ACTIONS_ROUTE, post(press_button))
+        .route(paths::MESSAGE_PREVIEWS_ROUTE, get(message_previews))
         .route(paths::WORKSPACE_COMMANDS_ROUTE, get(workspace_commands))
         .route(paths::RUN_COMMAND_ROUTE, post(run_command))
         .route(paths::COMMAND_RESPOND_ROUTE, post(command_respond))
@@ -737,6 +740,43 @@ async fn app_set_events(
         .map(Json)
 }
 
+async fn app_set_interactivity(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(app_id): ApiPath<lazy_domain::AppId>,
+    ApiJson(request): ApiJson<lazy_protocol::SetAppInteractivityRequest>,
+) -> Result<Json<lazy_protocol::App>, AppError> {
+    crate::interactions::set_interactivity(&state, principal.user_id, app_id, request)
+        .await
+        .map(Json)
+}
+
+async fn press_button(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(message_id): ApiPath<MessageId>,
+    ApiJson(request): ApiJson<lazy_protocol::PressButtonRequest>,
+) -> Result<Json<lazy_protocol::RunCommandResponse>, AppError> {
+    crate::interactions::press(&state, principal.user_id, message_id, request)
+        .await
+        .map(Json)
+}
+
+async fn message_previews(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(message_id): ApiPath<MessageId>,
+) -> Result<Json<lazy_protocol::LinkPreviewsResponse>, AppError> {
+    let previews = crate::link_previews::previews(
+        &state.pool,
+        state.integrations.previews.as_ref(),
+        principal.user_id,
+        message_id,
+    )
+    .await?;
+    Ok(Json(lazy_protocol::LinkPreviewsResponse { previews }))
+}
+
 async fn workspace_commands(
     State(state): State<AppState>,
     Auth(principal): Auth,
@@ -1003,7 +1043,9 @@ async fn receive(
     let text = crate::slack_compat::to_markdown(&body).ok_or_else(|| {
         AppError::invalid("there is nothing to post: send text, blocks, or attachments")
     })?;
-    webhooks::deliver(&state.pool, webhook, key, &text).await
+    // A webhook has no app to tell about presses, so only link buttons are kept (D40).
+    let rich = crate::slack_compat::to_rich(&body, false);
+    webhooks::deliver(&state.pool, webhook, key, &text, rich).await
 }
 
 async fn upload_attachment(

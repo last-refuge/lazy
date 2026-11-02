@@ -363,6 +363,8 @@ pub struct IntegrationOptions {
     pub jobs: Option<crate::jobs::WorkerOptions>,
     /// Where GitHub is; tests point it at a stand-in.
     pub github: crate::github::GithubEndpoints,
+    /// How link previews are fetched (D41); tests may allow a stand-in site on this machine.
+    pub previews: crate::link_previews::PreviewOptions,
 }
 
 /// Where the bytes of attachments live.

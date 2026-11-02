@@ -36,7 +36,7 @@ use lazy_domain::mention::{MentionTarget, can_mention_channel};
 use lazy_domain::message::{MessageFacts, deleted_placeholder};
 use lazy_domain::{
     ConversationId, EventSeq, MAX_REACTION_KINDS, MessageDocument, MessageId, OperationId,
-    ReactionEmoji, Timestamp, UserId,
+    ReactionEmoji, RichContent, Timestamp, UserId,
 };
 use lazy_protocol::{
     EditMessageRequest, ErrorCode, Event, HistoryPage, HistoryQuery, Mentions, Message,
@@ -67,6 +67,7 @@ struct MessageRow {
     conversation_id: Uuid,
     author_id: Uuid,
     document: Json<MessageDocument>,
+    rich: Option<Json<RichContent>>,
     created_at: OffsetDateTime,
     revision: i32,
     seq: i64,
@@ -81,7 +82,7 @@ struct MessageRow {
 macro_rules! message_select {
     ($tail:literal) => {
         concat!(
-            "SELECT m.id, m.conversation_id, m.author_id, m.document, m.created_at, m.revision, m.seq, \
+            "SELECT m.id, m.conversation_id, m.author_id, m.document, m.rich, m.created_at, m.revision, m.seq, \
                     m.edited_at, m.deleted, m.reactions_as_of, m.mentions, m.thread_root_id, m.in_channel ",
             $tail
         )
@@ -95,6 +96,11 @@ impl MessageRow {
             conversation_id: ConversationId::from_uuid(self.conversation_id),
             author_id: UserId::from_uuid(self.author_id),
             document: self.document.0,
+            rich: if self.deleted {
+                None
+            } else {
+                self.rich.map(|rich| rich.0)
+            },
             created_at: Timestamp::from(self.created_at),
             revision: u32::try_from(self.revision)
                 .map_err(|_| AppError::internal("stored message revision is negative"))?,
@@ -396,6 +402,18 @@ pub async fn send_message(
     conversation: ConversationId,
     request: SendMessageRequest,
 ) -> Result<Message, AppError> {
+    send_message_with(pool, user, conversation, request, None).await
+}
+
+/// [`send_message`] with an integration's rich content (D40). Only the server's integration paths
+/// (webhooks, the bot API, apps' answers) pass `rich`; the client API cannot.
+pub(crate) async fn send_message_with(
+    pool: &PgPool,
+    user: UserId,
+    conversation: ConversationId,
+    request: SendMessageRequest,
+    rich: Option<RichContent>,
+) -> Result<Message, AppError> {
     if request.also_in_channel && request.thread_root.is_none() {
         return Err(AppError::invalid(
             "also_in_channel only applies to a reply (give a thread_root)",
@@ -499,8 +517,8 @@ pub async fn send_message(
     let listed = request.thread_root.is_none() || request.also_in_channel;
     sqlx::query(
         "INSERT INTO messages (id, conversation_id, author_id, document, plain_text, revision, seq, created_at, \
-                               mentions, mentions_channel, thread_root_id, in_channel, listed) \
-         VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, $9, $10, $11, $12)",
+                               mentions, mentions_channel, thread_root_id, in_channel, listed, rich) \
+         VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, $9, $10, $11, $12, $13)",
     )
     .bind(message_id.as_uuid())
     .bind(conversation.as_uuid())
@@ -514,6 +532,7 @@ pub async fn send_message(
     .bind(request.thread_root.map(|root| root.as_uuid()))
     .bind(request.also_in_channel)
     .bind(listed)
+    .bind(rich.as_ref().map(Json))
     .execute(&mut *tx)
     .await?;
     store_mention_rows(&mut tx, message_id, conversation, seq, listed, &mentions).await?;
@@ -536,6 +555,7 @@ pub async fn send_message(
         conversation_id: conversation,
         author_id: user,
         document: request.document,
+        rich,
         created_at: now,
         revision: 1,
         seq,
@@ -916,16 +936,33 @@ pub async fn edit_message(
     id: MessageId,
     request: EditMessageRequest,
 ) -> Result<Message, AppError> {
+    edit_message_with(pool, actor, id, request, None).await
+}
+
+/// [`edit_message`] that also sets the message's rich content (D40): an app replacing a message
+/// of its bot. A person's edit passes `None`, which a person's message always has.
+pub(crate) async fn edit_message_with(
+    pool: &PgPool,
+    actor: UserId,
+    id: MessageId,
+    request: EditMessageRequest,
+    rich: Option<RichContent>,
+) -> Result<Message, AppError> {
     let document_json = serde_json::to_vec(&request.document)
         .map_err(|e| AppError::internal(format!("cannot serialize document: {e}")))?;
-    let fingerprint = crate::crypto::command_fingerprint(
-        "edit_message",
-        &[
-            id.as_uuid().as_bytes(),
-            &request.base_revision.to_be_bytes(),
-            &document_json,
-        ],
-    );
+    let mut parts: Vec<Vec<u8>> = vec![
+        id.as_uuid().as_bytes().to_vec(),
+        request.base_revision.to_be_bytes().to_vec(),
+        document_json,
+    ];
+    if let Some(rich) = &rich {
+        parts.push(
+            serde_json::to_vec(rich)
+                .map_err(|e| AppError::internal(format!("cannot serialize blocks: {e}")))?,
+        );
+    }
+    let parts: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
+    let fingerprint = crate::crypto::command_fingerprint("edit_message", &parts);
 
     let (mut tx, loaded) = begin_message_change(pool, actor, id).await?;
     if let Some(existing) = receipts::claim(
@@ -963,7 +1000,7 @@ pub async fn edit_message(
         ));
     }
 
-    if row.document.0 == request.document {
+    if row.document.0 == request.document && row.rich.as_ref().map(|r| &r.0) == rich.as_ref() {
         // Nothing to commit but the receipt, which answers a later status query.
         receipts::set_message_revision(&mut tx, actor, request.operation_id, current).await?;
         let mut message = row.into_message()?;
@@ -999,8 +1036,8 @@ pub async fn edit_message(
     let previous_mentions = row.mentions.0.clone();
     let (seq, now) = events::next_position(&mut tx, loaded.workspace_id).await?;
     sqlx::query(
-        "INSERT INTO message_revisions (message_id, revision, author_id, document, edited_at, mentions) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO message_revisions (message_id, revision, author_id, document, edited_at, mentions, rich) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(id.as_uuid())
     .bind(row.revision)
@@ -1008,12 +1045,13 @@ pub async fn edit_message(
     .bind(Json(&row.document.0))
     .bind(row.edited_at)
     .bind(Json(&previous_mentions))
+    .bind(row.rich.as_ref().map(|r| Json(&r.0)))
     .execute(&mut *tx)
     .await?;
     let revision = current + 1;
     sqlx::query(
         "UPDATE messages SET document = $2, plain_text = $3, revision = $4, edited_at = $5, \
-                mentions = $6, mentions_channel = $7 \
+                mentions = $6, mentions_channel = $7, rich = $8 \
          WHERE id = $1",
     )
     .bind(id.as_uuid())
@@ -1023,6 +1061,7 @@ pub async fn edit_message(
     .bind(now.as_offset_date_time())
     .bind(Json(&mentions))
     .bind(mentions.channel)
+    .bind(rich.as_ref().map(Json))
     .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM message_mentions WHERE message_id = $1")
@@ -1042,6 +1081,7 @@ pub async fn edit_message(
 
     let mut message = Message {
         document: request.document,
+        rich,
         revision,
         edited_at: Some(now),
         mentions,
@@ -1087,15 +1127,16 @@ async fn original_edit_result(
     if u32::try_from(revision).ok() == Some(current.revision) {
         return Ok(current);
     }
-    // (author, document, edited_at, mentions) of that revision.
+    // (author, document, edited_at, mentions, rich) of that revision.
     type Prior = (
         Uuid,
         Json<MessageDocument>,
         Option<OffsetDateTime>,
         Json<Mentions>,
+        Option<Json<RichContent>>,
     );
     let prior: Option<Prior> = sqlx::query_as(
-        "SELECT author_id, document, edited_at, mentions FROM message_revisions \
+        "SELECT author_id, document, edited_at, mentions, rich FROM message_revisions \
              WHERE message_id = $1 AND revision = $2",
     )
     .bind(id.as_uuid())
@@ -1103,9 +1144,10 @@ async fn original_edit_result(
     .fetch_optional(conn)
     .await?;
     Ok(match prior {
-        Some((author, document, edited_at, mentions)) => Message {
+        Some((author, document, edited_at, mentions, rich)) => Message {
             author_id: UserId::from_uuid(author),
             document: document.0,
+            rich: rich.map(|rich| rich.0),
             mentions: mentions.0,
             revision: u32::try_from(revision).unwrap_or(current.revision),
             edited_at: edited_at.map(Timestamp::from),
@@ -1206,7 +1248,7 @@ pub async fn delete_message(
     sqlx::query(
         "UPDATE messages SET document = $2, plain_text = '', revision = $3, edited_at = NULL, \
                 reactions_as_of = $4, mentions = '{}'::jsonb, mentions_channel = false, \
-                listed = $5, deleted = true \
+                listed = $5, deleted = true, rich = NULL \
          WHERE id = $1",
     )
     .bind(id.as_uuid())
@@ -1218,6 +1260,7 @@ pub async fn delete_message(
     .await?;
     let mut tombstone = Message {
         document: placeholder,
+        rich: None,
         revision: u32::try_from(revision).unwrap_or(u32::MAX),
         edited_at: None,
         // Clearing the reactions is a change to them, made at this position, so a client that

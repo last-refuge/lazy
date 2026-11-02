@@ -153,6 +153,10 @@ pub enum Change {
     DownloadChanged {
         attachment: AttachmentId,
     },
+    /// `ClientCore::link_previews` of this message arrived.
+    PreviewsChanged {
+        message: MessageId,
+    },
     /// `ClientCore::thumbnail` or `ClientCore::full_image` of this attachment changed.
     ImageChanged {
         attachment: AttachmentId,

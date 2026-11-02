@@ -31,6 +31,7 @@ fn app(id: AppId, scopes: Vec<AppScope>) -> App {
         last_used_at: None,
         commands: Vec::new(),
         events: None,
+        interactivity_url: None,
     }
 }
 
@@ -267,4 +268,85 @@ fn a_known_command_runs_instead_of_sending_and_its_reply_is_private() {
     assert_eq!(held.document, reply);
     driver.send(Input::DismissCommandReply(general));
     assert!(driver.core.command_reply(general).is_none());
+}
+
+#[test]
+fn a_button_press_waits_once_and_its_reply_shows_like_a_commands() {
+    let world = World::new();
+    let mut driver = Driver::ready(&world);
+    let general = world.channel.id;
+    let message = lazy_domain::MessageId::generate();
+    let press = |driver: &mut Driver, action: &str| {
+        driver.send(Input::PressButton {
+            conversation: general,
+            message,
+            block: 2,
+            action_id: action.into(),
+            label: "Approve".into(),
+        })
+    };
+    press(&mut driver, "approve");
+    let presses: Vec<_> = driver
+        .effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::PressButton {
+                message: m,
+                request,
+                ..
+            } => Some((*m, request.block, request.action_id.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(presses, [(message, 2, "approve".to_owned())]);
+    assert_eq!(driver.core.pressing(general), Some((message, 2, "approve")));
+    assert_eq!(driver.core.last_command(general), Some("Approve"));
+
+    // A second press while the first waits is not sent.
+    press(&mut driver, "reject");
+    assert_eq!(
+        driver
+            .effects
+            .iter()
+            .filter(|e| matches!(e, Effect::PressButton { .. }))
+            .count(),
+        1
+    );
+
+    let reply = lazy_domain::MessageDocument::from_markdown("Approved").unwrap();
+    driver.send(Input::ActionResult {
+        kind: ActionKind::RunCommand(general),
+        result: Ok(ActionOutcome::CommandRan(Box::new(
+            lazy_protocol::RunCommandResponse {
+                app_name: "Deployer".into(),
+                reply: Some(reply.clone()),
+                posted: None,
+            },
+        ))),
+    });
+    assert_eq!(driver.core.pressing(general), None);
+    let held = driver.core.command_reply(general).unwrap();
+    assert_eq!(
+        (held.app_name.as_str(), held.command.as_str()),
+        ("Deployer", "Approve")
+    );
+    assert_eq!(held.document, reply);
+
+    // The next press is a new one, with its own id; a failure is the server's words.
+    driver.effects.clear();
+    press(&mut driver, "approve");
+    assert!(driver.core.command_reply(general).is_none());
+    driver.send(Input::ActionResult {
+        kind: ActionKind::RunCommand(general),
+        result: Err(lazy_client_core::RequestError::Rejected(
+            lazy_protocol::ApiError::new(
+                lazy_protocol::ErrorCode::Unavailable,
+                "Deployer doesn't take button presses",
+            ),
+        )),
+    });
+    assert_eq!(
+        failed(&driver, ActionKind::RunCommand(general)),
+        "Deployer doesn't take button presses."
+    );
 }

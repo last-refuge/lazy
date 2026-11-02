@@ -235,6 +235,23 @@ A private answer sent later through `response_url` is not shown yet; answer priv
 
 On an app's screen, **Events**: an address and what to send, **Messages that name it** (`@App name` in a message) and/or **Every message in its channels**. Lazy checks the address with Slack's `url_verification` challenge before saving, then sends each event as Slack's `event_callback`, signed like commands. Reply with `POST /v1/bot/messages` using the event's `channel` and its `ts` as `thread_ts`. Messages written by bots are not sent, so two apps never answer each other in a loop.
 
+### Blocks and buttons
+
+Messages from webhooks, the bot API, and app answers can carry Slack's `blocks` (Block Kit): headers, sections with fields and a button, dividers, context lines, and rows of buttons are drawn as such; other kinds are shown as their text. Always send `text` too: older Lazy clients, notifications, and search use it.
+
+A button with a `url` opens it. To be told when someone presses any other button of your app, put an address under **Buttons** on the app's screen. Lazy sends Slack's `block_actions` (a form with one `payload` field) signed like commands, checks on each press that the person may still see the message, and takes the button's `value` from the message itself. Answer within 3 seconds, or later through the `response_url`:
+
+- text: a reply only the person who pressed sees;
+- `{"replace_original": true, "text": "...", "blocks": [...]}`: the message is replaced (the buttons with it);
+- `{"delete_original": true}`: the message is deleted;
+- `{"response_type": "in_channel", "text": "..."}`: a new message from the app.
+
+Webhooks and connectors have no app to answer presses, so only their link buttons are kept.
+
+### Link previews
+
+When someone views a message with links, the server fetches each page (at most 3 per message) and shows its title, description, and site under the message. It needs outbound HTTPS, like GitHub does. It connects only to public addresses on ports 80 and 443 (never this machine, the private network, or a cloud metadata address), follows at most 3 redirects, gives up after 5 seconds, and reads at most 256 KB of HTML. Previews are kept for a day per workspace, and only people who can read the message see them. Pictures from pages are not shown.
+
 ### Zapier, n8n and Make
 
 Lazy has no app in their directories yet. Their generic HTTP steps reach everything:

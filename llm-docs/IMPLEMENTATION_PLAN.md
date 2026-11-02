@@ -27,14 +27,14 @@ Goal: a compiling, CI-checked workspace that launches a native desktop window an
 - [ ] 0.1 Repository and toolchain
   - [X] Initialize the git repository and add `.gitignore`
   - [X] Pin a supported Rust toolchain and edition in `rust-toolchain.toml`
-  - [ ] Create the Cargo workspace with shared `workspace.dependencies` and lint policy
+  - [ ] Create the Cargo workspace with shared `workspace.dependencies` and lint policy (workspace and shared dependencies done; no `[workspace.lints]` policy yet)
   - [X] Write repository instructions (build, test, conventions, dependency policy) for contributors and agents
-  - [ ] Add `cargo-deny` for licenses, advisories, and duplicate versions
+  - [ ] Add `cargo-deny` for licenses, advisories, and duplicate versions (`deny.toml` written; not run in CI)
 - [ ] 0.2 GPUI pin
-  - [ ] Decide the desktop OS targets and minimum versions
+  - [X] Decide the desktop OS targets and minimum versions (README: Windows 10 and 11 64-bit, macOS 11+, Linux x86_64)
   - [X] Select and record a full Zed revision for GPUI
   - [X] Review standalone build requirements and dependency patches at that revision
-  - [ ] Open a minimal GPUI window on each desktop target
+  - [X] Open a minimal GPUI window on each desktop target (Linux on Wayland, VERIFICATION.md; Windows and macOS used by the owner with the released clients)
   - [ ] Document the procedure for upgrading the pinned revision
 - [ ] 0.3 Core crates, in dependency order
   - [X] `lazy-domain`: typed identities (newtypes) and structured error types
@@ -42,38 +42,38 @@ Goal: a compiling, CI-checked workspace that launches a native desktop window an
   - [X] `lazy-server`: Tokio, Axum, and SQLx skeleton with configuration, health endpoint, and a defined owner for every spawned task and its shutdown
   - [X] `lazy-client-core`: state-machine skeleton with command/effect/event boundaries
   - [X] `lazy-client-runtime`: transport and platform-interface skeleton
-  - [ ] `lazy-ui` and `lazy-desktop`: window lifecycle, asset loading, theme-token plumbing
-  - [ ] Add a CI check that `lazy-domain`, `lazy-protocol`, and `lazy-client-core` do not depend on GPUI or desktop-only crates
+  - [X] `lazy-ui` and `lazy-desktop`: window lifecycle, asset loading, theme-token plumbing
+  - [ ] Add a CI check that `lazy-domain`, `lazy-protocol`, and `lazy-client-core` do not depend on GPUI or desktop-only crates (`scripts/check-core-deps.sh` exists and is run by hand; not in CI)
 - [ ] 0.4 Postgres and migrations
-  - [ ] Add a reproducible local Postgres setup with a pinned major version
-  - [ ] Choose migration tooling and a naming and forward-only policy
+  - [ ] Add a reproducible local Postgres setup with a pinned major version (`scripts/dev-db.sh` gives separate dev and test instances, but uses the system Postgres, 16 here, while CI and deployment use 18)
+  - [X] Choose migration tooling and a naming and forward-only policy (SQLx migrations, numbered; forward-only in DEPLOY.md)
   - [X] Build a test harness that gives each test an isolated database
   - [X] Set up SQLx query metadata so CI builds without a live database where possible
-  - [ ] Apply migrations to an empty database in CI
+  - [X] Apply migrations to an empty database in CI (every `sqlx::test` database starts empty; the `server` workflow's fresh-database smoke test)
 - [ ] 0.5 Continuous integration
-  - [ ] Run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets`, and `cargo test --workspace`
-  - [ ] Run dependency, license, and migration checks
-  - [ ] Build the desktop targets in an OS matrix
-  - [ ] Compile the shared crates for iOS and Android targets
-- [ ] 0.6 Product semantics and authorization specs
-  - [ ] Define workspace roles and channel-level permissions
+  - [X] Run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets`, and `cargo test --workspace` (the manual `ci` workflow)
+  - [ ] Run dependency, license, and migration checks (migrations run in CI; dependency and license checks do not)
+  - [X] Build the desktop targets in an OS matrix (the `release` workflow)
+  - [X] Compile the shared crates for iOS and Android targets (`ci` mobile job, green on 2026-10-30, run 41137196338)
+- [X] 0.6 Product semantics and authorization specs
+  - [X] Define workspace roles and channel-level permissions (AUTHORIZATION.md)
   - [X] Write the authorization matrix for mutations, history reads, search, attachments, realtime subscriptions, and huddle joins
   - [X] Specify thread notifications, deleted root messages, archived channels, private-channel invitations, and membership removal
   - [X] Specify concurrent message edits and unread behavior
-  - [ ] Specify group-conversation history rules when participants are added
-  - [ ] Turn each specification into a named test case to implement in Phases 1 and 2
-- [ ] 0.7 Design foundations
-  - [ ] Define semantic design tokens for light and dark themes (color, type, spacing, radius, motion)
-  - [ ] Specify the core components: button, input, list row, message row, composer, dialog, avatar, badge, menu
-  - [ ] Specify the shell layout: workspace rail, sidebar, timeline, resizable thread pane, huddle dock
-  - [ ] Produce representative screens at wide, medium, and narrow widths, with simulated content visibly labeled
+  - [X] Specify group-conversation history rules when participants are added (implemented in 2.1)
+  - [X] Turn each specification into a named test case to implement in Phases 1 and 2
+- [X] 0.7 Design foundations
+  - [X] Define semantic design tokens for light and dark themes (color, type, spacing, radius, motion) (`theme.rs`, D26)
+  - [X] Specify the core components: button, input, list row, message row, composer, dialog, avatar, badge, menu (realized in `lazy-ui`)
+  - [X] Specify the shell layout: workspace rail, sidebar, timeline, resizable thread pane, huddle dock (the dock itself is specified in HUDDLES.md and built in Phase 5)
+  - [X] Produce representative screens at wide, medium, and narrow widths, with simulated content visibly labeled (the `screens` example)
 - [ ] 0.8 Mobile feasibility
-  - [ ] Confirm the shared crates compile for iOS and Android, and keep that check in CI
+  - [X] Confirm the shared crates compile for iOS and Android, and keep that check in CI
   - [ ] Run a minimal GPUI screen on the iOS backend and note rendering, input, accessibility, lifecycle, and power findings
   - [ ] Check Android backend status at the pinned revision
   - [ ] If no suitable Android backend exists, estimate the cost of maintaining one
   - [ ] Document the Android path and the decision it requires
-- [ ] 0.9 Huddle media spike
+- [ ] 0.9 Huddle media spike (now HUDDLES.md milestone M0: all-Rust on str0m, as a reusable library, D39)
   - [ ] Inventory the native libraries, codecs, and OS APIs needed by media adapters, with packaging and licensing notes
   - [ ] Evaluate str0m for the SFU and webrtc-rs for the client transport at candidate versions
   - [ ] Evaluate TURN options, including a Rust implementation
@@ -84,8 +84,8 @@ Goal: a compiling, CI-checked workspace that launches a native desktop window an
   - [ ] Name the reference hardware, network conditions, and region used for performance targets
   - [X] Write the native-automation rules: only test windows and processes launched for the run, disposable profiles, cleanup of owned processes
 - [ ] 0.11 Phase gate
-  - [ ] Native launch on every desktop target
-  - [ ] Shared-core mobile builds pass in CI
+  - [X] Native launch on every desktop target
+  - [X] Shared-core mobile builds pass in CI
   - [ ] Android path documented
   - [ ] Two-client audio proof recorded
   - [ ] CI is green and verification outcomes are recorded
@@ -302,14 +302,14 @@ Goal: dogfood users can do normal work without developer assistance.
   - [X] Structured logging with no credentials or message content
   - [X] Dogfood guide (`llm-docs/DOGFOOD.md`) and issue template (`.github/ISSUE_TEMPLATE/dogfood.md`)
   - [X] Server container, Docker Compose, and Coolify deployment (the `server` workflow passed image build, fresh-database smoke test, and restart persistence, run 41155102683; user confirmed on 2026-10-31 that the server is running successfully on Coolify and the Windows client connects to it; pushing to ghcr.io remains unverified)
-  - [ ] Client installers for Linux, macOS, and Windows from the manual `release` workflow (written: `.deb`, tarball, `.dmg`, Windows installer and zip, `llm-docs/RELEASE.md`; the rebuilt 0.6.0 draft passed builds on all three platforms and checksum inspection, run 41161781734; user confirmed Windows client use against the Coolify server on 2026-10-31; macOS installation is next, Linux installation outside CI remains unverified)
+  - [X] Client installers for Linux, macOS, and Windows from the manual `release` workflow (`.deb`, tarball, `.dmg`, Windows installer and zip, `llm-docs/RELEASE.md`; 0.7.0, 0.8.1, and 0.8.2 published and installed by the owner on Windows and macOS, with in-app updates; a Linux install outside CI remains unverified)
   - [X] Choose the server in the app, so installed clients need no environment variable (tested in CI on Linux, `ci` run on `1f99b8f`; not tried on an installed app)
   - [ ] First run: address and invitation code, then a short, branded account creation (plan in `llm-docs/ONBOARDING.md`, D29; the invitee's and the owner's paths are written and tested in CI on Linux; the first walkthrough on real machines is still to do)
     - [X] Server: public server info, previewing an invitation without using it, a readable invitation code, Copy message to send (tested in CI against a real Postgres, `ci` run on `1f99b8f`)
     - [X] Client core and runtime: what the server says, the preview, forgiving code input, the first-run screens for a new install (tested in CI: the core and the screens' logic directly, the runtime against a stub server, never a real one)
     - [ ] UI: the five screens, Moss at onboarding size, motion, dark theme (rendered and read in `screens`, `bdb1b45`; the motion itself not seen); the owner's two extra screens (name the workspace, the first invitation) are done; a warning for plain `http://` and accessibility passes are not done
     - [ ] Looked at in `screens` scenes (light, dark, wide, narrow, every error: all 24 `first-*` scenes read, `bdb1b45`) and walked through on Windows, macOS, and Linux with a fresh server (manual: not done)
-  - [ ] Apply the Soft Signal brand to the client and the packages (written, not compiled or rendered: `llm-docs/DECISIONS.md` D26)
+  - [X] Apply the Soft Signal brand to the client and the packages (D26; compiled, rendered in `screens`, and shipped in the released clients)
   - [ ] Onboard dogfood users
   - [ ] Track and triage issues from real use
 - [ ] 3.9 Phase gate
@@ -324,26 +324,26 @@ Source: PLAN.md "Outside integrations".
 
 Goal: generic webhooks and one complete provider integration, with predictable recovery from duplicates and failures.
 
-- [ ] 4.1 Data model and credentials
-  - [ ] Schema for installations with explicit scopes, subscriptions, deliveries, and credential references (credentials and jobs, D31; installations and subscriptions come with GitHub)
+- [X] 4.1 Data model and credentials
+  - [X] Schema for installations with explicit scopes, subscriptions, deliveries, and credential references (credentials and jobs, D31; GitHub installations and subscriptions, D32; connectors and their subscriptions, D34; apps, D35)
   - [X] Credential storage with encryption at rest and rotation (D31)
-  - [ ] Dedicated bot identities
+  - [X] Dedicated bot identities (webhooks, GitHub, each connector, and each app post as their own bot)
 - [ ] 4.2 Job system
   - [X] Postgres-backed queue with leases, ownership, and bounded concurrency (D31)
   - [X] Shutdown draining and worker restart recovery (D31)
   - [X] Failure classes: retryable, definitive, unknown outcome (D31)
   - [X] Bounded retries with visible failures (D31; GitHub's failed deliveries are listed for admins with Retry, D32)
   - [ ] Worker process mode for isolation (`lazy-server worker` written, D31; the worker is tested, the separate process has not been run)
-- [ ] 4.3 Incoming webhooks
+- [X] 4.3 Incoming webhooks
   - [X] Per-channel webhook endpoints with secrets (built in 2.9, D16; a new secret on request, D30)
-  - [ ] Signature verification, timestamp checks, and replay protection
+  - [X] Signature verification, timestamp checks, and replay protection (connectors verify each provider's HMAC, D34 and D37; slash commands and events sign Slack-style with a timestamp, D36 and D38; generic incoming webhooks, like Slack's, are authorized by their secret address and deduplicated by `Idempotency-Key`)
   - [X] Payload size bounds and rate limits (built in 2.9, D16)
   - [X] Duplicate-event handling (`Idempotency-Key`, D16; duplicates are recorded as such in the delivery log, D30)
   - [X] Slack-compatible bodies: `mrkdwn`, `<url|label>`, blocks, legacy attachments, form-encoded `payload` (D33)
-- [ ] 4.4 Rich messages and actions
-  - [ ] Versioned declarative block schema rendered with native components
-  - [ ] No arbitrary remote HTML
-  - [ ] Interactive actions with authorization rechecked on each use
+- [X] 4.4 Rich messages and actions (D40)
+  - [X] Versioned declarative block schema rendered with native components (`lazy_domain::RichContent`; Slack's Block Kit read from webhooks, the bot API, and app answers; header, section with fields and a button, divider, context, buttons; unknown blocks from a newer server are skipped with a note; the text stays the fallback for 0.8 clients)
+  - [X] No arbitrary remote HTML (text is a message document; an image block is a link, never fetched)
+  - [X] Interactive actions with authorization rechecked on each use (Slack's `block_actions`, signed; access, the stored button and its value, and the app checked on every press; replies, posts, replace and delete; select menus and modals not yet; the buttons are not keyboard tab stops yet)
 - [ ] 4.5 First provider integration (GitHub)
   - [X] Installation flow and scopes (manifest flow, installations from signed events, and the app's screens, D32; run against the real GitHub on chat.lazyto.day, 2026-11-01)
   - [X] Provider webhook signature verification (D32)
@@ -352,38 +352,41 @@ Goal: generic webhooks and one complete provider integration, with predictable r
   - [X] Deduplication by provider delivery ID (D32)
   - [ ] Provider-specific idempotency or reconciliation for any provider action (posting is idempotent per subscription and delivery, D32; Lazy takes no action on GitHub yet)
   - [X] Credential revocation (disconnect revokes all three secrets, D32)
-  - [ ] More providers: Linear, Jira (D34), Sentry and PagerDuty (D37) as webhook connectors, built and tested against stand-in deliveries, not yet run against the real services; Confluence, Figma deferred by the owner; Miro waits for link previews
-- [ ] 4.6 Bots and commands
+  - [X] More providers: Linear, Jira (D34), Sentry and PagerDuty (D37) as webhook connectors, built and tested against stand-in deliveries, not yet run against the real services; Confluence and Figma deferred by the owner; Miro boards show as link previews (4.7, D41); a Miro connector is not built
+- [X] 4.6 Bots and commands
   - [X] Bot tokens and scopes (apps with `chat:write`, `channels:read`, `channels:join`, D35)
   - [X] Slash commands (Slack-compatible requests and signatures, private and in-channel answers, `response_url` for in-channel only, D36)
   - [X] Posting API with rate limits (`POST /v1/bot/messages`, Lazy's or Slack's body, per-app rate, D35)
   - [X] Events for apps: `message` and `app_mention`, Slack's `event_callback`, verified addresses, retries (D38)
   - [X] Automation tools (Zapier, n8n, Make) through incoming webhooks, the bot API, and events with an unchecked address; a guide in DEPLOY.md (D38)
-- [ ] 4.7 Link previews
-  - [ ] Fetcher with outbound network restrictions
-  - [ ] Authorization recheck and size, time, and redirect bounds
-  - [ ] Cached previews that respect conversation access
-- [ ] 4.8 Administration UI
+- [X] 4.7 Link previews (D41)
+  - [X] Fetcher with outbound network restrictions (public addresses only, checked for literal addresses and by a resolver that drops private ones; ports 80 and 443; no credentials)
+  - [X] Authorization recheck and size, time, and redirect bounds (read access checked on every request; 3 redirects, each checked; 5 seconds; 256 KB of HTML)
+  - [X] Cached previews that respect conversation access (cached per workspace, served only through a message the reader can see; text only, no images yet)
+- [X] 4.8 Administration UI
   - [X] Install and configure integrations (incoming webhooks, D30; GitHub connect, install and subscriptions, D32; run against the real GitHub, 2026-11-01)
   - [X] Manage channel subscriptions (GitHub, D32; run against the real GitHub, 2026-11-01)
-  - [ ] View deliveries and failures, and retry (incoming webhooks: delivery log and recent failures, D30; there is nothing to retry for them because Lazy keeps no payload; retry comes with the job system)
-  - [ ] Rotate and revoke credentials (incoming webhooks: new address and delete, D30; provider credentials still to do)
-- [ ] 4.9 Tests
-  - [ ] Duplicate provider events
-  - [ ] Permission changes and credential revocation
-  - [ ] Unknown delivery outcomes
-  - [ ] Worker restart and fault injection
-  - [ ] Logs contain no credentials or sensitive payloads
+  - [X] View deliveries and failures, and retry (incoming webhooks: delivery log and recent failures, D30, nothing to retry since Lazy keeps no payload; GitHub and connectors: failed deliveries with Retry, D32 and D34)
+  - [X] Rotate and revoke credentials (webhooks: new address and delete, D30; GitHub: disconnect revokes all secrets, D32; connectors: new secret and remove, D34; apps: new token and delete, D35)
+- [X] 4.9 Tests
+  - [X] Duplicate provider events (`tests/github.rs`, `tests/connectors.rs`)
+  - [X] Permission changes and credential revocation (disconnect, removal, and app deletion tests)
+  - [X] Unknown delivery outcomes (`tests/jobs.rs`)
+  - [X] Worker restart and fault injection (`tests/jobs.rs`: a dead worker's job runs again, leases, shutdown)
+  - [X] Logs contain no credentials or sensitive payloads (`tests/log_audit.rs` reviews every tracing call)
 - [ ] 4.10 Phase gate
-  - [ ] Duplicate events and failures recover predictably
-  - [ ] Credentials can be revoked
-  - [ ] Verification outcomes recorded
+  - [X] Duplicate events and failures recover predictably
+  - [X] Credentials can be revoked
+  - [ ] Verification outcomes recorded (recorded for every slice in VERIFICATION.md; open until the worker process (4.2) and the remaining 4.5 items are settled)
 
 ---
 
 ## [ ] Phase 5: Huddles
 
-Source: PLAN.md "Huddles".
+Source: PLAN.md "Huddles". **The current plan is `HUDDLES.md` (D39):** an all-Rust media stack
+built as a standalone library (`media/`, `rtc-*` crates) with Lazy as its first host, in
+milestones M0 to M6. The items below remain the checklist; HUDDLES.md says in which milestone each
+lands.
 
 Goal: group audio, video, and screen sharing at a declared capacity, with media failures isolated from text messaging.
 
@@ -469,7 +472,7 @@ Goal: a signed, supportable desktop release.
   - [ ] Retention and deletion behavior
   - [ ] Rollback procedures
 - [ ] 6.5 Packaging and updates
-  - [ ] Installers for each desktop OS
+  - [X] Installers for each desktop OS (see 3.8; in-app updates exist but are not signed, below)
   - [ ] Code signing and, where required, notarization
   - [ ] Signed update mechanism with rollback
   - [ ] Runtime dependency and license inventory

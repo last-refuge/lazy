@@ -363,6 +363,73 @@ impl ClientCore {
         true
     }
 
+    /// Presses a button on a message (D40), shown like a slash command: one at a time per
+    /// conversation, its reply or failure in the same place.
+    pub(super) fn press_button(
+        &mut self,
+        conversation: ConversationId,
+        message: lazy_domain::MessageId,
+        block: u32,
+        action_id: String,
+        label: String,
+        out: &mut Output,
+    ) {
+        if !matches!(self.phase, SessionPhase::Ready) {
+            return;
+        }
+        let kind = ActionKind::RunCommand(conversation);
+        if self.action(kind) == &ActionState::InFlight {
+            return;
+        }
+        if self.command_replies.remove(&conversation).is_some() {
+            out.changes
+                .push(Change::CommandReplyChanged { conversation });
+        }
+        self.last_command.insert(conversation, label);
+        self.pressed
+            .insert(conversation, (message, block, action_id.clone()));
+        if self.begin_action(kind, out) {
+            out.effects.push(Effect::PressButton {
+                conversation,
+                message,
+                request: lazy_protocol::PressButtonRequest {
+                    block,
+                    action_id,
+                    press_id: lazy_domain::OperationId::generate(),
+                },
+            });
+        }
+    }
+
+    /// The button waiting for its app's answer in `conversation`, if one is.
+    pub fn pressing(
+        &self,
+        conversation: ConversationId,
+    ) -> Option<(lazy_domain::MessageId, u32, &str)> {
+        if self.action(ActionKind::RunCommand(conversation)) != &ActionState::InFlight {
+            return None;
+        }
+        self.pressed
+            .get(&conversation)
+            .map(|(message, block, action)| (*message, *block, action.as_str()))
+    }
+
+    pub(super) fn set_app_interactivity(&mut self, app: AppId, url: &str, out: &mut Output) {
+        let kind = ActionKind::AppInteractivity(app);
+        if !matches!(self.phase, SessionPhase::Ready) || self.action(kind) == &ActionState::InFlight
+        {
+            return;
+        }
+        if self.begin_action(kind, out) {
+            out.effects.push(Effect::SetAppInteractivity {
+                app,
+                request: lazy_protocol::SetAppInteractivityRequest {
+                    url: url.trim().to_owned(),
+                },
+            });
+        }
+    }
+
     pub(super) fn dismiss_command_reply(&mut self, conversation: ConversationId, out: &mut Output) {
         if self.command_replies.remove(&conversation).is_some() {
             out.changes
@@ -423,7 +490,10 @@ impl ClientCore {
                 self.app_signing_secret = Some((app, secret));
                 out.changes.push(Change::AppSigningSecretChanged);
             }
-            (ActionKind::AppEvents(id), ActionOutcome::App(app)) => {
+            (
+                ActionKind::AppEvents(id) | ActionKind::AppInteractivity(id),
+                ActionOutcome::App(app),
+            ) => {
                 if let Some(workspace) = self.app_workspace(id) {
                     self.put_app(workspace, *app, out);
                 }
@@ -448,6 +518,7 @@ impl ClientCore {
                 out.changes.push(Change::CommandsChanged { workspace });
             }
             (ActionKind::RunCommand(conversation), ActionOutcome::CommandRan(ran)) => {
+                self.pressed.remove(&conversation);
                 let command = self.last_command.remove(&conversation).unwrap_or_default();
                 if let Some(document) = ran.reply {
                     self.command_replies.insert(
@@ -494,7 +565,10 @@ fn sentence(message: &str) -> String {
 pub(super) fn app_error(kind: ActionKind, error: &RequestError) -> String {
     // A command's failure is the server's to explain: which app, and what to do.
     if let (
-        ActionKind::RunCommand(_) | ActionKind::LoadAppSigningSecret(_) | ActionKind::AppEvents(_),
+        ActionKind::RunCommand(_)
+        | ActionKind::LoadAppSigningSecret(_)
+        | ActionKind::AppEvents(_)
+        | ActionKind::AppInteractivity(_),
         RequestError::Rejected(api),
     ) = (kind, error)
         && matches!(

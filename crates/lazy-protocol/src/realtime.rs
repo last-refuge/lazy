@@ -239,6 +239,7 @@ mod tests {
             mentions: Mentions::default(),
             reactions: Vec::new(),
             reactions_as_of: EventSeq::ZERO,
+            rich: None,
         }
     }
 

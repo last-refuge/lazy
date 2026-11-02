@@ -38,6 +38,8 @@ pub const MAX_TEXT_BYTES: usize = 40_000;
 pub const MAX_URL_BYTES: usize = 2_048;
 /// Longest code-block language tag, in characters.
 pub const MAX_LANGUAGE_CHARS: usize = 32;
+/// Most links in one message that previews are made for (D41).
+pub const MAX_PREVIEW_LINKS: usize = 3;
 /// Link schemes that may appear in a message. `lazy` is an in-app permalink.
 pub const ALLOWED_SCHEMES: [&str; 4] = ["http", "https", "mailto", "lazy"];
 
@@ -280,6 +282,34 @@ impl MessageDocument {
     /// The blocks of this document.
     pub fn blocks(&self) -> &[Block] {
         &self.blocks
+    }
+
+    /// The links a preview may be made for (D41): `http` and `https` links in paragraphs and
+    /// lists (not quotes, which are someone else's words, nor code), in order, once each, at most
+    /// [`MAX_PREVIEW_LINKS`].
+    pub fn preview_links(&self) -> Vec<String> {
+        let mut found: Vec<String> = Vec::new();
+        let mut take = |inlines: &[Inline]| {
+            for inline in inlines {
+                if let Inline::Link { url, .. } = inline
+                    && (url.starts_with("https://") || url.starts_with("http://"))
+                    && found.len() < MAX_PREVIEW_LINKS
+                    && !found.contains(url)
+                {
+                    found.push(url.clone());
+                }
+            }
+        };
+        for block in &self.blocks {
+            match block {
+                Block::Paragraph { inlines } => take(inlines),
+                Block::BulletList { items } | Block::OrderedList { items, .. } => {
+                    items.iter().for_each(|item| take(item))
+                }
+                Block::Quote { .. } | Block::CodeBlock { .. } => {}
+            }
+        }
+        found
     }
 
     /// The distinct custom emoji used, in the order they first appear.

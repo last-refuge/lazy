@@ -919,6 +919,7 @@ impl Cast {
             edited_at: None,
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
+            rich: None,
             deleted: false,
         }
     }
@@ -1096,6 +1097,123 @@ impl Cast {
             .enumerate()
             .map(|(n, text)| self.formatted(bot, text, n as i64 + 1, 60 - n as i64, false))
             .collect()
+    }
+
+    /// What apps post with Slack's blocks, drawn as rich content (D40).
+    fn block_kit_history(&self) -> Vec<Message> {
+        use lazy_domain::{Button, ButtonStyle, RichBlock, RichContent};
+        let doc = |s: &str| MessageDocument::from_markdown(s).unwrap();
+        let button = |id: &str, text: &str, style: ButtonStyle, url: Option<&str>| Button {
+            action_id: id.into(),
+            text: text.into(),
+            value: None,
+            url: url.map(str::to_owned),
+            style,
+        };
+        let with = |mut message: Message, fallback: &str, blocks: Vec<RichBlock>| {
+            message.document = doc(fallback);
+            message.rich = Some(RichContent::new(blocks).unwrap());
+            message
+        };
+        let deploy = with(
+            self.message(&self.deploy, "-", 1, 42),
+            "Deploy 1423 is waiting for approval",
+            vec![
+                RichBlock::Header {
+                    text: "Deploy #1423 is waiting for approval".into(),
+                },
+                RichBlock::Section {
+                    text: Some(doc(
+                        "*web* `v2.14.0` to *production*. 3 commits since the last deploy, \
+                         including [the checkout fix](https://github.com/lazy/web/pull/912).",
+                    )),
+                    fields: vec![
+                        doc("*Service*\nweb"),
+                        doc("*Environment*\nproduction"),
+                        doc("*Requested by*\nBob Chen"),
+                        doc("*Checks*\n42 passed"),
+                    ],
+                    accessory: Some(button(
+                        "logs",
+                        "View build",
+                        ButtonStyle::Default,
+                        Some("https://ci.lazyto.day/builds/1423"),
+                    )),
+                },
+                RichBlock::Divider,
+                RichBlock::Actions {
+                    block_id: Some("deploy-1423".into()),
+                    buttons: vec![
+                        button("approve", "Approve", ButtonStyle::Primary, None),
+                        button("reject", "Reject", ButtonStyle::Danger, None),
+                        button("later", "Remind me in 1 hour", ButtonStyle::Default, None),
+                    ],
+                },
+                RichBlock::Context {
+                    items: vec![doc("Deploy bot"), doc("Requested 42 minutes ago")],
+                },
+            ],
+        );
+        let incident = with(
+            self.message(&self.deploy, "-", 2, 12),
+            "High error rate on checkout",
+            vec![
+                RichBlock::Section {
+                    text: Some(doc(
+                        "*High error rate on checkout*\n5xx responses at 4.2% for 10 minutes \
+                         (threshold 1%).",
+                    )),
+                    fields: Vec::new(),
+                    accessory: Some(button("ack", "Acknowledge", ButtonStyle::Primary, None)),
+                },
+                RichBlock::Context {
+                    items: vec![doc("PagerDuty · triggered 12 minutes ago")],
+                },
+            ],
+        );
+        let mut newer = with(
+            self.message(&self.deploy, "-", 3, 3),
+            "Weekly report",
+            vec![RichBlock::Section {
+                text: Some(doc("*Weekly report* is ready: 128 deploys, 2 rollbacks.")),
+                fields: Vec::new(),
+                accessory: None,
+            }],
+        );
+        // A block from a newer server, read the way this build reads it.
+        let json = serde_json::json!({"version": 2, "blocks": [
+            {"type": "section", "text": serde_json::to_value(doc("*Weekly report* is ready: 128 deploys, 2 rollbacks.")).unwrap()},
+            {"type": "chart", "series": [1, 2, 3]}
+        ]});
+        newer.rich = Some(serde_json::from_value(json).unwrap());
+        vec![
+            self.message(&self.bob, "Shipping the checkout fix now.", 0, 45),
+            deploy,
+            incident,
+            newer,
+        ]
+    }
+
+    /// People sharing links, for link previews (D41).
+    fn link_history(&self) -> Vec<Message> {
+        vec![
+            self.formatted(
+                &self.bob,
+                "Here's the board for Thursday: https://miro.com/app/board/uXjVN3q4Ab8=/",
+                1,
+                30,
+                false,
+            ),
+            self.formatted(
+                &self.zoe,
+                "Two reads before the review: [the RFC](https://github.com/lazy/rfcs/pull/41) and \
+                 https://www.rust-lang.org/",
+                2,
+                12,
+                false,
+            ),
+            self.message(&self.me, "Thanks, reading now.", 3, 4),
+        ]
     }
 
     /// The incoming webhooks of `conversation`, oldest first.
@@ -2155,6 +2273,7 @@ fn sample_apps(cast: &Cast) -> Vec<lazy_protocol::App> {
                 url: "https://deploy.lazyto.day/slack/events".into(),
                 types: vec!["app_mention".into()],
             }),
+            interactivity_url: Some("https://deploy.lazyto.day/slack/interactive".into()),
         },
         lazy_protocol::App {
             id: sample_app_ids().1,
@@ -2168,6 +2287,7 @@ fn sample_apps(cast: &Cast) -> Vec<lazy_protocol::App> {
             last_used_at: None,
             commands: Vec::new(),
             events: None,
+            interactivity_url: None,
         },
     ]
 }
@@ -2231,6 +2351,72 @@ fn apps_scene(
 }
 
 /// Runs `/deploy web prod` in the open channel and answers it with a private reply.
+/// People's links with the previews the server found for them (D41).
+fn link_previews_scene(
+    cx: &mut HeadlessAppContext,
+    model: &Entity<AppModel>,
+    cast: &Cast,
+    recorder: &Recorder,
+    win: &WindowHandle<RootView>,
+) {
+    let history = cast.link_history();
+    let ids: Vec<MessageId> = history.iter().map(|m| m.id).collect();
+    reach_chat_with(cx, model, cast, recorder, history);
+    let preview = |url: &str, title: &str, description: Option<&str>, site: &str| {
+        lazy_protocol::LinkPreview {
+            url: url.into(),
+            title: Some(title.into()),
+            description: description.map(Into::into),
+            site_name: Some(site.into()),
+        }
+    };
+    let found = [
+        vec![preview(
+            "https://miro.com/app/board/uXjVN3q4Ab8=/",
+            "Q4 launch plan",
+            Some("Timeline, owners, and risks for the Q4 launch. Shared with the design team."),
+            "Miro",
+        )],
+        vec![
+            preview(
+                "https://github.com/lazy/rfcs/pull/41",
+                "RFC 41: Rich messages and buttons by alice-n · Pull Request #41 · lazy/rfcs",
+                Some(
+                    "Integrations can post a header, sections with fields, and buttons that \
+                     tell the app they were pressed, checked on every press.",
+                ),
+                "GitHub",
+            ),
+            preview(
+                "https://www.rust-lang.org/",
+                "Rust Programming Language",
+                Some("A language empowering everyone to build reliable and efficient software."),
+                "rust-lang.org",
+            ),
+        ],
+    ];
+    for (message, previews) in ids.into_iter().zip(found) {
+        dispatch(
+            cx,
+            model,
+            Input::LoadPreviews {
+                message,
+                revision: 1,
+            },
+        );
+        dispatch(
+            cx,
+            model,
+            Input::PreviewsLoaded {
+                message,
+                revision: 1,
+                result: Ok(previews),
+            },
+        );
+    }
+    draw(cx, win);
+}
+
 fn command_reply_scene(
     cx: &mut HeadlessAppContext,
     model: &Entity<AppModel>,
@@ -3877,6 +4063,7 @@ impl Gallery {
                 edit,
                 reactions: vec![],
                 reactions_as_of: EventSeq::ZERO,
+                rich: None,
             }
         };
         let handles = |cx: &mut Context<Self>| [(); 4].map(|()| cx.focus_handle().tab_stop(true));
@@ -4227,6 +4414,9 @@ impl Render for Gallery {
                 discard_focus: None,
                 select: None,
                 label_prefix: "",
+                on_press: None,
+                pressing: None,
+                link_previews: &[],
                 index,
                 item: &row.item,
                 author_name: row.author.into(),
@@ -9051,6 +9241,123 @@ fn main() {
                 reach_chat(cx, model, cast, rec, true);
                 command_reply_scene(cx, model, cast, win);
             },
+        },
+        Scene {
+            name: "4f-01-block-kit-light",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat_with(cx, model, cast, rec, cast.block_kit_history());
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4f-02-block-kit-dark",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat_with(cx, model, cast, rec, cast.block_kit_history());
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4f-03-block-kit-narrow-light",
+            width: 640.0,
+            height: 1000.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat_with(cx, model, cast, rec, cast.block_kit_history());
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4f-04-block-kit-pressed-dark",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                let history = cast.block_kit_history();
+                let message = history[1].id;
+                reach_chat_with(cx, model, cast, rec, history);
+                // Never answered here: the button waits, and the reply box says so.
+                dispatch(
+                    cx,
+                    model,
+                    Input::PressButton {
+                        conversation: cast.general,
+                        message,
+                        block: 3,
+                        action_id: "approve".into(),
+                        label: "Approve".into(),
+                    },
+                );
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4f-05-block-kit-reply-light",
+            width: 1100.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                let history = cast.block_kit_history();
+                let message = history[2].id;
+                reach_chat_with(cx, model, cast, rec, history);
+                dispatch(
+                    cx,
+                    model,
+                    Input::PressButton {
+                        conversation: cast.general,
+                        message,
+                        block: 0,
+                        action_id: "ack".into(),
+                        label: "Acknowledge".into(),
+                    },
+                );
+                dispatch(
+                    cx,
+                    model,
+                    Input::ActionResult {
+                        kind: ActionKind::RunCommand(cast.general),
+                        result: Ok(ActionOutcome::CommandRan(Box::new(
+                            lazy_protocol::RunCommandResponse {
+                                app_name: "Deploy bot".into(),
+                                reply: Some(
+                                    MessageDocument::from_markdown(
+                                        "Acknowledged. You're on it until *11:40*.",
+                                    )
+                                    .unwrap(),
+                                ),
+                                posted: None,
+                            },
+                        ))),
+                    },
+                );
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "4g-01-link-previews-light",
+            width: 1100.0,
+            height: 800.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| link_previews_scene(cx, model, cast, rec, win),
+        },
+        Scene {
+            name: "4g-02-link-previews-dark",
+            width: 1100.0,
+            height: 800.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| link_previews_scene(cx, model, cast, rec, win),
+        },
+        Scene {
+            name: "4g-03-link-previews-narrow-light",
+            width: 640.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| link_previews_scene(cx, model, cast, rec, win),
         },
         Scene {
             name: "4c-01-github-feed-dark",
