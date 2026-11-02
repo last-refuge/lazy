@@ -1,0 +1,19 @@
+[package]
+name = "rtc-audio"
+description = "Audio for the rtc media library: Opus, capture and playback, mixing."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["devices"]
+# Microphones and speakers through cpal (ALSA, Core Audio, WASAPI).
+devices = ["dep:cpal"]
+
+[dependencies]
+tracing.workspace = true
+thiserror.workspace = true
+unsafe-libopus.workspace = true
+cpal = { workspace = true, optional = true }

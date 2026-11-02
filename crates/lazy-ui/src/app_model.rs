@@ -29,6 +29,8 @@ pub struct AppModel {
     /// The width the person last dragged the thread pane to, kept for the session. A wish, not
     /// the drawn width: see [`crate::thread_layout::pane_width`].
     thread_pane_width: f32,
+    /// Drop-in video frames, shared with the runtime that fills it.
+    frames: rtc_video::FrameStore,
 }
 
 impl EventEmitter<AppEvent> for AppModel {}
@@ -39,7 +41,18 @@ impl AppModel {
             core: ClientCore::new(),
             sink,
             thread_pane_width: crate::thread_layout::DEFAULT_PANE_WIDTH,
+            frames: rtc_video::FrameStore::new(),
         }
+    }
+
+    /// Where drop-in frames are drawn from.
+    pub fn frames(&self) -> &rtc_video::FrameStore {
+        &self.frames
+    }
+
+    /// Draws drop-in frames from `frames` (the store the runtime fills).
+    pub fn set_frames(&mut self, frames: rtc_video::FrameStore) {
+        self.frames = frames;
     }
 
     /// The thread pane width the person wants, before it is fitted to the window.

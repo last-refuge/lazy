@@ -24,6 +24,13 @@ tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 getrandom.workspace = true
 tracing.workspace = true
+rtc-client.workspace = true
+rtc-video.workspace = true
+rtc-audio.workspace = true
+
+[features]
+# Real cameras, microphones and speakers in drop-ins (otherwise only the test pattern works).
+drop-in-devices = ["rtc-client/devices"]
 
 [dev-dependencies]
 axum.workspace = true

@@ -3,7 +3,7 @@
 # The Lazy server. Build from the repository root:   docker build -t lazy-server .
 # Run it with a Postgres (see docker-compose.yml, or llm-docs/DEPLOY.md for Coolify).
 #
-# Only the three server crates are copied in (.dockerignore keeps the rest of the repository out of
+# Only the three server crates (and the media library's rtc-proto) are copied in (.dockerignore keeps the rest of the repository out of
 # the build), and the workspace's `members = ["crates/*"]` then names just those three, so the
 # desktop client and its GPUI dependency are never fetched or compiled.
 
@@ -13,6 +13,9 @@ WORKDIR /src
 # the file would make rustup fetch rustfmt and clippy for nothing.)
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# The one crate of the media library the server uses (drop-in join tokens), with its workspace.
+COPY media/Cargo.toml ./media/Cargo.toml
+COPY media/crates/rtc-proto ./media/crates/rtc-proto
 # The cache mounts keep downloaded crates and compiled dependencies between builds on this machine.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \

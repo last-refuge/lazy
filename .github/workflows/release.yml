@@ -40,7 +40,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libasound2-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
-            libvulkan-dev libfontconfig-dev libssl-dev libdbus-1-dev pkg-config cmake clang
+            libvulkan-dev libfontconfig-dev libssl-dev libdbus-1-dev pkg-config cmake clang libclang-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.99.0"

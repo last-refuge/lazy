@@ -1,0 +1,16 @@
+[package]
+name = "rtc-proto"
+description = "Signaling messages and join tokens for the rtc media library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+base64.workspace = true

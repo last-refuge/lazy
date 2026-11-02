@@ -20,6 +20,7 @@ testing = ["dep:tempfile"]
 [dependencies]
 lazy-domain.workspace = true
 lazy-protocol.workspace = true
+rtc-proto.workspace = true
 argon2.workspace = true
 # HMAC (GitHub's webhook signatures) and, later, RSA (GitHub App tokens); already built for reqwest's TLS.
 aws-lc-rs = "1"

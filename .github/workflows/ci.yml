@@ -36,7 +36,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libasound2-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
             libvulkan-dev mesa-vulkan-drivers libfontconfig-dev libssl-dev libdbus-1-dev \
-            pkg-config cmake clang
+            pkg-config cmake clang libclang-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.99.0"
@@ -46,6 +46,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets
       # Every test binary runs even after one fails, so a run lists all the failures.
       - run: cargo test --workspace --no-fail-fast
+      # The media library is its own workspace (llm-docs/DROP_INS.md).
+      - run: scripts/check-media-deps.sh
+      - run: cargo fmt --all --check --manifest-path media/Cargo.toml
+      - run: cargo clippy --workspace --all-targets --manifest-path media/Cargo.toml
+      - run: cargo test --workspace --no-fail-fast --manifest-path media/Cargo.toml
 
   shared-core-mobile:
     # The shared crates must stay free of desktop-only dependencies (plan task 0.8).

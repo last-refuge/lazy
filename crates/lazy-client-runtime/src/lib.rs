@@ -10,6 +10,7 @@ mod api;
 mod appearance;
 mod blob;
 mod config;
+mod drop_in;
 mod files;
 mod images;
 mod outbox;
@@ -27,6 +28,8 @@ pub use async_channel;
 pub use config::{
     BackoffPolicy, DEFAULT_SERVER_URL, RuntimeConfig, SecureStorageChoice, default_server_url,
 };
+pub use drop_in::DropInMedia;
+pub use rtc_video::FrameStore;
 #[doc(hidden)]
 pub use runtime::inspect_state;
 pub use runtime::{Runtime, RuntimeError};

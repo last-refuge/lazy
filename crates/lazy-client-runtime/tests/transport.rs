@@ -1341,6 +1341,8 @@ fn fast_config(url: &str, profile: &TempDir, storage: Arc<dyn SecureStorage>) ->
         },
         idle_timeout: Duration::from_secs(5),
         save_debounce: Duration::from_millis(20),
+        drop_in_media: lazy_client_runtime::DropInMedia::TestPattern,
+        frames: lazy_client_runtime::FrameStore::new(),
     }
 }
 

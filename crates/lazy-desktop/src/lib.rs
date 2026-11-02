@@ -140,7 +140,12 @@ pub fn start_model(
     inputs: Receiver<Input>,
     cx: &mut App,
 ) -> Entity<AppModel> {
-    let model = cx.new(|_| AppModel::new(Rc::new(RuntimeSink::new(runtime))));
+    let frames = runtime.frames();
+    let model = cx.new(|_| {
+        let mut model = AppModel::new(Rc::new(RuntimeSink::new(runtime)));
+        model.set_frames(frames);
+        model
+    });
     pump(&model, inputs, cx);
     model
 }
@@ -174,8 +179,13 @@ pub fn start_desktop(runtime: Rc<Runtime>, inputs: Receiver<Input>, cx: &mut App
     let notifier: Arc<dyn Notifier> = Arc::from(platform_notifier(move |activation| {
         activation_sender.try_send(activation).ok();
     }));
+    let frames = runtime.frames();
     let sink = DesktopSink::new(Rc::new(RuntimeSink::new(runtime)), notifier, badge_sender);
-    let model = cx.new(|_| AppModel::new(Rc::new(sink)));
+    let model = cx.new(|_| {
+        let mut model = AppModel::new(Rc::new(sink));
+        model.set_frames(frames);
+        model
+    });
     pump(&model, inputs, cx);
     Desktop {
         model,

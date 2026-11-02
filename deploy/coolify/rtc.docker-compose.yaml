@@ -1,0 +1,27 @@
+# The call server for drop-ins (the media library's SFU, rtc-sfu), as its own Coolify resource next
+# to Lazy: New Resource, Build Pack "Docker Compose", base directory "/", compose file
+# "/deploy/coolify/rtc.docker-compose.yaml". See llm-docs/DEPLOY.md, "Drop-ins".
+#
+# Signaling goes through Coolify's proxy (the domain it gives this service, with HTTPS and
+# WebSockets). Media cannot: it is UDP, published straight from the host, so the host's firewall
+# must let RTC_UDP_PORT in.
+services:
+  rtc:
+    build:
+      context: ./media
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Gives the service a domain (editable in Coolify) routed to port 7880: Lazy's LAZY_RTC_URL
+      # is that domain with wss:// (for example wss://rtc.example.com).
+      - SERVICE_URL_RTC_7880
+      # The same secret as Lazy's LAZY_RTC_SECRET (at least 32 characters: openssl rand -hex 32).
+      - RTC_SECRET=${RTC_SECRET:?set RTC_SECRET, the same as Lazy's LAZY_RTC_SECRET}
+      # The host's public IP address: clients send media there.
+      - RTC_PUBLIC_IP=${RTC_PUBLIC_IP:?set RTC_PUBLIC_IP to this host's public IP address}
+      - RTC_UDP=0.0.0.0:${RTC_UDP_PORT:-7881}
+      - RTC_MAX_PER_ROOM=${RTC_MAX_PER_ROOM:-12}
+      - RUST_LOG=${RTC_LOG:-rtc_sfu=info,str0m=warn}
+    ports:
+      # The same port inside and out: it is the port clients are told to send to.
+      - "${RTC_UDP_PORT:-7881}:${RTC_UDP_PORT:-7881}/udp"

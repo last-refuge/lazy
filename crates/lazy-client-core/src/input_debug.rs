@@ -345,6 +345,30 @@ impl fmt::Debug for Input {
                 .field("block", block)
                 .field("action_id", action_id)
                 .finish_non_exhaustive(),
+            Input::JoinDropIn(conversation) => {
+                f.debug_tuple("JoinDropIn").field(conversation).finish()
+            }
+            Input::LeaveDropIn => f.write_str("LeaveDropIn"),
+            Input::SetDropInMuted(muted) => f.debug_tuple("SetDropInMuted").field(muted).finish(),
+            Input::SetDropInVideo(on) => f.debug_tuple("SetDropInVideo").field(on).finish(),
+            Input::DismissDropInError => f.write_str("DismissDropInError"),
+            // Names and device descriptions stay out of logs.
+            Input::DropInReport { session, report } => {
+                let kind = match report {
+                    crate::DropInReport::Joined => "Joined".to_owned(),
+                    crate::DropInReport::Connected => "Connected".to_owned(),
+                    crate::DropInReport::Peers(peers) => format!("Peers({})", peers.len()),
+                    crate::DropInReport::Speaking(s) => format!("Speaking({})", s.len()),
+                    crate::DropInReport::DeviceProblem(_) => "DeviceProblem".to_owned(),
+                    crate::DropInReport::Ended(reason) => {
+                        format!("Ended(failed: {})", reason.is_some())
+                    }
+                };
+                f.debug_struct("DropInReport")
+                    .field("session", session)
+                    .field("report", &kind)
+                    .finish()
+            }
             Input::LoadPreviews { message, revision } => f
                 .debug_struct("LoadPreviews")
                 .field("message", message)

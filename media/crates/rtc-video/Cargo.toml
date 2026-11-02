@@ -1,0 +1,22 @@
+[package]
+name = "rtc-video"
+description = "Video frames, sources (camera, test pattern), and the H.264 codec for the rtc media library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["codec", "camera"]
+# H.264 through OpenH264, built from source.
+codec = ["dep:openh264"]
+# Cameras through each platform's API (V4L2, AVFoundation, Media Foundation).
+camera = ["dep:nokhwa", "dep:zune-jpeg"]
+
+[dependencies]
+tracing.workspace = true
+thiserror.workspace = true
+openh264 = { workspace = true, optional = true }
+nokhwa = { workspace = true, optional = true }
+zune-jpeg = { version = "0.4", optional = true }

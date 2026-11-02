@@ -378,6 +378,18 @@ pub enum Input {
         action_id: String,
         label: String,
     },
+    /// Join the drop-in in a conversation (starting it if nobody is in it), leaving any other.
+    JoinDropIn(ConversationId),
+    LeaveDropIn,
+    SetDropInMuted(bool),
+    SetDropInVideo(bool),
+    /// Forget why the last drop-in ended.
+    DismissDropInError,
+    /// What the runtime says about the call of join number `session`.
+    DropInReport {
+        session: u64,
+        report: crate::DropInReport,
+    },
     /// Ask for the link previews of a message at this revision, if not asked yet (D41).
     LoadPreviews {
         message: MessageId,

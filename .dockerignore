@@ -5,5 +5,8 @@
 !crates/lazy-domain
 !crates/lazy-protocol
 !crates/lazy-server
+# The server signs drop-in join tokens with the media library's token format (rtc-proto).
+!media/Cargo.toml
+!media/crates/rtc-proto
 # ...and not the build output inside them.
 **/target

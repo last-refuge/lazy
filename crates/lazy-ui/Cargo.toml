@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 gpui.workspace = true
 lazy-client-core.workspace = true
+rtc-video.workspace = true
 lazy-domain.workspace = true
 lazy-protocol.workspace = true
 unicode-segmentation.workspace = true

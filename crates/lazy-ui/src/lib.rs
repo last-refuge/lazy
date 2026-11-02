@@ -11,6 +11,7 @@ pub mod commands;
 pub mod composer;
 pub mod dialogs;
 pub mod downloads;
+pub mod drop_in_view;
 pub mod emoji_font;
 pub mod emoji_grid;
 pub mod emoji_images;

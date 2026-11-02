@@ -102,10 +102,10 @@ pub struct Runtime {
     tokio: Option<tokio::runtime::Runtime>,
 }
 
-struct Inner {
-    handle: tokio::runtime::Handle,
-    config: RuntimeConfig,
-    api: Arc<Api>,
+pub(crate) struct Inner {
+    pub(crate) handle: tokio::runtime::Handle,
+    pub(crate) config: RuntimeConfig,
+    pub(crate) api: Arc<Api>,
     /// The secrets of this profile on the server in use; replaced when the server is changed.
     vault: Mutex<SecretVault>,
     /// The server in use and where its address came from.
@@ -132,6 +132,8 @@ struct Inner {
     browse: ReadSlot,
     /// And for the workspace's invitations.
     invitations: ReadSlot,
+    /// The drop-in being run.
+    pub(crate) drop_in: crate::drop_in::DropInSlot,
 }
 
 /// The emoji preferences waiting to be written. Kept apart from [`Persistence`] because they
@@ -219,6 +221,7 @@ impl Runtime {
             profile: Mutex::new(None),
             browse: Mutex::new(None),
             invitations: Mutex::new(None),
+            drop_in: crate::drop_in::DropInSlot::default(),
         });
 
         let startup = inner.clone();
@@ -230,6 +233,11 @@ impl Runtime {
             },
             receiver,
         ))
+    }
+
+    /// Where drop-in video frames go; the UI draws from it.
+    pub fn frames(&self) -> crate::FrameStore {
+        self.inner.config.frames.clone()
     }
 
     /// The directory holding this client's encrypted local state.
@@ -274,6 +282,7 @@ impl Runtime {
             return;
         };
         self.inner.cancel.cancel();
+        self.inner.drop_in.leave_any();
         let inner = self.inner.clone();
         tokio.block_on(async move {
             // Closing the journal channel lets its actor finish the commands already queued.
@@ -340,7 +349,7 @@ impl Inner {
         }
     }
 
-    async fn emit(&self, input: Input) {
+    pub(crate) async fn emit(&self, input: Input) {
         // A closed channel means the host is gone; there is nobody to tell.
         let _ = self.inputs.send(input).await;
     }
@@ -1688,6 +1697,19 @@ impl Inner {
                     inner.emit(Input::ActionResult { kind, result }).await;
                 });
             }
+            Effect::JoinDropIn {
+                session,
+                conversation,
+                muted,
+                video_on,
+            } => {
+                self.drop_in.want(session, muted, video_on);
+                let inner = self.clone();
+                self.spawn(inner.join_drop_in(session, conversation));
+            }
+            Effect::LeaveDropIn { session } => self.drop_in.leave(session),
+            Effect::SetDropInMuted { session, muted } => self.drop_in.set_muted(session, muted),
+            Effect::SetDropInVideo { session, on } => self.drop_in.set_video(session, on),
             Effect::LoadPreviews { message, revision } => {
                 let inner = self.clone();
                 self.spawn(async move {

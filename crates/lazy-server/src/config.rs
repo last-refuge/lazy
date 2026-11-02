@@ -247,6 +247,8 @@ pub struct Config {
     /// Run a job worker in this process (see [`crate::jobs`]). Off when `lazy-server worker`
     /// runs the jobs instead.
     pub run_jobs: bool,
+    /// The call server drop-ins run on; `None` turns drop-ins off.
+    pub drop_ins: Option<crate::drop_ins::DropInOptions>,
 }
 
 impl std::fmt::Debug for Config {
@@ -276,6 +278,7 @@ impl std::fmt::Debug for Config {
             .field("max_attachment_bytes", &self.max_attachment_bytes)
             .field("credential_keys", &self.credential_keys)
             .field("run_jobs", &self.run_jobs)
+            .field("drop_ins", &self.drop_ins)
             .finish()
     }
 }
@@ -300,6 +303,7 @@ impl Config {
             max_attachment_bytes: lazy_domain::attachment::MAX_ATTACHMENT_BYTES,
             credential_keys: crate::credentials::CredentialKeys::none(),
             run_jobs: true,
+            drop_ins: None,
         }
     }
 }
@@ -365,6 +369,8 @@ pub struct IntegrationOptions {
     pub github: crate::github::GithubEndpoints,
     /// How link previews are fetched (D41); tests may allow a stand-in site on this machine.
     pub previews: crate::link_previews::PreviewOptions,
+    /// The call server drop-ins run on; `None` turns drop-ins off.
+    pub drop_ins: Option<crate::drop_ins::DropInOptions>,
 }
 
 /// Where the bytes of attachments live.

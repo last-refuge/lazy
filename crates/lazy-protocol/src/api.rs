@@ -174,6 +174,8 @@ pub mod paths {
     pub const MESSAGE_ACTIONS_ROUTE: &str = "/v1/messages/{message_id}/actions";
     /// `GET` the link previews of a message (D41).
     pub const MESSAGE_PREVIEWS_ROUTE: &str = "/v1/messages/{message_id}/previews";
+    /// `POST` asks for a way into a conversation's drop-in (a call with video).
+    pub const DROP_IN_ROUTE: &str = "/v1/conversations/{conversation_id}/drop-in";
     /// Where an app sends a later answer to a command (Slack's `response_url`). Public; the token
     /// is the credential.
     pub const COMMAND_RESPOND_ROUTE: &str = "/commands/respond/{token}";
@@ -416,6 +418,10 @@ pub mod paths {
 
     pub fn message_previews(message_id: MessageId) -> String {
         format!("/v1/messages/{message_id}/previews")
+    }
+
+    pub fn drop_in(conversation_id: ConversationId) -> String {
+        format!("/v1/conversations/{conversation_id}/drop-in")
     }
 
     pub fn app_signing_secret(app_id: lazy_domain::AppId) -> String {
@@ -1388,6 +1394,17 @@ pub struct LinkPreview {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkPreviewsResponse {
     pub previews: Vec<LinkPreview>,
+}
+
+/// Response of `POST /v1/conversations/{id}/drop-in`: where the call server is and a short-lived
+/// token that lets this person into the conversation's room there. The call itself runs between
+/// the client and the call server (the media library's SFU, `llm-docs/DROP_INS.md`); this server
+/// only decides who may join. `unavailable` when the server has no call server configured.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinDropInResponse {
+    /// The call server's signaling address (`wss://…/rtc`).
+    pub url: String,
+    pub token: String,
 }
 
 /// `PUT /v1/apps/{id}/interactivity`. An empty `url` turns button presses off.

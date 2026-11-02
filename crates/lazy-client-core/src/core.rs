@@ -34,6 +34,7 @@ mod connectors;
 mod conversations;
 mod diagnostics;
 mod discovery;
+mod drop_ins;
 mod emoji;
 mod github;
 mod groups;
@@ -271,6 +272,12 @@ pub struct ClientCore {
     pressed: HashMap<ConversationId, (MessageId, u32, String)>,
     /// Link previews asked for, by message (D41).
     previews: HashMap<MessageId, previews::PreviewEntry>,
+    /// The drop-in this person is in.
+    drop_in: Option<crate::drop_in::DropIn>,
+    /// Why the last drop-in ended, if it failed.
+    drop_in_error: Option<String>,
+    /// Numbers each join, so reports from a call already left are ignored.
+    drop_in_session: u64,
     /// A token just made, for its app, until dismissed. Never cached or saved.
     app_token: Option<(lazy_domain::AppId, crate::model::SecretUrl)>,
     /// A signing secret Lazy just made, for its provider, until dismissed. Never cached or saved.
@@ -432,6 +439,9 @@ impl ClientCore {
             last_command: HashMap::new(),
             pressed: HashMap::new(),
             previews: HashMap::new(),
+            drop_in: None,
+            drop_in_error: None,
+            drop_in_session: 0,
             created_webhook: None,
             draft_selections: HashMap::new(),
             thread_selections: HashMap::new(),
@@ -790,6 +800,14 @@ impl ClientCore {
             }
             Input::LoadPreviews { message, revision } => {
                 self.load_previews(message, revision, &mut out)
+            }
+            Input::JoinDropIn(conversation) => self.join_drop_in(conversation, &mut out),
+            Input::LeaveDropIn => self.leave_drop_in(&mut out),
+            Input::SetDropInMuted(muted) => self.set_drop_in_muted(muted, &mut out),
+            Input::SetDropInVideo(on) => self.set_drop_in_video(on, &mut out),
+            Input::DismissDropInError => self.dismiss_drop_in_error(&mut out),
+            Input::DropInReport { session, report } => {
+                self.drop_in_report(session, report, &mut out)
             }
             Input::PreviewsLoaded {
                 message,
@@ -1282,6 +1300,8 @@ impl ClientCore {
 
     /// Drops everything learned from the server for the current person.
     fn clear_session_data(&mut self, out: &mut Output) {
+        self.leave_drop_in(out);
+        self.drop_in_error = None;
         self.me = None;
         self.users.clear();
         self.workspaces.clear();

@@ -158,6 +158,14 @@ struct ServeArgs {
     setup_code: Option<String>,
     #[command(flatten)]
     keys: KeyArgs,
+    /// The call server's signaling address as clients reach it (`wss://rtc.example.com`), for
+    /// drop-ins. Drop-ins are off unless this and `LAZY_RTC_SECRET` are set.
+    #[arg(long, env = "LAZY_RTC_URL")]
+    rtc_url: Option<String>,
+    /// The secret join tokens are signed with, the same as the call server's `RTC_SECRET` (at
+    /// least 32 characters; `openssl rand -hex 32`).
+    #[arg(long, env = "LAZY_RTC_SECRET", hide_env_values = true)]
+    rtc_secret: Option<String>,
     /// Run the job worker in this process. Set it to false when `lazy-server worker` runs it.
     #[arg(long, env = "LAZY_RUN_JOBS", default_value_t = true, action = clap::ArgAction::Set)]
     run_jobs: bool,
@@ -243,6 +251,24 @@ async fn serve(args: ServeArgs) -> Result<(), lazy_server::AppError> {
     config.max_attachment_bytes = args.max_attachment_bytes;
     config.credential_keys = args.keys.keys()?;
     config.run_jobs = args.run_jobs;
+    config.drop_ins = match (
+        args.rtc_url.as_deref().filter(|u| !u.trim().is_empty()),
+        args.rtc_secret.as_deref().filter(|s| !s.is_empty()),
+    ) {
+        (Some(url), Some(secret)) => Some(
+            lazy_server::drop_ins::DropInOptions::new(url, secret).map_err(|reason| {
+                lazy_server::AppError::internal(format!(
+                    "{reason} (LAZY_RTC_URL, LAZY_RTC_SECRET); the server did not start"
+                ))
+            })?,
+        ),
+        (None, None) => None,
+        _ => {
+            return Err(lazy_server::AppError::internal(
+                "drop-ins need both LAZY_RTC_URL and LAZY_RTC_SECRET; the server did not start",
+            ));
+        }
+    };
     lazy_server::run(config, shutdown_signal()).await
 }
 

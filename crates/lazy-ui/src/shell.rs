@@ -190,6 +190,9 @@ pub struct ShellView {
     /// moved the person somewhere new (and then put them in that conversation's composer).
     selected_at_open: Option<ConversationId>,
     star_focus: FocusHandle,
+    drop_in_focus: FocusHandle,
+    /// The drop-in stage at the top of the main column.
+    drop_in: Entity<crate::drop_in_view::DropInView>,
     join_focus: FocusHandle,
     dismiss_notice_focus: FocusHandle,
     /// The Dismiss button of a command's private reply (D36).
@@ -206,6 +209,7 @@ pub struct ShellView {
 
 impl ShellView {
     pub fn new(model: Entity<AppModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let drop_in = cx.new(|cx| crate::drop_in_view::DropInView::new(model.clone(), cx));
         let sidebar = cx.new(|cx| SidebarView::new(model.clone(), cx));
         let rail = cx.new(|cx| RailView::new(model.clone(), window, cx));
         let timeline = cx.new(|cx| TimelineView::new(model.clone(), window, cx));
@@ -508,6 +512,8 @@ impl ShellView {
             picker: None,
             selected_at_open: None,
             star_focus: cx.focus_handle().tab_stop(true),
+            drop_in_focus: cx.focus_handle().tab_stop(true),
+            drop_in,
             join_focus: cx.focus_handle().tab_stop(true),
             dismiss_notice_focus: cx.focus_handle().tab_stop(true),
             dismiss_reply_focus: cx.focus_handle().tab_stop(true),
@@ -2196,6 +2202,8 @@ impl ShellView {
         let this = cx.entity().downgrade();
         let star_to = this.clone();
         let details_to = this.clone();
+        let in_this_drop_in = core.drop_in().is_some_and(|h| h.conversation == id);
+        let drop_in_to = self.model.downgrade();
         div()
             .h(px(52.))
             .flex_none()
@@ -2248,23 +2256,52 @@ impl ShellView {
             .child(self.bell(theme, id, cx))
             .child(form::button(
                 theme,
-                "favorite-toggle",
-                if favorite {
-                    "★ Favorited"
+                "drop-in-button",
+                if in_this_drop_in {
+                    "Leave drop-in"
                 } else {
-                    "☆ Favorite"
+                    "Drop in"
                 },
-                ButtonKind::Secondary,
-                !favoriting,
-                &self.star_focus,
-                move |window, cx| {
-                    star_to
-                        .update(cx, |shell, cx| {
-                            shell.run_command(CommandId::ToggleFavorite, window, cx)
-                        })
-                        .ok();
+                if in_this_drop_in {
+                    ButtonKind::Danger
+                } else {
+                    ButtonKind::Secondary
+                },
+                !archived,
+                &self.drop_in_focus,
+                move |_, cx| {
+                    let input = if in_this_drop_in {
+                        Input::LeaveDropIn
+                    } else {
+                        Input::JoinDropIn(id)
+                    };
+                    drop_in_to.update(cx, |m, cx| m.dispatch(input, cx)).ok();
                 },
             ))
+            .child(
+                form::button(
+                    theme,
+                    "favorite-toggle",
+                    // In the compact layout the star alone, so the Drop-in button fits too.
+                    match (favorite, compact) {
+                        (true, false) => "★ Favorited",
+                        (false, false) => "☆ Favorite",
+                        (true, true) => "★",
+                        (false, true) => "☆",
+                    },
+                    ButtonKind::Secondary,
+                    !favoriting,
+                    &self.star_focus,
+                    move |window, cx| {
+                        star_to
+                            .update(cx, |shell, cx| {
+                                shell.run_command(CommandId::ToggleFavorite, window, cx)
+                            })
+                            .ok();
+                    },
+                )
+                .aria_label(if favorite { "Favorited" } else { "Favorite" }),
+            )
             .child(form::button(
                 theme,
                 "details-button",
@@ -2409,6 +2446,9 @@ impl Render for ShellView {
             .flex()
             .flex_col()
             .bg(theme.colors.surface);
+        if self.drop_in.read(cx).is_shown(cx) {
+            main = main.child(self.drop_in.clone());
+        }
         let searching = self.model.read(cx).core().search().is_some();
         let inbox_open = self.model.read(cx).core().inbox().is_some();
         let saved_open = self.model.read(cx).core().saved().open;
