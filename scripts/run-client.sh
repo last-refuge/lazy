@@ -10,4 +10,4 @@ export LAZY_SERVER_URL="${LAZY_SERVER_URL:-http://127.0.0.1:8080}"
 export RUST_LOG="${RUST_LOG:-lazy=info}"
 mkdir -p "$LAZY_PROFILE_DIR"
 cd "$ROOT"
-exec cargo run -p lazy-desktop --release
+exec cargo run -p lazy-desktop --profile fast
