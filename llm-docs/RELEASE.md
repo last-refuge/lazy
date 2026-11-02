@@ -4,7 +4,7 @@ The desktop client ships as installers for Linux, macOS, and Windows, built by a
 by hand (like CI, it never runs on a push): **Actions, release, Run workflow**, or
 
 ```sh
-gh workflow run release -f version=0.11.0 -f publish=true
+gh workflow run release -f version=0.12.0 -f publish=true
 ```
 
 `version` is stamped into the apps (Help, Diagnostics shows it) and into the file names;
@@ -79,6 +79,14 @@ person in a direct conversation), a Live mark in the sidebar, "Join drop-in · N
 "Ended · 23 min" afterwards. The protocol is still 14, so 0.10 clients keep working and show
 notices as plain messages. Notices need a server with migration 0026, and drop-ins seen from
 outside also need the call server started with `RTC_REPORT_URL` (`DEPLOY.md`, "Drop-ins").
+
+Release 0.12.0 (2026-11-02) shows who is online (D45): a direct conversation in the sidebar has a
+green dot on the person's avatar while they are connected, a hollow ring when they are not, and
+nothing while that isn't known. On macOS, notifications are native (D46): from the installed app,
+under Lazy's name and icon, after a banner that explains them and only then raises the system's
+permission dialog. The protocol is still 14 and there is no migration; presence needs a server
+from this release (older servers send none, and the dots simply do not appear), and older clients
+skip the presence frames.
 
 ## What you get
 
