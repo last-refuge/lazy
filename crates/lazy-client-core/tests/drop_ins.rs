@@ -4,7 +4,10 @@
 mod common;
 
 use common::{Driver, World};
-use lazy_client_core::{Change, DropInPeer, DropInReport, DropInStatus, Effect, Input};
+use lazy_client_core::{
+    Change, DeviceChoices, DeviceKind, DropInPeer, DropInReport, DropInStatus, Effect, Input,
+    MediaDevice, MediaDevices,
+};
 
 fn drop_in_effects(driver: &Driver) -> Vec<Effect> {
     driver
@@ -17,6 +20,7 @@ fn drop_in_effects(driver: &Driver) -> Vec<Effect> {
                     | Effect::LeaveDropIn { .. }
                     | Effect::SetDropInMuted { .. }
                     | Effect::SetDropInVideo { .. }
+                    | Effect::SetDropInDevice { .. }
             )
         })
         .cloned()
@@ -48,6 +52,7 @@ fn joining_follows_the_call_and_leaving_ends_it() {
             conversation: channel,
             muted: false,
             video_on: true,
+            devices: DeviceChoices::default(),
         }],
         "joined once"
     );
@@ -98,6 +103,7 @@ fn joining_follows_the_call_and_leaving_ends_it() {
                 conversation: world.second_channel.id,
                 muted: false,
                 video_on: true,
+                devices: DeviceChoices::default(),
             }
         ]
     );
@@ -157,4 +163,83 @@ fn signing_out_leaves_the_drop_in() {
     driver.send(Input::SignOut);
     assert!(driver.core.drop_in().is_none());
     assert!(drop_in_effects(&driver).contains(&Effect::LeaveDropIn { session: 1 }));
+}
+
+#[test]
+fn device_choices_are_saved_passed_to_the_call_and_switch_it() {
+    let world = World::new();
+    let mut driver = Driver::ready(&world);
+    let brio = Some("Logitech BRIO".to_owned());
+
+    // Outside a call, a choice is only saved.
+    driver.send(Input::ChooseDevice {
+        kind: DeviceKind::Camera,
+        id: brio.clone(),
+    });
+    assert_eq!(driver.core.device_choices().camera, brio);
+    let saved = DeviceChoices {
+        camera: brio.clone(),
+        ..DeviceChoices::default()
+    };
+    assert!(
+        driver
+            .effects
+            .contains(&Effect::PersistDeviceChoices(saved.clone()))
+    );
+    assert!(driver.changes.contains(&Change::MediaDevicesChanged));
+    assert!(drop_in_effects(&driver).is_empty(), "no call to switch");
+
+    // Joining hands the choices to the call, and lists the devices for the menu.
+    driver.send(Input::JoinDropIn(world.channel.id));
+    assert!(driver.effects.iter().any(|e| matches!(
+        e,
+        Effect::JoinDropIn { devices, .. } if *devices == saved
+    )));
+    assert!(driver.effects.contains(&Effect::ListMediaDevices));
+
+    // In a call, a choice switches it; choosing the same again does nothing.
+    let mic = Some("mic-2".to_owned());
+    driver.send(Input::ChooseDevice {
+        kind: DeviceKind::Microphone,
+        id: mic.clone(),
+    });
+    assert_eq!(
+        drop_in_effects(&driver).last(),
+        Some(&Effect::SetDropInDevice {
+            session: 1,
+            kind: DeviceKind::Microphone,
+            id: mic.clone(),
+        })
+    );
+    let before = driver.effects.len();
+    driver.send(Input::ChooseDevice {
+        kind: DeviceKind::Microphone,
+        id: mic,
+    });
+    assert_eq!(driver.effects.len(), before);
+
+    // Back to automatic.
+    driver.send(Input::ChooseDevice {
+        kind: DeviceKind::Camera,
+        id: None,
+    });
+    assert_eq!(driver.core.device_choices().camera, None);
+
+    // The listing is kept as given.
+    let devices = MediaDevices {
+        cameras: vec![MediaDevice {
+            id: "Logitech BRIO".into(),
+            name: "Logitech BRIO".into(),
+        }],
+        ..MediaDevices::default()
+    };
+    driver.send(Input::MediaDevicesListed(devices.clone()));
+    assert_eq!(driver.core.media_devices(), &devices);
+
+    // Choices belong to the device, not the account: signing out keeps them.
+    driver.send(Input::SignOut);
+    assert_eq!(
+        driver.core.device_choices().microphone.as_deref(),
+        Some("mic-2")
+    );
 }

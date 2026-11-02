@@ -770,3 +770,81 @@ fn the_shell_can_be_driven_entirely_from_the_keyboard(cx: &mut TestAppContext) {
         "switching channels loads its history"
     );
 }
+
+#[gpui::test]
+fn the_devices_menu_lists_the_devices_and_switches_the_call(cx: &mut TestAppContext) {
+    use lazy_client_core::{DeviceKind, DropInReport, MediaDevice, MediaDevices};
+    let (app, cx) = start(cx);
+    app.reach_general(cx);
+    app.dispatch(cx, Input::JoinDropIn(app.general));
+    for report in [DropInReport::Joined, DropInReport::Connected] {
+        app.dispatch(cx, Input::DropInReport { session: 1, report });
+    }
+    app.take_effects();
+
+    // Opening the menu lists the devices again; the list arrives while it is open.
+    app.click(cx, "drop-in-devices");
+    assert!(app.take_effects().contains(&Effect::ListMediaDevices));
+    let device = |id: &str, name: &str| MediaDevice {
+        id: id.into(),
+        name: name.into(),
+    };
+    app.dispatch(
+        cx,
+        Input::MediaDevicesListed(MediaDevices {
+            cameras: vec![
+                device("Integrated Camera", "Integrated Camera"),
+                device("Logitech BRIO", "Logitech BRIO"),
+            ],
+            microphones: vec![device("pulseaudio:brio-mic", "BRIO Microphone")],
+            speakers: Vec::new(),
+        }),
+    );
+
+    // Choosing the second camera switches the call and is remembered.
+    app.click(cx, "drop-in-devices-camera-1");
+    let effects = app.take_effects();
+    assert!(
+        effects.contains(&Effect::SetDropInDevice {
+            session: 1,
+            kind: DeviceKind::Camera,
+            id: Some("Logitech BRIO".into()),
+        }),
+        "{effects:?}"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::PersistDeviceChoices(_)))
+    );
+    let camera = app
+        .model
+        .read_with(cx, |m, _| m.core().device_choices().camera.clone());
+    assert_eq!(camera.as_deref(), Some("Logitech BRIO"));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("drop-in-devices-camera-1").is_none(),
+        "choosing closes the menu"
+    );
+
+    // The microphone is on its own tab; speakers say none were found but keep Automatic.
+    app.click(cx, "drop-in-devices");
+    app.click(cx, "drop-in-devices-tab-Microphone");
+    app.click(cx, "drop-in-devices-microphone-0");
+    assert!(app.take_effects().contains(&Effect::SetDropInDevice {
+        session: 1,
+        kind: DeviceKind::Microphone,
+        id: Some("pulseaudio:brio-mic".into()),
+    }));
+    app.click(cx, "drop-in-devices");
+    app.click(cx, "drop-in-devices-tab-Speakers");
+    assert!(cx.debug_bounds("drop-in-devices-speakers-none").is_some());
+    app.click(cx, "drop-in-devices-tab-Camera");
+    app.click(cx, "drop-in-devices-camera-auto");
+    assert!(app.take_effects().contains(&Effect::SetDropInDevice {
+        session: 1,
+        kind: DeviceKind::Camera,
+        id: None,
+    }));
+}

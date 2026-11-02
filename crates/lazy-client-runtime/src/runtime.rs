@@ -149,6 +149,8 @@ struct PrefsSaver {
     /// The active workspace (deleted at sign-out) and the device's appearance (kept).
     pending_active: Mutex<Option<Option<WorkspaceId>>>,
     pending_appearance: Mutex<Option<lazy_client_core::Appearance>>,
+    /// The devices chosen for drop-ins (kept at sign-out, like the appearance).
+    pending_devices: Mutex<Option<lazy_client_core::DeviceChoices>>,
     dirty: Notify,
     /// Incremented by sign-out so a write in flight cannot bring the file back.
     epoch: Arc<std::sync::atomic::AtomicU64>,
@@ -444,11 +446,18 @@ impl Inner {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
+        let devices = self
+            .prefs
+            .pending_devices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         if saved.is_none()
             && searches.is_none()
             && conversations.is_none()
             && active.is_none()
             && appearance.is_none()
+            && devices.is_none()
         {
             return;
         }
@@ -464,6 +473,11 @@ impl Inner {
                 && let Err(error) = crate::appearance::save(&dir, appearance)
             {
                 tracing::warn!(%error, "could not save the appearance");
+            }
+            if let Some(devices) = devices
+                && let Err(error) = crate::device_choices::save(&dir, &devices)
+            {
+                tracing::warn!(%error, "could not save the drop-in devices");
             }
             if signed_out() {
                 return;
@@ -638,6 +652,7 @@ impl Inner {
             recent_searches: searches::load(&self.profile_dir),
             recent_conversations: recent_conversations::load(&self.profile_dir),
             appearance: crate::appearance::load(&self.profile_dir),
+            device_choices: crate::device_choices::load(&self.profile_dir),
             active_workspace: crate::active_workspace::load(&self.profile_dir),
             ..StartupState::default()
         };
@@ -895,6 +910,26 @@ impl Inner {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner()) = Some(workspace);
                 self.prefs.dirty.notify_one();
+            }
+            Effect::PersistDeviceChoices(devices) => {
+                *self
+                    .prefs
+                    .pending_devices
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(devices);
+                self.prefs.dirty.notify_one();
+            }
+            Effect::ListMediaDevices => {
+                let inner = self.clone();
+                let media = self.config.drop_in_media;
+                self.spawn(async move {
+                    let listed =
+                        tokio::task::spawn_blocking(move || crate::drop_in::list_devices(media))
+                            .await;
+                    if let Ok(devices) = listed {
+                        inner.emit(Input::MediaDevicesListed(devices)).await;
+                    }
+                });
             }
             Effect::PersistAppearance(appearance) => {
                 *self
@@ -1702,14 +1737,18 @@ impl Inner {
                 conversation,
                 muted,
                 video_on,
+                devices,
             } => {
-                self.drop_in.want(session, muted, video_on);
+                self.drop_in.want(session, muted, video_on, devices);
                 let inner = self.clone();
                 self.spawn(inner.join_drop_in(session, conversation));
             }
             Effect::LeaveDropIn { session } => self.drop_in.leave(session),
             Effect::SetDropInMuted { session, muted } => self.drop_in.set_muted(session, muted),
             Effect::SetDropInVideo { session, on } => self.drop_in.set_video(session, on),
+            Effect::SetDropInDevice { session, kind, id } => {
+                self.drop_in.set_device(session, kind, id);
+            }
             Effect::LoadPreviews { message, revision } => {
                 let inner = self.clone();
                 self.spawn(async move {
@@ -2764,6 +2803,7 @@ pub fn inspect_state(profile_dir: &Path, key: &[u8; 32]) -> StartupState {
         recent_searches: searches::load(profile_dir),
         recent_conversations: recent_conversations::load(profile_dir),
         appearance: crate::appearance::load(profile_dir),
+        device_choices: crate::device_choices::load(profile_dir),
         active_workspace: crate::active_workspace::load(profile_dir),
         problems: recovered.problems,
         server: ServerInfo::default(),

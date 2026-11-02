@@ -13,6 +13,13 @@ see D42 for what it is and what it leaves out, and `DEPLOY.md`, "Drop-ins", for 
 codec changed from the plan: H.264 through OpenH264 built from source, not VP8 (D42, with the
 licensing question it raises).
 
+Device choice (2026-11-02): the stage's **Devices** menu has a tab each for the camera,
+microphone, and speakers ("Automatic" and every device the computer offers); a choice switches the
+running call and is remembered per computer (`drop-in-devices.json`, like the appearance). On
+Linux, audio goes through PulseAudio when a server answers (PipeWire desktops), so devices have
+their system names; ALSA otherwise. Cameras are chosen by name; "Automatic" tries every camera,
+webcams before raw laptop sensor feeds (Intel IPU6), which need libcamera or PipeWire (not yet).
+
 ## Two products, one boundary
 
 1. **The media library** (working name `rtc`; final name and license are the owner's call): a

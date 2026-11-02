@@ -50,6 +50,8 @@ pub struct CallConfig {
     pub muted: bool,
     /// Whether to play the others on the speakers.
     pub speakers: bool,
+    /// Which speakers ([`rtc_audio::AudioDevice::id`]); `None` is the system's default.
+    pub speaker_device: Option<String>,
     /// Where frames go: [`rtc_video::TileKey::Local`] for this client's own preview, and
     /// [`rtc_video::TileKey::Remote`] for each participant.
     pub frames: FrameStore,
@@ -61,11 +63,12 @@ impl CallConfig {
         CallConfig {
             url: url.into(),
             token: token.into(),
-            video: VideoInput::Camera,
+            video: VideoInput::Camera { name: None },
             video_on: true,
-            audio: AudioInput::Microphone,
+            audio: AudioInput::Microphone { device: None },
             muted: false,
             speakers: true,
+            speaker_device: None,
             frames,
         }
     }
@@ -97,6 +100,9 @@ pub struct Call {
 pub(crate) enum Command {
     SetMuted(bool),
     SetVideo(bool),
+    SetVideoInput(VideoInput),
+    SetAudioInput(AudioInput),
+    SetSpeakers(Option<String>),
     Leave,
 }
 
@@ -122,6 +128,23 @@ impl Call {
 
     pub fn set_video(&self, on: bool) {
         self.commands.send(Command::SetVideo(on)).ok();
+    }
+
+    /// Switches the camera (or other video source); used from the next frame, or when video is
+    /// next turned on.
+    pub fn set_video_input(&self, input: VideoInput) {
+        self.commands.send(Command::SetVideoInput(input)).ok();
+    }
+
+    /// Switches the microphone (or other sound source).
+    pub fn set_audio_input(&self, input: AudioInput) {
+        self.commands.send(Command::SetAudioInput(input)).ok();
+    }
+
+    /// Switches the speakers ([`rtc_audio::AudioDevice::id`]; `None` is the system's default).
+    /// Nothing changes if the call was started without speakers.
+    pub fn set_speakers(&self, device: Option<String>) {
+        self.commands.send(Command::SetSpeakers(device)).ok();
     }
 
     pub fn leave(&self) {

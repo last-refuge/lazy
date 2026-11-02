@@ -4,7 +4,9 @@
 
 use std::sync::Mutex;
 
-use lazy_client_core::{DropInPeer, DropInReport, Input};
+use lazy_client_core::{
+    DeviceChoices, DeviceKind, DropInPeer, DropInReport, Input, MediaDevice, MediaDevices,
+};
 use lazy_domain::{ConversationId, UserId};
 use lazy_protocol::api::paths;
 use rtc_audio::AudioInput;
@@ -43,19 +45,107 @@ struct Slot {
     session: u64,
     muted: bool,
     video_on: bool,
+    devices: DeviceChoices,
+    /// The test pattern's color, when the call sends one instead of the camera.
+    test_color: Option<[u8; 3]>,
     call: Option<Call>,
+}
+
+/// The second camera offered with [`DropInMedia::TestPattern`], in another color, so switching
+/// cameras can be tried (and tested) without one.
+pub(crate) const SECOND_TEST_CAMERA: &str = "Second test pattern";
+const FIRST_TEST_CAMERA: &str = "Test pattern";
+
+/// What the call sends for the chosen camera.
+fn video_input(test_color: Option<[u8; 3]>, camera: Option<&str>) -> VideoInput {
+    match test_color {
+        Some(color) if camera == Some(SECOND_TEST_CAMERA) => VideoInput::TestPattern {
+            color: color.map(|c| 255 - c),
+        },
+        Some(color) => VideoInput::TestPattern { color },
+        None => VideoInput::Camera {
+            name: camera.map(str::to_owned),
+        },
+    }
+}
+
+/// The devices to choose from (blocking: it asks the system).
+pub(crate) fn list_devices(media: DropInMedia) -> MediaDevices {
+    match media {
+        DropInMedia::TestPattern => MediaDevices {
+            cameras: [FIRST_TEST_CAMERA, SECOND_TEST_CAMERA]
+                .map(|name| MediaDevice {
+                    id: name.into(),
+                    name: name.into(),
+                })
+                .into(),
+            ..MediaDevices::default()
+        },
+        DropInMedia::Devices => {
+            let audio = |devices: Vec<rtc_audio::AudioDevice>| {
+                devices
+                    .into_iter()
+                    .map(|d| MediaDevice {
+                        id: d.id,
+                        name: d.name,
+                    })
+                    .collect()
+            };
+            MediaDevices {
+                // A camera is chosen by its name.
+                cameras: rtc_video::source::cameras()
+                    .into_iter()
+                    .map(|name| MediaDevice {
+                        id: name.clone(),
+                        name,
+                    })
+                    .collect(),
+                microphones: audio(rtc_audio::microphones()),
+                speakers: audio(rtc_audio::speakers()),
+            }
+        }
+    }
 }
 
 impl DropInSlot {
     /// Remembers a new join (leaving any call of an older one).
-    pub fn want(&self, session: u64, muted: bool, video_on: bool) {
+    pub fn want(&self, session: u64, muted: bool, video_on: bool, devices: DeviceChoices) {
         let old = self.lock().replace(Slot {
             session,
             muted,
             video_on,
+            devices,
+            test_color: None,
             call: None,
         });
         drop(old);
+    }
+
+    /// Uses this device in `session`'s call from now on.
+    pub fn set_device(&self, session: u64, kind: DeviceKind, id: Option<String>) {
+        let mut state = self.lock();
+        let Some(slot) = state.as_mut().filter(|s| s.session == session) else {
+            return;
+        };
+        slot.devices.set(kind, id);
+        let Some(call) = &slot.call else {
+            return;
+        };
+        match kind {
+            DeviceKind::Camera => {
+                call.set_video_input(video_input(slot.test_color, slot.devices.camera.as_deref()));
+            }
+            // Test calls have no sound in or out.
+            DeviceKind::Microphone if slot.test_color.is_none() => {
+                call.set_audio_input(AudioInput::Microphone {
+                    device: slot.devices.microphone.clone(),
+                });
+            }
+            DeviceKind::Speakers if slot.test_color.is_none() => {
+                call.set_speakers(slot.devices.speakers.clone());
+            }
+            DeviceKind::Microphone | DeviceKind::Speakers => {}
+        }
     }
 
     /// Leaves `session`'s call, if it is the current one.
@@ -90,13 +180,20 @@ impl DropInSlot {
     }
 
     /// Starts the call for `session` with `start`, unless it was left meanwhile. `start` gets
-    /// the wanted (muted, video on).
-    pub fn start(&self, session: u64, start: impl FnOnce(bool, bool) -> Call) -> bool {
+    /// the wanted (muted, video on, devices); `test_color` is the test pattern's, when it sends
+    /// one.
+    pub fn start(
+        &self,
+        session: u64,
+        test_color: Option<[u8; 3]>,
+        start: impl FnOnce(bool, bool, &DeviceChoices) -> Call,
+    ) -> bool {
         let mut state = self.lock();
         let Some(slot) = state.as_mut().filter(|s| s.session == session) else {
             return false;
         };
-        slot.call = Some(start(slot.muted, slot.video_on));
+        slot.test_color = test_color;
+        slot.call = Some(start(slot.muted, slot.video_on, &slot.devices));
         true
     }
 
@@ -181,20 +278,27 @@ impl crate::runtime::Inner {
         let frames = self.config.frames.clone();
         let (events, mut reports) = tokio::sync::mpsc::unbounded_channel();
         let handle = self.handle.clone();
-        let started = self.drop_in.start(session, |muted, video_on| {
-            let color = pattern_color(&joined.token);
-            let mut config = CallConfig::new(joined.url, joined.token, frames);
-            config.muted = muted;
-            config.video_on = video_on;
-            if media == DropInMedia::TestPattern {
-                config.video = VideoInput::TestPattern { color };
-                config.audio = AudioInput::None;
-                config.speakers = false;
-            }
-            Call::start(config, &handle, move |event| {
-                events.send(event).ok();
-            })
-        });
+        let test_color = (media == DropInMedia::TestPattern).then(|| pattern_color(&joined.token));
+        let started = self
+            .drop_in
+            .start(session, test_color, |muted, video_on, devices| {
+                let mut config = CallConfig::new(joined.url, joined.token, frames);
+                config.muted = muted;
+                config.video_on = video_on;
+                config.video = video_input(test_color, devices.camera.as_deref());
+                if test_color.is_some() {
+                    config.audio = AudioInput::None;
+                    config.speakers = false;
+                } else {
+                    config.audio = AudioInput::Microphone {
+                        device: devices.microphone.clone(),
+                    };
+                    config.speaker_device = devices.speakers.clone();
+                }
+                Call::start(config, &handle, move |event| {
+                    events.send(event).ok();
+                })
+            });
         if !started {
             return;
         }

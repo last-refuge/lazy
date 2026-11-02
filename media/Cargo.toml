@@ -35,7 +35,8 @@ clap = { version = "4", features = ["derive", "env"] }
 str0m = { version = "0.24", default-features = false, features = ["rust-crypto"] }
 openh264 = "0.9"
 unsafe-libopus = "0.2"
-cpal = "0.18"
+# PulseAudio (pure Rust) is the default host on Linux when a server answers; ALSA otherwise.
+cpal = { version = "0.18", features = ["pulseaudio"] }
 nokhwa = { version = "0.10", default-features = false, features = ["input-native"] }
 
 # The codecs are C (OpenH264) and C transpiled to Rust (Opus): unoptimized, they cannot keep up

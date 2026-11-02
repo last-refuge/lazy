@@ -346,6 +346,7 @@ pub enum Effect {
         conversation: ConversationId,
         muted: bool,
         video_on: bool,
+        devices: crate::DeviceChoices,
     },
     /// Leave the call of `session` (no report follows; the core already left).
     LeaveDropIn {
@@ -359,6 +360,16 @@ pub enum Effect {
         session: u64,
         on: bool,
     },
+    /// Switch the call of `session` to this device (`None`: automatic).
+    SetDropInDevice {
+        session: u64,
+        kind: crate::DeviceKind,
+        id: Option<String>,
+    },
+    /// List the cameras, microphones, and speakers. Answered with `Input::MediaDevicesListed`.
+    ListMediaDevices,
+    /// Save the devices chosen for drop-ins on this device. Nothing answers.
+    PersistDeviceChoices(crate::DeviceChoices),
     /// Ask for a message's link previews. Answered with `Input::PreviewsLoaded`.
     LoadPreviews {
         message: MessageId,

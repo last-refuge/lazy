@@ -253,3 +253,70 @@ async fn a_bad_token_or_a_full_room_is_refused() {
         .await;
     assert!(elsewhere.others().is_empty());
 }
+
+/// Who the latest speaking report names.
+fn speaking_now(p: &Person) -> Vec<Option<ParticipantId>> {
+    p.seen
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            CallEvent::Speaking(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn switching_camera_and_microphone_mid_call_reaches_the_other_side() {
+    let url = sfu().await;
+    let red = [30, 40, 200];
+    let blue = [200, 60, 30];
+    let mut ada = Person::join(&url, "switch", "Ada", red, 440.0);
+    ada.until("ada joined", |p| {
+        p.seen.iter().any(|e| matches!(e, CallEvent::Joined { .. }))
+    })
+    .await;
+    let mut bo = Person::join(&url, "switch", "Bo", [40, 180, 60], 660.0);
+    bo.until("bo connected", |p| p.seen.contains(&CallEvent::Connected))
+        .await;
+    let a = ada.you();
+    bo.until("bo sees ada in red", |p| shows(&p.frames, a, red))
+        .await;
+    bo.until("bo hears ada", |p| speaking_now(p).contains(&Some(a)))
+        .await;
+
+    // Another "camera": Bo sees the new picture, and Ada's own preview follows.
+    ada.call
+        .set_video_input(VideoInput::TestPattern { color: blue });
+    bo.until("bo sees ada in blue", |p| shows(&p.frames, a, blue))
+        .await;
+    ada.until("ada's preview is blue", |p| {
+        p.frames.get(TileKey::Local).is_some_and(|tile| {
+            let f = &tile.frame;
+            close(f.pixel(2, f.height / 2), blue) || close(f.pixel(f.width - 3, f.height / 2), blue)
+        })
+    })
+    .await;
+
+    // Another "microphone": silence, then a tone again; Bo hears the change.
+    ada.call.set_audio_input(AudioInput::None);
+    bo.until("ada went quiet", |p| !speaking_now(p).contains(&Some(a)))
+        .await;
+    ada.call.set_audio_input(AudioInput::Tone { hz: 330.0 });
+    bo.until("bo hears ada again", |p| speaking_now(p).contains(&Some(a)))
+        .await;
+
+    // Speakers switch without trouble even when the call has none (nothing happens).
+    ada.call.set_speakers(Some("not a device".into()));
+    ada.call
+        .set_video_input(VideoInput::TestPattern { color: red });
+    bo.until("bo sees ada in red again", |p| shows(&p.frames, a, red))
+        .await;
+    assert!(
+        !ada.seen
+            .iter()
+            .any(|e| matches!(e, CallEvent::DeviceProblem(_))),
+        "{:?}",
+        ada.seen
+    );
+}

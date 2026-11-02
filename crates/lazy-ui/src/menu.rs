@@ -100,6 +100,30 @@ impl Menu {
         menu
     }
 
+    /// Gives a tabbed menu new tabs (fresh items for the same tabs, say), keeping the open tab and
+    /// the highlight where they still fit.
+    pub fn replace_tabs(
+        &mut self,
+        tabs: Vec<(SharedString, Vec<MenuItem>)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.tab = self.tab.min(tabs.len().saturating_sub(1));
+        self.tabs = tabs;
+        self.items = self
+            .tabs
+            .get(self.tab)
+            .map(|tab| tab.1.clone())
+            .unwrap_or_default();
+        if !self
+            .items
+            .get(self.highlighted)
+            .is_some_and(|item| item.enabled)
+        {
+            self.highlighted = self.items.iter().position(|item| item.enabled).unwrap_or(0);
+        }
+        cx.notify();
+    }
+
     /// The items of the open tab (or of the menu), for tests.
     pub fn items(&self) -> &[MenuItem] {
         &self.items

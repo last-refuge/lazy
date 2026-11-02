@@ -50,7 +50,10 @@ pub use discovery::{
     BrowseView, DIRECTORY_PAGE, MAX_RECENT_CONVERSATIONS, PeopleView, ProfileView,
     QUICK_SWITCHER_LIMIT, QuickSwitcherItem, QuickSwitcherTarget, SAVED_PAGE, SavedView,
 };
-pub use drop_in::{DropIn, DropInPeer, DropInReport, DropInStatus};
+pub use drop_in::{
+    DeviceChoices, DeviceKind, DropIn, DropInPeer, DropInReport, DropInStatus, MediaDevice,
+    MediaDevices,
+};
 pub use effect::Effect;
 pub use input::{Input, SocketEvent};
 pub use model::{
