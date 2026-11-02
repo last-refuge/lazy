@@ -4,7 +4,7 @@ The desktop client ships as installers for Linux, macOS, and Windows, built by a
 by hand (like CI, it never runs on a push): **Actions, release, Run workflow**, or
 
 ```sh
-gh workflow run release -f version=0.10.0 -f publish=true
+gh workflow run release -f version=0.10.1 -f publish=true
 ```
 
 `version` is stamped into the apps (Help, Diagnostics shows it) and into the file names;
@@ -57,9 +57,13 @@ Release 0.10.0 (2026-11-02) adds drop-ins: video calls in a conversation (D42, D
 is still 14, so 0.9 clients keep working without the Drop in button. Drop-ins need a server
 started with `LAZY_RTC_URL` and `LAZY_RTC_SECRET` and the call server (`DEPLOY.md`, "Drop-ins");
 `chat.lazyto.day` and its call server were set up first. It is the first release with camera,
-microphone and video code (nokhwa, cpal, OpenH264, Opus), so the first macOS and Windows builds of
-that code happen in this run; on macOS, the app asks for camera and microphone access the first
-time someone drops in.
+microphone and video code (nokhwa, cpal, OpenH264, Opus); its macOS and Windows builds of that code
+succeeded on the first run. On macOS, the app asks for camera and microphone access the first time
+someone drops in.
+
+Release 0.10.1 (2026-11-02) fixes Start video on cameras without a 640x480 YUYV mode (common on
+laptop and HD webcams), which 0.10.0 refused with "Failed to Fufill" (`VERIFICATION.md`). The
+protocol is still 14 and the server is unchanged.
 
 ## What you get
 

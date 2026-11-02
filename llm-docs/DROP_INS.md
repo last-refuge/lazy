@@ -93,7 +93,7 @@ pure-Rust implementation today, and every Rust media project links C/C++ librari
 | --- | --- | --- |
 | Opus (voice codec) | libopus through Rust bindings (BSD) | No mature pure-Rust encoder |
 | Echo cancellation, noise suppression, gain | WebRTC's audio-processing module through Rust bindings (BSD) | Experimental at best; the biggest quality risk |
-| VP8/VP9 (video) | libvpx through Rust bindings (BSD) | No mature real-time pure-Rust encoder |
+| H.264 (video; the plan said VP8/VP9, D42 changed it) | OpenH264 compiled from source (BSD; the owner is signing the AVC pool's patent licence) | No mature real-time pure-Rust encoder or decoder; the owner wants one later, behind the same traits |
 
 They sit behind the library's traits; the spike (M0) confirms the binding crates' state,
 licenses, and how they build on Linux, macOS (both architectures), and Windows. AV1 (rav1e for

@@ -108,7 +108,6 @@ mod camera {
     use nokhwa::pixel_format::RgbFormat;
     use nokhwa::utils::{
         ApiBackend, CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType,
-        Resolution,
     };
 
     use super::{FRAME_RATE, SEND_HEIGHT, SEND_WIDTH, SourceError, VideoSource};
@@ -156,17 +155,71 @@ mod camera {
                 CameraIndex::Index(i) => CameraIndex::Index(*i),
                 CameraIndex::String(s) => CameraIndex::String(s.clone()),
             };
-            let wanted =
-                RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(CameraFormat::new(
-                    Resolution::new(SEND_WIDTH, SEND_HEIGHT),
-                    FrameFormat::YUYV,
-                    FRAME_RATE,
-                )));
-            let mut camera = nokhwa::Camera::new(index, wanted).map_err(error)?;
+            // Open in whatever format the camera offers first, then choose from its list
+            // ourselves: nokhwa's own "closest" request only matches the exact size asked for
+            // (it looks up frame rates for the requested size, not the closest one it found), so
+            // a camera without 640x480 in that pixel format failed to open at all.
+            let any = RequestedFormat::new::<RgbFormat>(RequestedFormatType::None);
+            let mut camera = nokhwa::Camera::new(index, any).map_err(error)?;
+            match camera.compatible_camera_formats() {
+                Ok(formats) => {
+                    if let Some(format) = choose_format(&formats) {
+                        let exact =
+                            RequestedFormat::new::<RgbFormat>(RequestedFormatType::Exact(format));
+                        if let Err(e) = camera.set_camera_requset(exact) {
+                            tracing::warn!(?format, error = %e, "camera kept its own format");
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "could not list the camera's formats"),
+            }
             camera.open_stream().map_err(error)?;
             tracing::info!(format = ?camera.camera_format(), "camera open");
             Ok(Camera { camera })
         }
+    }
+
+    /// The pixel formats a camera frame can be turned into a picture from.
+    const DECODABLE: [FrameFormat; 5] = [
+        FrameFormat::YUYV,
+        FrameFormat::NV12,
+        FrameFormat::RAWRGB,
+        FrameFormat::RAWBGR,
+        FrameFormat::MJPEG,
+    ];
+
+    /// Below this many frames a second, video looks broken; a format that reaches it wins over
+    /// any size.
+    const MIN_FRAME_RATE: u32 = 15;
+
+    /// The camera format to send from: one that reaches [`MIN_FRAME_RATE`], then the size
+    /// nearest the send size (a little larger beats smaller, as frames are scaled down to fit),
+    /// then an uncompressed format (cheaper than decoding JPEG), then the frame rate nearest
+    /// [`FRAME_RATE`].
+    pub(super) fn choose_format(formats: &[CameraFormat]) -> Option<CameraFormat> {
+        let wanted = i64::from(SEND_WIDTH) * i64::from(SEND_HEIGHT);
+        formats
+            .iter()
+            .filter(|f| DECODABLE.contains(&f.format()) && f.frame_rate() > 0)
+            .min_by_key(|f| {
+                let area = i64::from(f.width()) * i64::from(f.height());
+                let size_cost = if area >= wanted {
+                    area - wanted
+                } else {
+                    (wanted - area) * 4
+                };
+                let format_rank = DECODABLE
+                    .iter()
+                    .position(|d| *d == f.format())
+                    .unwrap_or(DECODABLE.len());
+                (
+                    f.frame_rate() < MIN_FRAME_RATE,
+                    size_cost,
+                    format_rank,
+                    f.frame_rate().abs_diff(FRAME_RATE),
+                )
+            })
+            .copied()
     }
 
     impl VideoSource for Camera {
@@ -188,6 +241,72 @@ mod camera {
     impl Drop for Camera {
         fn drop(&mut self) {
             self.camera.stop_stream().ok();
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use nokhwa::utils::Resolution;
+
+        use super::*;
+
+        fn format(width: u32, height: u32, frame: FrameFormat, fps: u32) -> CameraFormat {
+            CameraFormat::new(Resolution::new(width, height), frame, fps)
+        }
+
+        #[test]
+        fn a_camera_without_640x480_yuyv_still_gets_a_format() {
+            // An HD webcam: YUYV only at sizes too slow for video, MJPEG at 30.
+            let formats = [
+                format(1280, 720, FrameFormat::YUYV, 10),
+                format(1920, 1080, FrameFormat::YUYV, 5),
+                format(1280, 720, FrameFormat::MJPEG, 30),
+                format(1920, 1080, FrameFormat::MJPEG, 30),
+            ];
+            assert_eq!(
+                choose_format(&formats),
+                Some(format(1280, 720, FrameFormat::MJPEG, 30))
+            );
+        }
+
+        #[test]
+        fn the_send_size_uncompressed_wins_when_offered() {
+            let formats = [
+                format(1280, 720, FrameFormat::MJPEG, 30),
+                format(640, 480, FrameFormat::MJPEG, 30),
+                format(640, 480, FrameFormat::YUYV, 30),
+                format(320, 240, FrameFormat::YUYV, 30),
+            ];
+            assert_eq!(
+                choose_format(&formats),
+                Some(format(640, 480, FrameFormat::YUYV, 30))
+            );
+        }
+
+        #[test]
+        fn a_little_larger_beats_smaller_and_slow_formats_lose() {
+            let formats = [
+                format(320, 240, FrameFormat::NV12, 30),
+                format(848, 480, FrameFormat::NV12, 30),
+                format(640, 480, FrameFormat::NV12, 7),
+            ];
+            assert_eq!(
+                choose_format(&formats),
+                Some(format(848, 480, FrameFormat::NV12, 30))
+            );
+        }
+
+        #[test]
+        fn only_slow_or_undecodable_formats_still_choose_something_decodable() {
+            let formats = [
+                format(640, 480, FrameFormat::GRAY, 30),
+                format(1280, 720, FrameFormat::YUYV, 10),
+            ];
+            assert_eq!(
+                choose_format(&formats),
+                Some(format(1280, 720, FrameFormat::YUYV, 10))
+            );
+            assert_eq!(choose_format(&[]), None);
         }
     }
 }
