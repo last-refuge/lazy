@@ -1837,3 +1837,130 @@ fn the_sidebar_count_is_the_unread_replies_of_followed_threads() {
     let fx = setup_with(world);
     assert_eq!(fx.driver.core.inbox_unread_total(), 3);
 }
+
+// ----- Permission and the offer to turn notifications on -----
+
+use lazy_domain::notification::{NotificationPermission, PromptKind};
+
+fn persisted_prompts(out: &Output) -> Vec<lazy_domain::notification::PromptHistory> {
+    out.effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::PersistNotificationPrompts(history) => Some(*history),
+            _ => None,
+        })
+        .collect()
+}
+
+fn permission(fx: &mut Fx, permission: NotificationPermission) -> Output {
+    fx.driver
+        .send(Input::NotificationPermissionChanged(permission))
+}
+
+#[test]
+fn without_a_reported_permission_everything_works_as_before() {
+    let mut fx = setup();
+    fx.driver.send(Input::Clock(at(0)));
+    let other = fx.other();
+    let (_, out) = fx.post(fx.dm.id, &other, "hi");
+    assert_eq!(notifications(&out).len(), 1);
+    assert_eq!(fx.driver.core.notification_prompt(), None);
+}
+
+#[test]
+fn a_device_that_was_never_asked_is_offered_notifications_once_and_the_offer_is_remembered() {
+    let mut fx = setup();
+    fx.driver.send(Input::Clock(at(0)));
+    let out = permission(&mut fx, NotificationPermission::NotDetermined);
+    assert_eq!(
+        fx.driver.core.notification_prompt(),
+        Some(PromptKind::Enable)
+    );
+    let saved = persisted_prompts(&out);
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].shown, 1);
+    // Reporting the same thing again offers nothing new.
+    let out = permission(&mut fx, NotificationPermission::NotDetermined);
+    assert!(persisted_prompts(&out).is_empty());
+}
+
+#[test]
+fn turning_on_raises_the_system_dialog_and_the_answer_ends_the_offer() {
+    let mut fx = setup();
+    fx.driver.send(Input::Clock(at(0)));
+    permission(&mut fx, NotificationPermission::NotDetermined);
+    let out = fx.driver.send(Input::TurnOnNotifications);
+    assert!(
+        out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::RequestNotificationPermission))
+    );
+    assert_eq!(fx.driver.core.notification_prompt(), None);
+    permission(&mut fx, NotificationPermission::Authorized);
+    let other = fx.other();
+    let (_, out) = fx.post(fx.dm.id, &other, "hi");
+    assert_eq!(notifications(&out).len(), 1);
+}
+
+#[test]
+fn while_the_system_would_not_show_it_nothing_is_shown_and_a_later_offer_waits_a_week() {
+    let mut fx = setup();
+    fx.driver.send(Input::Clock(at(0)));
+    permission(&mut fx, NotificationPermission::NotDetermined);
+    fx.driver.send(Input::DismissNotificationPrompt);
+    assert_eq!(fx.driver.core.notification_prompt(), None);
+    let other = fx.other();
+    let (_, out) = fx.post(fx.dm.id, &other, "one");
+    assert!(notifications(&out).is_empty(), "the system would drop it");
+    assert_eq!(fx.driver.core.notification_prompt(), None, "too soon");
+    fx.driver.send(Input::Clock(at(8 * 24 * 3600)));
+    let (_, out) = fx.post(fx.dm.id, &other, "two");
+    assert!(notifications(&out).is_empty());
+    assert_eq!(
+        fx.driver.core.notification_prompt(),
+        Some(PromptKind::EnableAgain)
+    );
+    assert_eq!(persisted_prompts(&out)[0].shown, 2);
+}
+
+#[test]
+fn a_refusal_is_answered_by_opening_the_system_settings_never_the_dialog() {
+    let mut fx = setup();
+    fx.driver.send(Input::Clock(at(0)));
+    permission(&mut fx, NotificationPermission::Denied);
+    // Nothing is offered until a message is missed.
+    assert_eq!(fx.driver.core.notification_prompt(), None);
+    let out = fx.driver.send(Input::TurnOnNotifications);
+    assert!(
+        out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::OpenNotificationSettings))
+    );
+    assert!(
+        !out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::RequestNotificationPermission))
+    );
+}
+
+#[test]
+fn switching_desktop_notifications_off_means_no_offers() {
+    let mut fx = setup();
+    fx.driver.send(Input::Clock(at(0)));
+    fx.settings(|s| s.desktop = false);
+    permission(&mut fx, NotificationPermission::NotDetermined);
+    assert_eq!(fx.driver.core.notification_prompt(), None);
+}
+
+#[test]
+fn signing_out_keeps_what_the_device_was_asked() {
+    let mut fx = setup();
+    fx.driver.send(Input::Clock(at(0)));
+    permission(&mut fx, NotificationPermission::NotDetermined);
+    fx.driver.send(Input::SignOut);
+    assert_eq!(
+        fx.driver.core.notification_permission(),
+        Some(NotificationPermission::NotDetermined)
+    );
+    assert_eq!(fx.driver.core.notification_prompt(), None);
+}

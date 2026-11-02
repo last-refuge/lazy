@@ -837,3 +837,19 @@ desktop feature `drop-in-devices`, and the compose profile `drop-ins`. The plan 
 `DROP_INS.md`. The rename landed before the feature was released, so nothing on the wire or on
 disk changed shape. The media library (`media/`, `rtc-*`) keeps its own names: it knows only
 rooms and calls.
+
+## D44. Notification permission on macOS
+
+Goal: an installed Lazy shows notifications under its own name and icon, asks the person once through the system's own dialog, and asks again only when it matters. Before this, macOS had no notifier at all (D20 left it to "a small interface"), and an `osascript` stand-in was rejected: it shows toasts as Script Editor.
+
+**Native only.** macOS uses `UNUserNotificationCenter` (`lazy-desktop/src/macos.rs`). It works only from an installed, signed `Lazy.app`; from a bare binary (`cargo run`) the framework raises an Objective-C exception that cannot be caught, so the notifier checks first (the executable is in `*.app/Contents/MacOS/` and the bundle has an identifier) and otherwise does nothing, with one log line. `scripts/run-client-bundled.sh` builds a throwaway bundle (own bundle id per profile, ad-hoc signed with the bundle id as the signing identifier) to test it.
+
+**The platform reports, the core decides.** The desktop reports `NotificationPermission` (`NotDetermined`, `Denied`, `Authorized`, `Unavailable`) at startup, whenever the window becomes active (the person may have changed it in System Settings), and after the system dialog is answered. Where nothing is reported (Linux), notifications work as before. The core keeps it, and `Effect::Notify` is not emitted while the state is `NotDetermined` or `Denied`.
+
+**When to ask** (`lazy_domain::notification::should_prompt`, pure and tested with an injected clock):
+- **First:** once the person is signed in with their settings known and "Show desktop notifications" on, a banner says what notifications are for, with **Turn on** and **Not now**. **Turn on** is what raises the system dialog; nothing raises it by itself.
+- **Again:** only when a message that would have notified them arrives while the permission is missing, at least 7 days after the last offer, and at most 3 offers in all. After a refusal the system never shows its dialog again, so the offer becomes **Open System Settings**.
+- **Always available:** Preferences shows a line and a button whenever the state is `NotDetermined` or `Denied`, whatever the history.
+- The history (count, time) is local to the device (`notification-prompts.json`, versioned, kept at sign-out, a file this build cannot read means "never asked").
+
+**Not yet:** Windows (no implementation; it logs a warning); provisional (quiet) authorization; notification actions (reply, mark read); a "Test notification" button; the dock badge for macOS 11 and 12 uses the dock tile, not the newer badge count.

@@ -9,6 +9,7 @@
 
 use std::sync::Mutex;
 
+use lazy_domain::notification::NotificationPermission;
 use lazy_domain::{ConversationId, MessageId};
 
 /// One notification to show. A newer toast with the same `tag` replaces the earlier one (the
@@ -38,6 +39,14 @@ pub trait Notifier: Send + Sync {
     fn withdraw(&self, tag: &str);
     /// Sets the launcher's count (the dock or taskbar badge), where the platform has one.
     fn set_launcher_count(&self, count: u32);
+    /// Asks the system what this app may do and reports it through the permission callback given
+    /// to [`platform_notifier`]. Platforms that need no permission report nothing.
+    fn refresh_permission(&self) {}
+    /// Raises the system's own dialog asking whether notifications are allowed. It appears only
+    /// while the answer is not yet given; the answer is then reported as in `refresh_permission`.
+    fn request_permission(&self) {}
+    /// Opens the system settings where the person can change their answer.
+    fn open_settings(&self) {}
 }
 
 /// The window title for an attention count: `Lazy`, `(3) Lazy`, `(99+) Lazy`.
@@ -55,6 +64,9 @@ pub enum Call {
     Show(Toast),
     Withdraw(String),
     LauncherCount(u32),
+    RefreshPermission,
+    RequestPermission,
+    OpenSettings,
 }
 
 /// What the platform calls when a notification is clicked.
@@ -134,6 +146,24 @@ impl Notifier for FakeNotifier {
             .expect("calls")
             .push(Call::LauncherCount(count));
     }
+
+    fn refresh_permission(&self) {
+        self.calls
+            .lock()
+            .expect("calls")
+            .push(Call::RefreshPermission);
+    }
+
+    fn request_permission(&self) {
+        self.calls
+            .lock()
+            .expect("calls")
+            .push(Call::RequestPermission);
+    }
+
+    fn open_settings(&self) {
+        self.calls.lock().expect("calls").push(Call::OpenSettings);
+    }
 }
 
 /// Does nothing: for platforms without an implementation yet.
@@ -145,18 +175,35 @@ impl Notifier for NoNotifier {
     fn set_launcher_count(&self, _count: u32) {}
 }
 
-/// The platform's notifier, calling `on_activate` (from a worker thread) when a notification is
-/// clicked.
+/// The platform's notifier. `on_activate` is called (from a worker thread) when a notification is
+/// clicked; `on_permission` (also from any thread) with what the system lets this app do, on
+/// platforms where the person is asked.
 pub fn platform_notifier(
     on_activate: impl Fn(Activation) + Send + Sync + 'static,
+    on_permission: impl Fn(NotificationPermission) + Send + Sync + 'static,
 ) -> Box<dyn Notifier> {
     #[cfg(target_os = "linux")]
     {
+        let _ = on_permission;
         Box::new(freedesktop::FreedesktopNotifier::start(on_activate))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = on_activate;
+        match crate::macos::UserNotificationsNotifier::start(on_activate, on_permission) {
+            Some(notifier) => Box::new(notifier),
+            None => {
+                tracing::info!(
+                    "desktop notifications need the installed app (Lazy.app); this is a bare \
+                     binary, so none are shown"
+                );
+                Box::new(NoNotifier)
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (on_activate, on_permission);
+        tracing::warn!("desktop notifications are not supported on this platform");
         Box::new(NoNotifier)
     }
 }

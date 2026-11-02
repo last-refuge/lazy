@@ -1125,7 +1125,11 @@ impl Sim {
                 Effect::DiscardCache => self.disk = vec![None],
                 Effect::PersistDrafts(_)
                 | Effect::PersistThreadDrafts(_)
-                | Effect::PersistEmojiPrefs(_) => {}
+                | Effect::PersistEmojiPrefs(_)
+                | Effect::PersistNotificationPrompts(_)
+                | Effect::RefreshNotificationPermission
+                | Effect::RequestNotificationPermission
+                | Effect::OpenNotificationSettings => {}
                 Effect::PersistView(view) => self.view_disk.push(view),
                 Effect::SetBadge(count) => {
                     assert_eq!(

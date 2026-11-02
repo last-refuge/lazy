@@ -775,6 +775,12 @@ impl fmt::Debug for Input {
                 .field("conversation", conversation)
                 .field("message", message)
                 .finish(),
+            Input::NotificationPermissionChanged(v0) => f
+                .debug_tuple("NotificationPermissionChanged")
+                .field(v0)
+                .finish(),
+            Input::TurnOnNotifications => f.write_str("TurnOnNotifications"),
+            Input::DismissNotificationPrompt => f.write_str("DismissNotificationPrompt"),
             Input::OpenInbox => f.write_str("OpenInbox"),
             Input::LoadInbox { unread_only } => f
                 .debug_struct("LoadInbox")

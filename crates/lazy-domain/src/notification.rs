@@ -314,6 +314,80 @@ pub fn decide(
     })
 }
 
+/// Whether this device lets the app show notifications, as the operating system reports it.
+///
+/// Only some platforms ask the person first (macOS, and phones later); elsewhere the client
+/// never learns a state and shows notifications as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NotificationPermission {
+    /// The platform has no notification permission, or notifications cannot be used here (for
+    /// example a build that is not an installed app).
+    Unavailable,
+    /// The person has not been asked. The system dialog can still be raised, once.
+    NotDetermined,
+    /// The person said no. The system will not ask again; only its settings can change this.
+    Denied,
+    /// Notifications may be shown.
+    Authorized,
+}
+
+/// Fewest days between two prompts.
+pub const PROMPT_SPACING_DAYS: i64 = 7;
+/// Most prompts the app raises by itself, over the life of the install.
+pub const MAX_PROMPTS: u8 = 3;
+
+/// What the app has already asked the person on this device. Kept locally, never synced: a
+/// permission belongs to a device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PromptHistory {
+    /// Prompts shown so far, whether the person answered or not.
+    pub shown: u8,
+    pub last_shown: Option<Timestamp>,
+}
+
+/// What to offer the person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    /// The first offer, in the app's own words, before the system dialog.
+    Enable,
+    /// Offered again, because a message that would have notified them arrived.
+    EnableAgain,
+    /// They said no to the system; only System Settings can undo that.
+    OpenSettings,
+}
+
+/// Whether to offer to turn notifications on now.
+///
+/// `missed` is true when a message that would have notified the person just arrived and could not
+/// be shown. The first offer needs no such message (it comes once the person is signed in); every
+/// later one does, so the person is asked only when it matters, with a week between offers and a
+/// small total, however the app is used.
+pub fn should_prompt(
+    permission: NotificationPermission,
+    history: &PromptHistory,
+    desktop: bool,
+    missed: bool,
+    now: Timestamp,
+) -> Option<PromptKind> {
+    if !desktop {
+        return None;
+    }
+    let spaced = history.last_shown.is_none_or(|last| {
+        now.as_offset_date_time() - last.as_offset_date_time()
+            >= time::Duration::days(PROMPT_SPACING_DAYS)
+    });
+    match permission {
+        NotificationPermission::Unavailable | NotificationPermission::Authorized => None,
+        NotificationPermission::NotDetermined if history.shown == 0 => Some(PromptKind::Enable),
+        NotificationPermission::NotDetermined => {
+            (missed && spaced && history.shown < MAX_PROMPTS).then_some(PromptKind::EnableAgain)
+        }
+        NotificationPermission::Denied => {
+            (missed && spaced && history.shown < MAX_PROMPTS).then_some(PromptKind::OpenSettings)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
@@ -770,6 +844,115 @@ mod tests {
             // The author is never told.
             let own = IncomingMessage { author: me, ..message };
             prop_assert_eq!(decide(&own, me, &settings, Some(&conversation), following, now), None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use proptest::prelude::*;
+    use time::macros::datetime;
+
+    use super::NotificationPermission::*;
+    use super::*;
+
+    fn day(n: i64) -> Timestamp {
+        Timestamp::from(datetime!(2026-11-01 12:00 UTC) + time::Duration::days(n))
+    }
+
+    fn after(shown: u8, last_day: i64) -> PromptHistory {
+        PromptHistory {
+            shown,
+            last_shown: Some(day(last_day)),
+        }
+    }
+
+    #[test]
+    fn the_first_offer_needs_no_message_and_nothing_else_is_offered_until_one_arrives() {
+        let fresh = PromptHistory::default();
+        assert_eq!(
+            should_prompt(NotDetermined, &fresh, true, false, day(0)),
+            Some(PromptKind::Enable)
+        );
+        assert_eq!(
+            should_prompt(NotDetermined, &after(1, 0), true, false, day(30)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_later_offer_needs_a_missed_message_and_a_week() {
+        let history = after(1, 0);
+        assert_eq!(
+            should_prompt(NotDetermined, &history, true, true, day(6)),
+            None
+        );
+        assert_eq!(
+            should_prompt(NotDetermined, &history, true, true, day(7)),
+            Some(PromptKind::EnableAgain)
+        );
+    }
+
+    #[test]
+    fn a_refusal_points_to_settings_and_never_raises_the_system_dialog() {
+        assert_eq!(
+            should_prompt(Denied, &PromptHistory::default(), true, false, day(0)),
+            None
+        );
+        assert_eq!(
+            should_prompt(Denied, &after(1, 0), true, true, day(8)),
+            Some(PromptKind::OpenSettings)
+        );
+    }
+
+    #[test]
+    fn the_offers_stop_after_the_cap() {
+        assert_eq!(
+            should_prompt(NotDetermined, &after(MAX_PROMPTS, 0), true, true, day(400)),
+            None
+        );
+        assert_eq!(
+            should_prompt(Denied, &after(MAX_PROMPTS, 0), true, true, day(400)),
+            None
+        );
+    }
+
+    #[test]
+    fn nothing_is_offered_when_it_is_off_unavailable_or_granted() {
+        let fresh = PromptHistory::default();
+        assert_eq!(
+            should_prompt(NotDetermined, &fresh, false, true, day(0)),
+            None
+        );
+        assert_eq!(should_prompt(Unavailable, &fresh, true, true, day(0)), None);
+        assert_eq!(should_prompt(Authorized, &fresh, true, true, day(0)), None);
+    }
+
+    proptest! {
+        #[test]
+        fn an_offer_is_never_made_without_need_room_and_spacing(
+            permission in prop::sample::select(vec![Unavailable, NotDetermined, Denied, Authorized]),
+            shown in 0u8..6,
+            last in -30i64..30,
+            now in 0i64..60,
+            desktop: bool,
+            missed: bool,
+        ) {
+            let history = PromptHistory { shown, last_shown: (shown > 0).then(|| day(last)) };
+            let offer = should_prompt(permission, &history, desktop, missed, day(now));
+            if let Some(kind) = offer {
+                prop_assert!(desktop);
+                prop_assert!(matches!(permission, NotDetermined | Denied));
+                if kind != PromptKind::Enable {
+                    prop_assert!(missed);
+                    prop_assert!(shown < MAX_PROMPTS);
+                    if shown > 0 {
+                        prop_assert!(now - last >= PROMPT_SPACING_DAYS);
+                    }
+                } else {
+                    prop_assert_eq!(shown, 0);
+                }
+            }
         }
     }
 }

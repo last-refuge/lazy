@@ -39,7 +39,9 @@ done
 
 IDENTITY="${APPLE_SIGN_IDENTITY:--}"
 if [ "$IDENTITY" = "-" ]; then
-  codesign --force --deep --sign - "$APP"
+  # The identifier must be the bundle id: the system's notification centre keys permission on it,
+  # and an ad-hoc signature otherwise gets a generated identifier it does not accept.
+  codesign --force --deep --sign - --identifier "$BUNDLE_ID" "$APP"
 else
   codesign --force --deep --options runtime --timestamp \
     --entitlements "$ROOT/packaging/macos/Lazy.entitlements" --sign "$IDENTITY" "$APP"

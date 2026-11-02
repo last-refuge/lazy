@@ -343,6 +343,9 @@ pub struct StartupState {
     /// The recent searches saved for this profile, most recent first (empty when none could be
     /// read).
     pub recent_searches: Vec<String>,
+    /// What the person has been asked about notifications on this device (never asked when none
+    /// could be read).
+    pub notification_prompts: lazy_domain::notification::PromptHistory,
     /// The conversations last visited, most recent first (empty when none could be read).
     pub recent_conversations: Vec<ConversationId>,
     /// How this device looks and moves (the defaults when nothing could be read).

@@ -14,6 +14,7 @@ mod device_choices;
 mod drop_in;
 mod files;
 mod images;
+mod notification_prompts;
 mod outbox;
 mod prefs;
 mod realtime;

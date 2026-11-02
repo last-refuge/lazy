@@ -947,6 +947,9 @@ impl ClientCore {
             Input::DismissAction(kind) => self.dismiss_action(kind, &mut out),
             Input::WindowActive(active) => {
                 self.window_active = active;
+                if active {
+                    out.effects.push(Effect::RefreshNotificationPermission);
+                }
                 self.mark_failed.clear();
             }
             Input::TimelineAtBottom {
@@ -1113,7 +1116,10 @@ impl ClientCore {
             | Input::ConversationPrefsResult { .. }
             | Input::SetStatus(_)
             | Input::StatusResult { .. }
-            | Input::NotificationActivated { .. }) => self.notify_input(input, &mut out),
+            | Input::NotificationActivated { .. }
+            | Input::NotificationPermissionChanged(_)
+            | Input::TurnOnNotifications
+            | Input::DismissNotificationPrompt) => self.notify_input(input, &mut out),
             input @ (Input::OpenInbox
             | Input::LoadInbox { .. }
             | Input::LoadMoreInbox
@@ -1262,6 +1268,7 @@ impl ClientCore {
         self.device_choices = state.device_choices;
         self.preferred_active = state.active_workspace;
         self.restore_recent_searches(state.recent_searches);
+        self.restore_prompt_history(state.notification_prompts);
         self.restore_recent_conversations(state.recent_conversations);
         self.recompute_shown_prefs();
         self.recovered_journal = state.journal;
@@ -1447,6 +1454,7 @@ impl ClientCore {
         let me = response.user.id;
         self.me = Some(response.user.clone());
         self.settings_known = true;
+        self.consider_prompt(false, out);
 
         let held_workspace = self.held_workspace();
         let held_all: Vec<WorkspaceInfo> = self.workspaces.clone();

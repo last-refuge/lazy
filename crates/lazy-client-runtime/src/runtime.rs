@@ -151,6 +151,8 @@ struct PrefsSaver {
     pending_appearance: Mutex<Option<lazy_client_core::Appearance>>,
     /// The devices chosen for drop-ins (kept at sign-out, like the appearance).
     pending_devices: Mutex<Option<lazy_client_core::DeviceChoices>>,
+    /// What was last asked about notifications: the device's, so kept at sign-out too.
+    pending_prompts: Mutex<Option<lazy_domain::notification::PromptHistory>>,
     dirty: Notify,
     /// Incremented by sign-out so a write in flight cannot bring the file back.
     epoch: Arc<std::sync::atomic::AtomicU64>,
@@ -452,12 +454,19 @@ impl Inner {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
+        let prompts = self
+            .prefs
+            .pending_prompts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         if saved.is_none()
             && searches.is_none()
             && conversations.is_none()
             && active.is_none()
             && appearance.is_none()
             && devices.is_none()
+            && prompts.is_none()
         {
             return;
         }
@@ -478,6 +487,11 @@ impl Inner {
                 && let Err(error) = crate::device_choices::save(&dir, &devices)
             {
                 tracing::warn!(%error, "could not save the drop-in devices");
+            }
+            if let Some(prompts) = prompts
+                && let Err(error) = crate::notification_prompts::save(&dir, prompts)
+            {
+                tracing::warn!(%error, "could not save the notification prompts");
             }
             if signed_out() {
                 return;
@@ -653,6 +667,7 @@ impl Inner {
             recent_conversations: recent_conversations::load(&self.profile_dir),
             appearance: crate::appearance::load(&self.profile_dir),
             device_choices: crate::device_choices::load(&self.profile_dir),
+            notification_prompts: crate::notification_prompts::load(&self.profile_dir),
             active_workspace: crate::active_workspace::load(&self.profile_dir),
             ..StartupState::default()
         };
@@ -930,6 +945,14 @@ impl Inner {
                         inner.emit(Input::MediaDevicesListed(devices)).await;
                     }
                 });
+            }
+            Effect::PersistNotificationPrompts(history) => {
+                *self
+                    .prefs
+                    .pending_prompts
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(history);
+                self.prefs.dirty.notify_one();
             }
             Effect::PersistAppearance(appearance) => {
                 *self
@@ -2048,7 +2071,10 @@ impl Inner {
             Effect::Notify(_)
             | Effect::ClearNotifications { .. }
             | Effect::RetractNotification { .. }
-            | Effect::SetBadge(_) => {}
+            | Effect::SetBadge(_)
+            | Effect::RefreshNotificationPermission
+            | Effect::RequestNotificationPermission
+            | Effect::OpenNotificationSettings => {}
             Effect::FetchMessage { message } => {
                 let inner = self.clone();
                 self.spawn(async move {
@@ -2804,6 +2830,7 @@ pub fn inspect_state(profile_dir: &Path, key: &[u8; 32]) -> StartupState {
         recent_conversations: recent_conversations::load(profile_dir),
         appearance: crate::appearance::load(profile_dir),
         device_choices: crate::device_choices::load(profile_dir),
+        notification_prompts: crate::notification_prompts::load(profile_dir),
         active_workspace: crate::active_workspace::load(profile_dir),
         problems: recovered.problems,
         server: ServerInfo::default(),

@@ -728,6 +728,13 @@ impl fmt::Debug for Effect {
                 .field("message", message)
                 .finish(),
             Effect::SetBadge(v0) => f.debug_tuple("SetBadge").field(v0).finish(),
+            Effect::RefreshNotificationPermission => f.write_str("RefreshNotificationPermission"),
+            Effect::RequestNotificationPermission => f.write_str("RequestNotificationPermission"),
+            Effect::OpenNotificationSettings => f.write_str("OpenNotificationSettings"),
+            Effect::PersistNotificationPrompts(v0) => f
+                .debug_tuple("PersistNotificationPrompts")
+                .field(v0)
+                .finish(),
             Effect::CheckServer { url, generation } => f
                 .debug_struct("CheckServer")
                 .field("url", &Text(url))

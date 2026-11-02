@@ -91,7 +91,7 @@ Download **Lazy 0.10.2** from the [latest release](https://github.com/last-refug
 - **macOS.** Open the disk image and drag **Lazy** to **Applications**. The first time, if macOS says it cannot verify Lazy, open **System Settings, Privacy & Security** and choose **Open Anyway**. On macOS 14 or earlier, right-click **Lazy**, choose **Open**, then **Open**.
 - **Linux.** On Debian and Ubuntu, `sudo apt install ./lazy-chat_0.10.2_amd64.deb`. On anything else, unpack the tarball and run `./install.sh` (`--system` for everyone on the machine, `--uninstall` to remove it). You need a Vulkan driver and a keyring such as GNOME Keyring or KWallet.
 
-The installers are not code-signed yet, which is why Windows and macOS ask you to confirm once. `SHA256SUMS` on the release page lists a checksum for every file. Desktop notifications work on Linux only for now; on macOS and Windows you get unread counts and the title badge.
+The installers are not code-signed yet, which is why Windows and macOS ask you to confirm once. `SHA256SUMS` on the release page lists a checksum for every file. Desktop notifications work on Linux and, in the installed app, on macOS (Lazy asks once, in context, then the system's own dialog); on Windows you get unread counts and the title badge. A macOS client run with `cargo run` shows none (use `scripts/run-client-bundled.sh`).
 
 ### Step 3: create the owner account, then invite everyone else
 

@@ -11,8 +11,8 @@
 use std::collections::HashMap;
 
 use lazy_domain::notification::{
-    ConversationNotificationPrefs, IncomingMessage, NotificationSettings, NotifyLevel, UserStatus,
-    decide,
+    ConversationNotificationPrefs, IncomingMessage, NotificationPermission, NotificationSettings,
+    NotifyLevel, PromptHistory, PromptKind, UserStatus, decide, should_prompt,
 };
 use lazy_domain::{
     ConversationId, ConversationKind, EventSeq, MessageId, Permalink, Timestamp, UserId,
@@ -161,6 +161,13 @@ pub(super) struct Notifications {
     held: HashMap<ConversationId, Vec<Held>>,
     /// The attention count last announced.
     badge: u32,
+    /// What the operating system lets this device do. `None` until the platform says, and always
+    /// on platforms with no such permission: notifications are then shown as before.
+    permission: Option<NotificationPermission>,
+    /// What the person has been asked about notifications on this device.
+    history: PromptHistory,
+    /// The offer showing now, if any.
+    prompt: Option<PromptKind>,
 }
 
 impl Default for Notifications {
@@ -172,6 +179,9 @@ impl Default for Notifications {
             now: None,
             held: HashMap::new(),
             badge: 0,
+            permission: None,
+            history: PromptHistory::default(),
+            prompt: None,
         }
     }
 }
@@ -329,8 +339,85 @@ impl ClientCore {
                 conversation,
                 message,
             } => self.notification_activated(conversation, message, out),
+            Input::NotificationPermissionChanged(permission) => {
+                self.permission_changed(permission, out)
+            }
+            Input::TurnOnNotifications => self.turn_on_notifications(out),
+            Input::DismissNotificationPrompt if self.notif.prompt.take().is_some() => {
+                out.changes.push(Change::NotificationsChanged);
+            }
             _ => {}
         }
+    }
+
+    // ----- Permission -----
+
+    /// What the operating system lets this device do, once the platform has said.
+    pub fn notification_permission(&self) -> Option<NotificationPermission> {
+        self.notif.permission
+    }
+
+    /// The offer to turn notifications on that is showing, if any.
+    pub fn notification_prompt(&self) -> Option<PromptKind> {
+        self.notif.prompt
+    }
+
+    /// The saved history of offers is read at startup.
+    pub(super) fn restore_prompt_history(&mut self, history: PromptHistory) {
+        self.notif.history = history;
+    }
+
+    fn permission_changed(&mut self, permission: NotificationPermission, out: &mut Output) {
+        if self.notif.permission == Some(permission) {
+            return;
+        }
+        self.notif.permission = Some(permission);
+        if matches!(
+            permission,
+            NotificationPermission::Authorized | NotificationPermission::Unavailable
+        ) {
+            self.notif.prompt = None;
+        }
+        out.changes.push(Change::NotificationsChanged);
+        self.consider_prompt(false, out);
+    }
+
+    /// Turning on was chosen, in the offer or in Preferences: raise the system's own dialog if it
+    /// can still be raised, otherwise open the settings where the person can change their answer.
+    fn turn_on_notifications(&mut self, out: &mut Output) {
+        let effect = match self.notif.permission {
+            Some(NotificationPermission::NotDetermined) => Effect::RequestNotificationPermission,
+            Some(NotificationPermission::Denied) => Effect::OpenNotificationSettings,
+            _ => return,
+        };
+        out.effects.push(effect);
+        if self.notif.prompt.take().is_some() {
+            out.changes.push(Change::NotificationsChanged);
+        }
+    }
+
+    /// Offers to turn notifications on if the rules say now is the time. `missed` says a message
+    /// that would have notified the person has just arrived and could not be shown.
+    pub(super) fn consider_prompt(&mut self, missed: bool, out: &mut Output) {
+        if self.notif.prompt.is_some() || !self.settings_known || self.me.is_none() {
+            return;
+        }
+        let (Some(permission), Some(now)) = (self.notif.permission, self.notif.now) else {
+            return;
+        };
+        let desktop = self.notif.settings.shown().desktop;
+        let Some(kind) = should_prompt(permission, &self.notif.history, desktop, missed, now)
+        else {
+            return;
+        };
+        self.notif.prompt = Some(kind);
+        self.notif.history = PromptHistory {
+            shown: self.notif.history.shown.saturating_add(1),
+            last_shown: Some(now),
+        };
+        out.effects
+            .push(Effect::PersistNotificationPrompts(self.notif.history));
+        out.changes.push(Change::NotificationsChanged);
     }
 
     fn set_clock(&mut self, now: Timestamp, out: &mut Output) {
@@ -723,10 +810,14 @@ impl ClientCore {
             out.effects
                 .push(Effect::ClearNotifications { conversation });
         }
-        let now = self.notif.now;
+        // The device's permission and what it was asked are not the account's: they stay.
+        let (now, permission, history) =
+            (self.notif.now, self.notif.permission, self.notif.history);
         let badge = self.notif.badge;
         self.notif = Notifications::default();
         self.notif.now = now;
+        self.notif.permission = permission;
+        self.notif.history = history;
         if badge != 0 {
             out.effects.push(Effect::SetBadge(0));
             out.changes.push(Change::AttentionChanged);
@@ -794,6 +885,14 @@ impl ClientCore {
             && self.selected_conversation() == Some(conversation.id)
             && (channel_traffic || in_open_thread)
         {
+            return;
+        }
+        // The system will not show it: offer to fix that, once in a while, and show nothing.
+        if matches!(
+            self.notif.permission,
+            Some(NotificationPermission::NotDetermined | NotificationPermission::Denied)
+        ) {
+            self.consider_prompt(true, out);
             return;
         }
         let sender = self.display_name(message.author_id).to_owned();
