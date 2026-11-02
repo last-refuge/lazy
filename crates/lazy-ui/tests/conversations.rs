@@ -118,6 +118,7 @@ impl World {
             created_by: creator,
             participants: vec![],
             member_count: 3,
+            drop_in: None,
         }
     }
 
@@ -141,6 +142,7 @@ impl World {
             created_by: Some(self.me.id),
             participants,
             member_count: 1 + others.len() as u32,
+            drop_in: None,
         }
     }
 
@@ -265,6 +267,7 @@ impl World {
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
             deleted: false,
         }
     }

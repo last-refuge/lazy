@@ -31,15 +31,17 @@ async fn subscribers_get_replay_then_caught_up_then_live_events(pool: PgPool) {
     let mut ws = app.connect_ws(&grace).await;
     ws.subscribe(app.workspace_id, EventSeq::ZERO).await;
     let (replayed, caught_up) = ws.replay().await;
-    // ada joined the workspace (1) and #general (2), three messages (3..=5), then grace did
-    // both (6, 7). Grace is a member of #general now, so she receives all of it.
+    // ada joined the workspace (1) and #general (2) and posted its notice (3), three messages
+    // (4..=6), then grace did all three (7..=9). Grace is a member of #general now, so she
+    // receives all of it.
     let positions: Vec<i64> = replayed.iter().map(|e| e.seq.get()).collect();
-    assert_eq!(positions, vec![1, 2, 3, 4, 5, 6, 7]);
-    assert_eq!(caught_up.get(), 7);
+    assert_eq!(positions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(caught_up.get(), 9);
     assert!(matches!(replayed[0].event, Event::MemberJoined { .. }));
     assert!(matches!(replayed[1].event, Event::MemberAdded { .. }));
-    assert_eq!(message_text(&replayed[2]), "one");
-    assert_eq!(message_text(&replayed[4]), "three");
+    assert_eq!(message_text(&replayed[2]), "joined the workspace");
+    assert_eq!(message_text(&replayed[3]), "one");
+    assert_eq!(message_text(&replayed[5]), "three");
 
     // Live: a message, with the sender's operation id so its sender can reconcile.
     let operation = OperationId::generate();
@@ -47,7 +49,7 @@ async fn subscribers_get_replay_then_caught_up_then_live_events(pool: PgPool) {
     assert!(sent.status().is_success());
     match ws.next().await {
         ServerFrame::Event(envelope) => {
-            assert_eq!(envelope.seq.get(), 8);
+            assert_eq!(envelope.seq.get(), 10);
             assert_eq!(envelope.workspace_id, app.workspace_id);
             match envelope.event {
                 Event::MessageCreated {
@@ -67,7 +69,7 @@ async fn subscribers_get_replay_then_caught_up_then_live_events(pool: PgPool) {
     let hopper = app.register("hopper").await;
     match ws.next().await {
         ServerFrame::Event(envelope) => {
-            assert_eq!(envelope.seq.get(), 9);
+            assert_eq!(envelope.seq.get(), 11);
             match envelope.event {
                 Event::MemberJoined { user } => assert_eq!(user, hopper.user),
                 other => panic!("unexpected event {other:?}"),
@@ -78,11 +80,25 @@ async fn subscribers_get_replay_then_caught_up_then_live_events(pool: PgPool) {
     // ...followed by their arrival in #general, which grace shares.
     match ws.next().await {
         ServerFrame::Event(envelope) => {
-            assert_eq!(envelope.seq.get(), 10);
+            assert_eq!(envelope.seq.get(), 12);
             assert!(matches!(
                 envelope.event,
                 Event::MemberAdded { user_id, .. } if user_id == hopper.user.id
             ));
+        }
+        other => panic!("unexpected frame {other:?}"),
+    }
+    // ...and the notice they posted there that they joined.
+    match ws.next().await {
+        ServerFrame::Event(envelope) => {
+            assert_eq!(envelope.seq.get(), 13);
+            match envelope.event {
+                Event::MessageCreated { message, .. } => {
+                    assert_eq!(message.author_id, hopper.user.id);
+                    assert_eq!(message.notice, Some(lazy_domain::Notice::JoinedWorkspace));
+                }
+                other => panic!("unexpected event {other:?}"),
+            }
         }
         other => panic!("unexpected frame {other:?}"),
     }
@@ -99,8 +115,9 @@ async fn nothing_is_lost_or_duplicated_while_clients_connect_mid_stream(pool: Pg
     const REGISTRATIONS: usize = 4;
     const CHURN_ROUNDS: usize = 25;
     // The watchers are members of #general only. They see each message, and each registration
-    // (two events: joining the workspace, then #general). They must see none of the churn below.
-    const EXPECTED: usize = SENDERS * PER_SENDER + 2 * REGISTRATIONS;
+    // (three events: joining the workspace, then #general, then the notice there). They must see
+    // none of the churn below.
+    const EXPECTED: usize = SENDERS * PER_SENDER + 3 * REGISTRATIONS;
     const OLD_EVENTS: usize = 300;
     const KEEP_NEWEST: u32 = 50;
 
@@ -327,8 +344,8 @@ async fn nothing_is_lost_or_duplicated_while_clients_connect_mid_stream(pool: Pg
     .fetch_all(&app.pool)
     .await
     .unwrap();
-    // (The end-of-run marker's two events came after every reader had its EXPECTED events.)
-    assert_eq!(visible_to_watchers.len(), EXPECTED + 2);
+    // (The end-of-run marker's three events came after every reader had its EXPECTED events.)
+    assert_eq!(visible_to_watchers.len(), EXPECTED + 3);
     for (index, reader) in readers.into_iter().enumerate() {
         let received = reader.await.unwrap();
         assert_eq!(
@@ -399,7 +416,9 @@ async fn nothing_is_lost_or_duplicated_while_clients_connect_mid_stream(pool: Pg
     .fetch_all(&app.pool)
     .await
     .unwrap();
-    assert_eq!(churn_in_log.len(), CHURN_ROUNDS * 5);
+    // Each round: the addition and its notice, a message, the removal (with the channel's new
+    // count) and its notice, and another message.
+    assert_eq!(churn_in_log.len(), CHURN_ROUNDS * 7);
     assert_eq!(owner_churn, churn_in_log);
 
     // And a fresh replay for the churner, now outside the channel for good, shows only the
@@ -613,7 +632,11 @@ async fn subscribing_to_someone_elses_workspace_is_forbidden(pool: PgPool) {
     }
     ws.subscribe(app.workspace_id, EventSeq::ZERO).await;
     let (events, _) = ws.replay().await;
-    assert_eq!(events.len(), 2, "ada joining the workspace and #general");
+    assert_eq!(
+        events.len(),
+        3,
+        "ada joining the workspace and #general, and the notice there"
+    );
     app.server.shutdown().await.unwrap();
 }
 
@@ -638,7 +661,11 @@ async fn malformed_frames_get_an_error_and_do_not_end_the_connection(pool: PgPoo
     }
     ws.subscribe(app.workspace_id, EventSeq::ZERO).await;
     let (events, _) = ws.replay().await;
-    assert_eq!(events.len(), 2, "ada joining the workspace and #general");
+    assert_eq!(
+        events.len(),
+        3,
+        "ada joining the workspace and #general, and the notice there"
+    );
     app.server.shutdown().await.unwrap();
 }
 

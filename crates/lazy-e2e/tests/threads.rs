@@ -51,6 +51,7 @@ fn channel_row(
 fn channel_texts(core: &ClientCore, conversation: ConversationId) -> Vec<String> {
     core.timeline(conversation)
         .iter()
+        .filter(|i| i.notice.is_none())
         .map(|i| i.document.plain_text())
         .collect()
 }

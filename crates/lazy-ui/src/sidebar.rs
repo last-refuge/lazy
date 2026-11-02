@@ -96,6 +96,11 @@ struct RowData {
     participants: usize,
     /// The person muted it: its unread count is shown, quietly.
     muted: bool,
+    /// How many people are in a drop-in there now (D44); 0 when none is going on.
+    in_drop_in: usize,
+    /// For a direct conversation with a person: whether they are online (D45); `None` when that
+    /// isn't known, and for groups, channels, and apps.
+    online: Option<bool>,
 }
 
 pub struct SidebarView {
@@ -208,6 +213,14 @@ impl SidebarView {
                     avatar_seed: other.map_or(id.as_uuid().as_u128(), |u| u.as_uuid().as_u128()),
                     participants: conversation.participants.len(),
                     muted: core.is_muted(*id),
+                    in_drop_in: conversation
+                        .drop_in
+                        .as_ref()
+                        .map_or(0, |live| live.participants.len()),
+                    online: other
+                        .filter(|_| conversation.kind == ConversationKind::Direct)
+                        .filter(|user| !core.is_bot(**user))
+                        .and_then(|user| core.is_online(*user)),
                 })
             })
             .collect()
@@ -284,6 +297,7 @@ impl SidebarView {
                 })
                 .into_any_element(),
             ConversationKind::Direct | ConversationKind::Group => div()
+                .relative()
                 .size(px(18.))
                 .flex_none()
                 .rounded(theme.radii.small)
@@ -304,10 +318,60 @@ impl SidebarView {
                         .to_uppercase()
                         .to_string()
                 })
+                .children(row.online.map(|online| {
+                    // Online: a filled green dot; offline: a hollow ring. Both sit on the corner,
+                    // outlined in the sidebar's color so they read against any avatar.
+                    let selector = format!(
+                        "presence-{}-{}",
+                        row.title,
+                        if online { "online" } else { "offline" }
+                    );
+                    let ring = if row.selected {
+                        colors.sidebar_selected
+                    } else {
+                        colors.sidebar
+                    };
+                    div()
+                        .debug_selector(move || selector)
+                        .absolute()
+                        .right(px(-4.))
+                        .bottom(px(-4.))
+                        .size(px(12.))
+                        .rounded_full()
+                        .border_2()
+                        .border_color(ring)
+                        // A bright green that reads on the light and the dark sidebar alike.
+                        .when(online, |dot| dot.bg(gpui::rgb(0x2bac76)))
+                        .when(!online, |dot| {
+                            dot.bg(ring).child(
+                                div()
+                                    .size_full()
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(colors.sidebar_text_muted),
+                            )
+                        })
+                }))
                 .into_any_element(),
         };
 
         let mut badges = div().flex().items_center().gap_1().flex_none();
+        if row.in_drop_in > 0 {
+            // A drop-in is going on: who is waiting there, at a glance.
+            let selector = format!("drop-in-badge-{}", row.title);
+            let count = row.in_drop_in;
+            badges = badges.child(
+                div()
+                    .debug_selector(move || selector)
+                    .px_1p5()
+                    .rounded(theme.radii.small)
+                    .bg(colors.success)
+                    .text_color(gpui::white())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(theme.type_scale.small)
+                    .child(format!("Live {count}")),
+            );
+        }
         if let Some(text) = badge_text(row.mentions).filter(|_| !row.selected) {
             let selector = format!("mention-badge-{}", row.title);
             badges = badges.child(

@@ -233,6 +233,7 @@ impl Timeline {
             author_id: item.author_id,
             document,
             rich: item.rich.clone(),
+            notice: item.notice.clone(),
             created_at,
             revision,
             seq,
@@ -284,6 +285,11 @@ impl Timeline {
         self.items
             .iter()
             .filter(|item| item.author_id != me && !item.deleted)
+            .filter(|item| {
+                item.notice
+                    .as_ref()
+                    .is_none_or(lazy_domain::Notice::counts_as_unread)
+            })
             .filter_map(|item| {
                 let seq = item.seq()?;
                 (seq > position && seq <= up_to).then(|| (seq, item.mentions.includes(me)))
@@ -340,6 +346,11 @@ impl Timeline {
                 None
             } else {
                 message.rich.clone()
+            },
+            notice: if message.deleted {
+                None
+            } else {
+                message.notice.clone()
             },
             delivery: Delivery::Confirmed {
                 message_id: message.id,
@@ -518,6 +529,7 @@ impl Timeline {
                 latest.revision = revision;
                 latest.document = saved.unwrap_or(standalone.document);
                 latest.rich = standalone.rich;
+                latest.notice = standalone.notice;
                 latest.edited_at = standalone.edited_at;
                 latest.mentions = standalone.mentions.clone();
             }
@@ -536,6 +548,7 @@ impl Timeline {
         item.author_id = message.author_id;
         item.document = latest.document;
         item.rich = latest.rich;
+        item.notice = latest.notice;
         item.edited_at = latest.edited_at;
         item.mentions = latest.mentions;
         item.reactions = latest.reactions;
@@ -724,6 +737,11 @@ impl Timeline {
                 None
             } else {
                 message.rich.clone()
+            };
+            item.notice = if message.deleted {
+                None
+            } else {
+                message.notice.clone()
             };
             item.mentions = message.mentions.clone();
             // Files never change, but a message the row first saw without them is complete now.
@@ -1009,6 +1027,7 @@ impl Timeline {
         item.deleted = true;
         item.document = message.document.clone();
         item.rich = None;
+        item.notice = None;
         item.attachments = Vec::new();
         item.edited_at = None;
         item.edit = EditState::None;

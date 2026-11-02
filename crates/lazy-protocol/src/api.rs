@@ -176,6 +176,9 @@ pub mod paths {
     pub const MESSAGE_PREVIEWS_ROUTE: &str = "/v1/messages/{message_id}/previews";
     /// `POST` asks for a way into a conversation's drop-in (a call with video).
     pub const DROP_IN_ROUTE: &str = "/v1/conversations/{conversation_id}/drop-in";
+    /// `POST`: the call server reports who is in a room (`rtc_proto::webhook`, signed with the
+    /// secret it shares with this server; D44). Not for clients.
+    pub const RTC_REPORT_ROUTE: &str = "/v1/rtc/report";
     /// Where an app sends a later answer to a command (Slack's `response_url`). Public; the token
     /// is the credential.
     pub const COMMAND_RESPOND_ROUTE: &str = "/commands/respond/{token}";
@@ -626,6 +629,21 @@ pub struct Conversation {
     /// membership can be large and is not listed here.
     pub participants: Vec<UserId>,
     pub member_count: u32,
+    /// The drop-in going on in it, if one is (D44). Older servers never send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_in: Option<LiveDropIn>,
+}
+
+/// A drop-in going on in a conversation, as everyone who sees the conversation sees it (D44). The
+/// server learns who is in it from the call server and keeps it current with
+/// [`crate::Event::ConversationUpdated`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveDropIn {
+    /// Its notice ([`lazy_domain::Notice::DropIn`]), which says who started it.
+    pub message_id: MessageId,
+    pub started_at: Timestamp,
+    /// Who is in it, in the order they joined.
+    pub participants: Vec<UserId>,
 }
 
 /// One person's private state for one conversation.
@@ -956,6 +974,10 @@ pub struct Message {
     /// by clients that know them. Only bots post them. Older clients ignore the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rich: Option<lazy_domain::RichContent>,
+    /// For a notice the server posted (someone joined, a drop-in started; D44): what happened.
+    /// `document` says it in words, for older clients. Only the server posts notices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<lazy_domain::Notice>,
     pub created_at: Timestamp,
     /// Starts at 1 and increases by one with each edit, and with deletion. A client keeps the
     /// highest revision it has seen, so a late or repeated event never undoes a newer one.
@@ -2217,6 +2239,7 @@ mod tests {
             reactions: Vec::new(),
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
         }
     }
 

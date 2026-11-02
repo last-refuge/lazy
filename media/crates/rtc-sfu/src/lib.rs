@@ -6,6 +6,9 @@
 //! ([`rtc_proto::SIGNAL_PATH`]), authorized by a join token the host application signed
 //! ([`rtc_proto::token`]).
 //!
+//! With a `report_url`, the SFU tells the host who is in each room ([`rtc_proto::webhook`]): when
+//! someone joins or leaves, and every [`rtc_proto::webhook::HEARTBEAT_SECS`] while anyone is in it.
+//!
 //! The SFU is ICE-lite: it has a public address and only answers; clients behind NAT reach it
 //! from wherever they are. Media is encrypted between each client and the SFU (DTLS-SRTP); the
 //! SFU can read it. That is not end-to-end encryption.
@@ -17,12 +20,14 @@
 //!     udp_bind: "0.0.0.0:7881".parse().unwrap(),
 //!     public_ip: Some("203.0.113.7".parse().unwrap()),
 //!     max_per_room: 12,
+//!     report_url: Some("https://chat.example.com/v1/rtc/report".into()),
 //! })?;
 //! let listener = tokio::net::TcpListener::bind("0.0.0.0:7880").await?;
 //! axum::serve(listener, sfu.router()).await
 //! # }
 //! ```
 
+mod reports;
 mod room;
 mod signaling;
 
@@ -48,6 +53,9 @@ pub struct SfuConfig {
     pub public_ip: Option<IpAddr>,
     /// The most people in one room.
     pub max_per_room: usize,
+    /// Where to send room reports (signed with `secret`), if anywhere. Starting with one needs a
+    /// Tokio runtime.
+    pub report_url: Option<String>,
 }
 
 /// A running SFU. Dropping it does not stop the media thread; the process ends it.
@@ -87,9 +95,24 @@ impl Sfu {
         let media_addr = SocketAddr::new(ip, bound.port());
         let (commands, receiver) = mpsc::channel();
         let max = config.max_per_room;
+        let reports = match config.report_url {
+            Some(url) => {
+                let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+                    std::io::Error::other("sending room reports needs a Tokio runtime")
+                })?;
+                let (sender, queue) = tokio::sync::mpsc::unbounded_channel();
+                runtime.spawn(reports::deliver(url.clone(), config.secret.clone(), queue));
+                tracing::info!(url, "sending room reports");
+                Some(room::Reports {
+                    sender,
+                    every: std::time::Duration::from_secs(rtc_proto::webhook::HEARTBEAT_SECS),
+                })
+            }
+            None => None,
+        };
         std::thread::Builder::new()
             .name("rtc-sfu-media".into())
-            .spawn(move || room::run(socket, media_addr, receiver, max))?;
+            .spawn(move || room::run(socket, media_addr, receiver, max, reports))?;
         tracing::info!(%media_addr, "SFU media port ready");
         Ok(Sfu {
             inner: Arc::new(Inner {

@@ -144,8 +144,12 @@ fn texts(page: &HistoryPage) -> Vec<String> {
         .collect()
 }
 
+/// A conversation's history, without the notices of people joining (these tests are about
+/// what people wrote and its threads).
 async fn history(app: &App, who: &Account, conversation: ConversationId) -> HistoryPage {
-    app.history_ok(who, conversation, &[]).await
+    let mut page = app.history_ok(who, conversation, &[]).await;
+    page.messages.retain(|m| m.notice.is_none());
+    page
 }
 
 async fn mention_count(app: &App, who: &Account, conversation: ConversationId) -> u32 {
@@ -568,7 +572,17 @@ async fn history_lists_roots_and_in_channel_replies_and_replies_page_by_thread(p
         )
         .await;
     assert_eq!(texts(&older), ["a", "r2 also channel"]);
-    assert!(!older.has_more);
+    // Beyond them lie only the notices of everyone joining the workspace.
+    assert!(older.has_more);
+    let oldest = app
+        .history_ok(
+            &c.dave,
+            app.general,
+            &[("before", older.messages[0].seq.get().to_string())],
+        )
+        .await;
+    assert!(oldest.messages.iter().all(|m| m.notice.is_some()));
+    assert!(!oldest.has_more);
 
     // The thread: its replies, oldest first, in-channel or not; a page never mixes in other threads.
     let thread = app.replies_ok(&c.dave, a.id, &[]).await;

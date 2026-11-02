@@ -189,6 +189,7 @@ impl Stub {
             reactions: Vec::new(),
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
             mentions: lazy_protocol::Mentions::default(),
             deleted: false,
             attachments: Vec::new(),
@@ -211,6 +212,7 @@ fn conversation(workspace: WorkspaceId, name: &str) -> Conversation {
         created_by: None,
         participants: Vec::new(),
         member_count: 1,
+        drop_in: None,
     }
 }
 
@@ -2035,6 +2037,7 @@ fn sample_cache(cursor: i64, messages: usize) -> ContentCache {
                 reactions: Vec::new(),
                 reactions_as_of: EventSeq::ZERO,
                 rich: None,
+                notice: None,
                 mentions: lazy_protocol::Mentions::default(),
                 deleted: false,
                 attachments: Vec::new(),

@@ -132,7 +132,7 @@ All of these are also command-line options (`lazy-server serve --help`).
 | `LAZY_ATTACHMENTS_DIR` | `/data/attachments` in the image | where uploads are kept (a volume) |
 | `LAZY_MAX_ATTACHMENT_BYTES` | 25 MiB | largest upload; the proxy must allow it too |
 | `LAZY_EVENT_RETENTION_DAYS` | 30 | days of event history kept (the newest 1,000 per workspace always stay); 0 keeps all |
-| `LAZY_RTC_URL`, `LAZY_RTC_SECRET` | none | the call server's signaling address (`wss://…`) and the secret shared with it (32+ characters); both or neither; without them drop-ins are off (see Drop-ins) |
+| `LAZY_RTC_URL`, `LAZY_RTC_SECRET` | none | the call server's signaling address (`wss://…`) and the secret shared with it (32+ characters); both or neither; without them drop-ins are off (see Drop-ins). The same secret checks the call server's room reports (`POST /v1/rtc/report`) |
 | `LAZY_LOG`, `LAZY_LOG_FORMAT` | `info,sqlx=warn`, `text` | logging; `json` for machine-readable lines. Nothing logged holds a password, token, invitation code, or message content (`SERVER.md`, Logging) |
 
 ## Operating it
@@ -179,18 +179,30 @@ People on networks that block UDP cannot join yet (no TURN or TCP fallback, M2).
    Compose**, base directory `/`, compose file `/deploy/coolify/rtc.docker-compose.yaml`.
 2. Give the `rtc` service a domain, for example `https://rtc.example.com` (routed to port 7880).
 3. Environment variables: `RTC_SECRET` (the shared secret), `RTC_PUBLIC_IP` (the server's public
-   address), and optionally `RTC_UDP_PORT` (default 7881). Open that UDP port on the host.
-4. Deploy. The log says `SFU media port ready media_addr=<ip>:7881`.
+   address), `RTC_REPORT_URL` (Lazy's address followed by `/v1/rtc/report`, for example
+   `https://chat.example.com/v1/rtc/report`), and optionally `RTC_UDP_PORT` (default 7881). Open
+   that UDP port on the host. Without `RTC_REPORT_URL` calls still work, but nobody outside a
+   drop-in sees it: no "started a drop-in" notice, no Join button, no notification in direct
+   messages (D44).
+4. Deploy. The log says `SFU media port ready media_addr=<ip>:7881` and `sending room reports`.
+   If the second line is missing, `RTC_REPORT_URL` is empty inside the container (check with
+   `env | grep RTC_REPORT_URL` in the container's terminal). When Coolify reloads the compose file
+   it adds its own empty entry for each `${VAR:-}` it finds; set the value on that entry (keep only
+   one), then redeploy: a restart does not pick up a changed variable.
 5. On the Lazy resource, set `LAZY_RTC_URL=wss://rtc.example.com` and `LAZY_RTC_SECRET` to the same
    secret, and redeploy Lazy. The server refuses to start if only one of them is set, or the secret
    is shorter than 32 characters.
 
 **With Docker Compose.** Set `LAZY_RTC_URL`, `LAZY_RTC_SECRET` and `RTC_PUBLIC_IP` in `.env`, then
-`docker compose --profile drop-ins up -d --build`. The `rtc` service publishes 7880 (signaling;
+`docker compose --profile drop-ins up -d --build`. The call server reports to Lazy over the compose
+network (`RTC_REPORT_URL`, `http://lazy:8080/v1/rtc/report` by default). The `rtc` service publishes 7880 (signaling;
 put it behind your HTTPS proxy for `wss://`) and 7881/udp.
 
 **Checking it.** Two people open the same channel and press **Drop-in**; each should see the other's
-camera within a few seconds. If the stage stays at "Connecting…" and then ends with "could not
+camera within a few seconds. The first one in posts "started a drop-in" in the conversation, the
+sidebar marks it **Live**, and the header button reads **Join drop-in**; if not, the call server's
+log says why its room reports were not delivered (Lazy answers a report signed with a different
+secret with 401). If the stage stays at "Connecting…" and then ends with "could not
 connect to the call server's media port", UDP 7881 is not reaching the call server (firewall, or
 `RTC_PUBLIC_IP` is wrong). Media is encrypted between each client and the call server (DTLS-SRTP);
 the call server can read it, so this is not end-to-end encryption.

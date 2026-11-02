@@ -838,7 +838,90 @@ desktop feature `drop-in-devices`, and the compose profile `drop-ins`. The plan 
 disk changed shape. The media library (`media/`, `rtc-*`) keeps its own names: it knows only
 rooms and calls.
 
-## D44. Notification permission on macOS
+## D44. Notices, and drop-ins seen from outside them
+
+Asked for by the owner, 2026-11-02: say in a conversation when people join or leave it (and the
+workspace), and tell the other person in a direct conversation that someone has dropped in and
+is waiting. **No protocol bump**: every addition is an optional field or a route clients never
+call, and older clients keep working (they show a notice's words as a message from its author).
+
+**Notices are messages.** `Message.notice` (`lazy_domain::Notice`) says what happened; the author
+is whoever did it; the document says it in words, with the names as they were (`Notice::describe`),
+for older clients and notifications. Kinds: joined, joined the workspace (in the default channel,
+on registering or accepting an invitation), left, added (a list), removed, renamed, topic and
+description set or cleared, archived, reopened, and a drop-in. Unknown kinds read as
+`Unsupported` and are drawn from the document. Only the server posts them (`notices.rs`), in the
+transaction that made the change, after its events, so a notice takes the next position like a
+message and goes to the members. Bots being added or removed (webhooks, apps, connectors) post
+nothing.
+- **Quiet.** Every notice but a drop-in's is `quiet` (a column): it is not unread on the server
+  (`unread_count` skips it; the history index carries the flag, so counting stays index-only) or
+  on the client (`count_message_event`, `others_between`), never notifies, and a deleted one
+  never subtracts (a tombstone keeps its `notice` for that).
+- **Not content.** `plain_text` is empty, so search never finds one. Nobody edits one (403; the
+  client offers no Edit); the author or an admin may delete one, like a message. Reactions and
+  threads work as on any message.
+- **Drawn as a line**: a small mark in place of the avatar, the author's name, what they did with
+  today's names, the time. A message after a notice starts a new group.
+
+**Drop-ins from outside.** The call server now reports each room's participants to the host
+(`rtc_proto::webhook::RoomReport`, `POST` to `RTC_REPORT_URL`, which for Lazy is
+`/v1/rtc/report`): on every join and leave, and every 30 seconds per room with someone in it. A
+report is the room's whole state, signed with the shared secret (`rtc-signature: v1=<HMAC-SHA256
+of "rtc-report." + body>`, a prefix so it can never pass as a token) and stamped `sent_at_ms`; Lazy
+refuses one older or newer than 5 minutes (401) and ignores one older than the newest it applied
+for that conversation. The SFU sends them one at a time, in order, three attempts each; a lost one
+is corrected by the next. Lazy keeps `drop_ins` rows (one live per conversation):
+- **The first report with someone in it** starts a drop-in: the `DropIn` notice by the first person
+  in (which counts as unread and, by the usual rules, notifies: always in a direct conversation,
+  "Ada started a drop-in", worded even when message text is hidden), and `Conversation.drop_in`
+  (`LiveDropIn`: the notice, when it started, who is in it), announced with `ConversationUpdated`.
+- **Later reports** update both when the people change: the notice is replaced in place (a higher
+  revision, announced as `MessageEdited`, no "edited" mark, no new notification).
+- **An empty report** ends it: the notice says "ended after 23 min" and who was in it; the
+  conversation's `drop_in` clears. **Silence** ends it too: a live drop-in not reported for 100
+  seconds (`DropInOptions::silent_after`, checked every 30) ended with the call server.
+
+**In the client.** The sidebar marks a conversation with a drop-in going on (**Live 2**); the
+header's button reads **Join drop-in · 2** (primary); the notice shows who is in it with a **Join**
+button while it goes on, then "Ended · 23 min · 3 people".
+
+**Not yet:** ringing (an incoming-call card and a sound) and declining; removing someone from a
+call when they lose access (the SFU has no admin API); a workspace setting to hide join and leave
+notices; the "drop-in thread" that collects messages sent during one.
+
+## D45. Presence: who is online
+
+Asked for by the owner, 2026-11-02: the direct conversations in the sidebar show whether the other
+person is online. **No protocol bump**: two new realtime frames that older clients cannot read and
+skip (their reader logs and ignores a frame it cannot parse), and nothing else changes.
+
+**What online means.** Connected to this server's realtime socket and subscribed to the workspace,
+on any device. There is no "away" (idle) state yet, and presence ignores a person's status and do
+not disturb.
+
+**Server** (`presence.rs`). In memory only: nothing is stored or put in the event log, so presence
+has no position and is never replayed, and a server restart starts everyone offline until their
+clients reconnect (seconds). This relies on the server running as one process (`DEPLOY.md`). Each
+workspace subscription holds a guard. Someone's first subscription announces them online at once;
+when their last one ends they are announced offline only after a grace period (15 seconds,
+`IntegrationOptions::presence_grace` in tests), so a reconnect or a replaced connection never
+flickers. Anyone in the workspace sees anyone's presence, as with Slack.
+
+**Frames.** After `caught_up`, the server sends `presence { workspace_id, online }`, the full list,
+which replaces what the client knew; then `presence_changed { workspace_id, user_id, online }` as
+people come and go. A subscriber that falls behind on changes gets the full list again.
+
+**Client.** The core keeps the list per workspace while that connection is live and forgets it when
+the connection drops (`is_online` is then `None`: unknown, not offline). The sidebar marks a
+direct conversation with a person (not an app) with a green dot on the avatar when they are online,
+a hollow ring when they are not, and nothing while it isn't known (disconnected, or an older
+server).
+
+**Not yet:** away after inactivity; presence in the people directory, profiles, the conversation
+header, or member lists; `@here` (reserved until presence existed, D14); phone clients' background presence.
+
+## D46. Notification permission on macOS
 
 Goal: an installed Lazy shows notifications under its own name and icon, asks the person once through the system's own dialog, and asks again only when it matters. Before this, macOS had no notifier at all (D20 left it to "a small interface"), and an `osascript` stand-in was rejected: it shows toasts as Script Editor.
 

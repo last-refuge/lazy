@@ -22,6 +22,10 @@ struct Args {
     /// The most people in one room.
     #[arg(long, env = "RTC_MAX_PER_ROOM", default_value_t = 12)]
     max_per_room: usize,
+    /// Where to tell the host app who is in each room (for Lazy, its address followed by
+    /// /v1/rtc/report). Empty: nowhere.
+    #[arg(long, env = "RTC_REPORT_URL", default_value = "")]
+    report_url: String,
 }
 
 #[tokio::main]
@@ -48,6 +52,7 @@ async fn main() -> std::io::Result<()> {
         udp_bind: args.udp,
         public_ip,
         max_per_room: args.max_per_room,
+        report_url: Some(args.report_url.trim().to_owned()).filter(|url| !url.is_empty()),
     })?;
     let listener = tokio::net::TcpListener::bind(args.http).await?;
     tracing::info!(http = %args.http, media = %sfu.media_addr(), "rtc-sfu listening");

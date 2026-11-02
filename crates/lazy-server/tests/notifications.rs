@@ -1421,8 +1421,9 @@ async fn marking_the_inbox_read_updates_each_followed_thread_and_tells_every_dev
 async fn marking_the_inbox_read_does_five_hundred_at_a_time(pool: PgPool) {
     let w = world(pool).await;
     let app = &w.app;
-    // 505 followed threads with one unread reply each, written directly (positions kept below the
-    // workspace head so later events sort after them).
+    // 505 followed threads with one unread reply each, written directly (positions kept above the
+    // ones taken already, such as the notices of people joining #general, and below the workspace
+    // head so later events sort after them).
     sqlx::query("UPDATE workspaces SET event_head = 5000 WHERE id = $1")
         .bind(app.workspace_id.as_uuid())
         .execute(&app.pool)
@@ -1433,7 +1434,7 @@ async fn marking_the_inbox_read_does_five_hundred_at_a_time(pool: PgPool) {
              INSERT INTO messages (id, conversation_id, author_id, document, plain_text, seq, created_at) \
              SELECT gen_random_uuid(), $1, $2, \
                     '{\"version\":2,\"blocks\":[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"r\"}]}]}', \
-                    'r', n, now() FROM generate_series(1, 505) n RETURNING id, seq), \
+                    'r', 2000 + n, now() FROM generate_series(1, 505) n RETURNING id, seq), \
          replies AS ( \
              INSERT INTO messages (id, conversation_id, author_id, document, plain_text, seq, created_at, thread_root_id, listed) \
              SELECT gen_random_uuid(), $1, $3, \

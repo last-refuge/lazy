@@ -7,7 +7,7 @@ the owner's call).
 
 | Crate | What it is |
 | --- | --- |
-| `rtc-proto` | Signaling messages (JSON on the SFU's WebSocket, `/rtc`) and join tokens (`rtc1.<claims>.<HMAC-SHA256>`). Serde only. |
+| `rtc-proto` | Signaling messages (JSON on the SFU's WebSocket, `/rtc`), join tokens (`rtc1.<claims>.<HMAC-SHA256>`), and signed room reports (`webhook`). Serde only. |
 | `rtc-sfu` | The server: one UDP port for all media (ICE-lite), rooms, forwarding, keyframe requests. A library and the `rtc-sfu` binary. |
 | `rtc-client` | One connection to the SFU per call: sends a camera and a microphone, receives everyone else into a `FrameStore` and a mixer. |
 | `rtc-video` | Frames (BGRA), the frame store, sources (camera through nokhwa, a test pattern), H.264 through OpenH264 built from source. |
@@ -23,6 +23,12 @@ A host application signs a token for each person (`rtc_proto::token::sign`, with
 SFU was started with) and gives the client the SFU's address and the token; see
 `rtc_client::Call::start`.
 
+Room reports: started with `--report-url` (`RTC_REPORT_URL`), the SFU `POST`s who is in a room
+(`rtc_proto::webhook::RoomReport`, signed with the same secret, header `rtc-signature`) whenever
+someone joins or leaves, and every 30 seconds for every room with someone in it. Each report is
+the room's whole state, so a lost one is corrected by the next; a host treats a room it has not
+heard about for a few heartbeats as ended. `rtc_proto::webhook::verify` checks one.
+
 Building on Linux needs ALSA's headers (`libasound2-dev`) and libclang (`libclang-dev`, for the
 camera bindings); the SFU alone needs neither.
 
@@ -33,4 +39,4 @@ a call starts with any of them and switches mid-call (`Call::set_video_input`, `
 
 Not here yet: echo cancellation and noise suppression, packet-loss concealment,
 reconnecting after a network change, TURN and TCP for restrictive networks, simulcast, screen
-sharing, and the SFU's webhooks and admin API.
+sharing, and an admin API (removing someone, ending a room).

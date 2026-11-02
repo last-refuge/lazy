@@ -399,6 +399,7 @@ impl Cast {
             created_by: Some(self.me.id),
             participants: vec![],
             member_count: 12,
+            drop_in: None,
         }
     }
 
@@ -422,6 +423,7 @@ impl Cast {
             created_by: Some(self.me.id),
             participants,
             member_count: 1 + others.len() as u32,
+            drop_in: None,
         }
     }
 
@@ -920,6 +922,7 @@ impl Cast {
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
             deleted: false,
         }
     }
@@ -1349,6 +1352,15 @@ fn reach_chat_threads(
         Input::Frame(ServerFrame::CaughtUp {
             workspace_id: cast.workspace,
             seq: EventSeq::ZERO,
+        }),
+    );
+    // Bob is online: his direct conversation shows the green dot (D45).
+    dispatch(
+        cx,
+        model,
+        Input::Frame(ServerFrame::Presence {
+            workspace_id: cast.workspace,
+            online: vec![cast.me.id, cast.bob.id],
         }),
     );
     let generation = recorder
@@ -2734,6 +2746,15 @@ fn reach_chat_custom(
             seq: EventSeq::ZERO,
         }),
     );
+    // Bob is online: his direct conversation shows the green dot (D45).
+    dispatch(
+        cx,
+        model,
+        Input::Frame(ServerFrame::Presence {
+            workspace_id: cast.workspace,
+            online: vec![cast.me.id, cast.bob.id],
+        }),
+    );
     let generation = recorder
         .0
         .borrow()
@@ -4064,6 +4085,7 @@ impl Gallery {
                 reactions: vec![],
                 reactions_as_of: EventSeq::ZERO,
                 rich: None,
+                notice: None,
             }
         };
         let handles = |cx: &mut Context<Self>| [(); 4].map(|()| cx.focus_handle().tab_stop(true));
@@ -4417,6 +4439,7 @@ impl Render for Gallery {
                 on_press: None,
                 pressing: None,
                 link_previews: &[],
+                notice: None,
                 index,
                 item: &row.item,
                 author_name: row.author.into(),

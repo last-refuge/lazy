@@ -190,6 +190,23 @@ impl Debug for Frame<'_> {
                 .field("code", code)
                 .field("message", &Text(message))
                 .finish(),
+            ServerFrame::Presence {
+                workspace_id,
+                online,
+            } => f
+                .debug_struct("Presence")
+                .field("workspace", workspace_id)
+                .field("online", &online.len())
+                .finish(),
+            ServerFrame::PresenceChanged {
+                workspace_id,
+                online,
+                ..
+            } => f
+                .debug_struct("PresenceChanged")
+                .field("workspace", workspace_id)
+                .field("online", online)
+                .finish(),
         }
     }
 }

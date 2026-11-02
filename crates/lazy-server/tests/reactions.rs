@@ -131,7 +131,7 @@ async fn a_reaction_is_added_announced_and_removed(pool: PgPool) {
     );
     assert_eq!(app.get_message(&c.author, message.id).await, reacted);
     assert_eq!(
-        app.history_ok(&c.author, app.general, &[]).await.messages,
+        without_notices(app.history_ok(&c.author, app.general, &[]).await.messages),
         vec![reacted.clone()]
     );
 
@@ -638,7 +638,7 @@ async fn history_carries_reactions_and_their_version(pool: PgPool) {
     assert_eq!(heart.reactions.len(), 1);
 
     let page = app.history_ok(&c.owner, app.general, &[]).await;
-    assert_eq!(page.messages.len(), 6);
+    assert_eq!(without_notices(page.messages.clone()).len(), 6);
     let by_id = |id: MessageId| page.messages.iter().find(|m| m.id == id).unwrap();
     assert_eq!(
         by_id(sent[1].id).reactions,

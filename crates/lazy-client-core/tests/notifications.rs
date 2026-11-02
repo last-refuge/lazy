@@ -1964,3 +1964,44 @@ fn signing_out_keeps_what_the_device_was_asked() {
     );
     assert_eq!(fx.driver.core.notification_prompt(), None);
 }
+
+// ----- Notices (D44) -----
+
+/// A notice the server posted: quiet ones (someone joined) neither count nor notify, even where
+/// every message notifies; a drop-in starting counts, notifies in words, and cannot be edited.
+#[test]
+fn only_a_drop_in_notice_counts_and_notifies() {
+    use lazy_domain::{DropInNotice, Notice};
+    let mut fx = setup();
+    fx.settings(|s| s.channel_level = NotifyLevel::All);
+    let general = fx.general;
+    let (_, out) = fx.post_with(general, &fx.other(), "joined #general", |m| {
+        m.notice = Some(Notice::Joined)
+    });
+    assert!(notifications(&out).is_empty(), "a join is quiet");
+    assert_eq!(
+        fx.driver.core.user_state(general).unwrap().unread_count,
+        0,
+        "and not unread"
+    );
+
+    // Even with message text hidden, it says what happened: nothing private is in it.
+    fx.settings(|s| s.show_content = false);
+    let dm = fx.dm.id;
+    let other = fx.other().id;
+    let (message, out) = fx.post_with(dm, &fx.other(), "started a drop-in", |m| {
+        m.notice = Some(Notice::DropIn(DropInNotice {
+            started_at: at(0),
+            ended_at: None,
+            participants: vec![other],
+            joined: vec![other],
+        }))
+    });
+    let sent = notifications(&out);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].title, "ZOE");
+    assert_eq!(sent[0].body, "ZOE started a drop-in");
+    assert_eq!(fx.driver.core.user_state(dm).unwrap().unread_count, 1);
+
+    assert!(!fx.driver.core.can_edit_message(dm, message.id));
+}

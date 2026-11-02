@@ -182,10 +182,12 @@ async fn a_removed_person_replaying_an_old_cursor_gets_only_their_removal(pool: 
         live.iter().map(|e| e.seq).collect::<Vec<_>>(),
         fresh.iter().map(|e| e.seq).collect::<Vec<_>>()
     );
+    // Hopper, still a member, also sees ada's notice that she removed grace.
     assert_eq!(
         texts(&live),
         vec![
             "while she was still in",
+            "removed User grace from #secret",
             "after one",
             "after two",
             "after three",
@@ -295,15 +297,23 @@ async fn a_late_joiner_replays_a_channels_older_events(pool: PgPool) {
 
     app.act(&hopper, team.id, "join").await;
     let marker = app.register("marker").await;
-    // The device that was already connected hears the join, and none of the history it was
-    // already past (the client fetches history on MemberAdded).
     let live = outside_live.events_until_marker(marker.user.id).await;
     let live_kinds: Vec<_> = live
         .iter()
         .filter(|e| about(&e.event) == Some(team.id))
         .collect();
-    assert_eq!(live_kinds.len(), 1);
+    assert_eq!(live_kinds.len(), 2);
     assert!(matches!(live_kinds[0].event, Event::MemberAdded { .. }));
+
+    // The device that was already connected hears the join, then hopper's notice that he joined,
+    // and none of the history it was already past (the client fetches history on MemberAdded).
+    match &live_kinds[1].event {
+        Event::MessageCreated { message, .. } => {
+            assert_eq!(message.author_id, hopper.user.id);
+            assert_eq!(message.notice, Some(lazy_domain::Notice::Joined));
+        }
+        other => panic!("unexpected event {other:?}"),
+    }
 
     // A device replaying from before the channel existed receives the older events too, in order.
     let (_replaying, replay, _) = resume(&app, &hopper, before_channel).await;
@@ -321,9 +331,12 @@ async fn a_late_joiner_replays_a_channels_older_events(pool: PgPool) {
             _ => "other",
         })
         .collect();
+    // The last message is hopper's notice that he joined.
     assert_eq!(
         kinds,
-        vec!["created", "message", "message", "message", "added"]
+        vec![
+            "created", "message", "message", "message", "added", "message"
+        ]
     );
     assert!(team_events.windows(2).all(|pair| pair[0].seq < pair[1].seq));
     app.server.shutdown().await.unwrap();
@@ -428,8 +441,18 @@ async fn being_added_back_restores_everything_in_order(pool: PgPool) {
 
     let (_ws, events, _) = resume(&app, &grace, cursor).await;
     let events = before_marker(events, marker.user.id);
-    // She is a member again, so she receives all of it, her own removal included, in order.
-    assert_eq!(texts(&events), vec!["one", "two", "three"]);
+    // She is a member again, so she receives all of it, her own removal included, in order, with
+    // ada's notices of removing her and adding her back.
+    assert_eq!(
+        texts(&events),
+        vec![
+            "one",
+            "removed User grace from #secret",
+            "two",
+            "added User grace to #secret",
+            "three"
+        ]
+    );
     assert!(events.windows(2).all(|pair| pair[0].seq < pair[1].seq));
     assert!(
         events

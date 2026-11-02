@@ -27,6 +27,19 @@ async fn two_clients_exchange_messages(pool: PgPool) {
     alice.register("alice").await;
     bob.register("bob").await;
 
+    // Each sees the other online (D45), over the real connection.
+    let bob_id = bob.read(|core| core.me().unwrap().id);
+    let alice_id = alice.read(|core| core.me().unwrap().id);
+    alice
+        .wait_until("Bob online", move |core| {
+            core.is_online(bob_id) == Some(true)
+        })
+        .await;
+    bob.wait_until("Alice online", move |core| {
+        core.is_online(alice_id) == Some(true)
+    })
+    .await;
+
     alice.send("hello bob");
     alice.wait_confirmed("hello bob").await;
     assert_eq!(world.count_messages("hello bob").await, 1);
@@ -87,6 +100,7 @@ async fn a_restarted_client_resumes_its_session_and_sees_history(pool: PgPool) {
             && core.selected_conversation().is_some_and(|c| {
                 core.timeline(c)
                     .iter()
+                    .filter(|i| i.notice.is_none())
                     .map(|i| i.document.plain_text())
                     .eq(["before restart".to_owned()])
             })
@@ -364,7 +378,12 @@ async fn older_history_pages_in_order_while_new_messages_arrive(pool: PgPool) {
         MemoryStorage::new(),
     );
     bob.register("bob").await;
-    assert_eq!(bob.items().len(), 50, "the first page is the newest 50");
+    // The newest 50 rows: Bob's own "joined the workspace" notice and 49 messages (D44).
+    assert_eq!(
+        bob.items().len(),
+        49,
+        "the first page is the newest 50 rows"
+    );
     assert_eq!(bob.texts().last().map(String::as_str), Some("message 130"));
 
     // New messages keep arriving while he scrolls back, as the timeline view requests older pages.
@@ -381,7 +400,7 @@ async fn older_history_pages_in_order_while_new_messages_arrive(pool: PgPool) {
             HistoryStatus::Ready { has_more: true }
         )
     }) {
-        let before = bob.items().len();
+        let before = bob.read(|core| core.timeline(conversation).len());
         bob.act(Input::LoadOlder { conversation });
         bob.wait_until("another page", move |core| {
             core.timeline(conversation).len() > before

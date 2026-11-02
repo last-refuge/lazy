@@ -28,14 +28,15 @@ async fn register_signs_in_and_joins_the_default_workspace(pool: PgPool) {
         "general"
     );
     assert_eq!(workspace.members, vec![ada.user.clone()]);
-    // Registering is two events: joining the workspace, and joining #general.
-    assert_eq!(workspace.head.get(), 2);
+    // Registering is three events: joining the workspace, joining #general, and the notice
+    // there that they joined.
+    assert_eq!(workspace.head.get(), 3);
 
     let grace = app.register("grace").await;
     let snapshot = app.bootstrap_ok(&grace).await;
     assert_eq!(snapshot.workspaces[0].role, WorkspaceRole::Member);
     assert_eq!(snapshot.workspaces[0].members.len(), 2);
-    assert_eq!(snapshot.workspaces[0].head.get(), 4);
+    assert_eq!(snapshot.workspaces[0].head.get(), 6);
     app.server.shutdown().await.unwrap();
 }
 

@@ -42,6 +42,16 @@ pub fn retention(keep_newest: u32) -> RetentionPolicy {
 
 pub const PASSWORD: &str = "correct horse battery";
 
+/// What people wrote: `messages` without the notices the server posts when someone joins, leaves,
+/// is added or removed, or a channel changes (D44). For tests about people's messages, not
+/// about notices.
+pub fn without_notices(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .filter(|message| message.notice.is_none())
+        .collect()
+}
+
 pub struct App {
     pub server: TestServer,
     pub pool: PgPool,
@@ -2621,8 +2631,20 @@ impl Ws {
         .await;
     }
 
-    /// The next server frame, or the way the socket ended. Pings and pongs are skipped.
+    /// The next server frame, or the way the socket ended. Pings and pongs are skipped, and so
+    /// are frames about presence (D45), which most tests do not care about and which can arrive
+    /// whenever anyone connects; [`Ws::next_frame_or_closed`] includes them.
     pub async fn next_or_closed(&mut self) -> Result<ServerFrame, Closed> {
+        loop {
+            match self.next_frame_or_closed().await? {
+                ServerFrame::Presence { .. } | ServerFrame::PresenceChanged { .. } => {}
+                frame => return Ok(frame),
+            }
+        }
+    }
+
+    /// The next frame of any kind, presence included (pings and pongs are still skipped).
+    pub async fn next_frame_or_closed(&mut self) -> Result<ServerFrame, Closed> {
         use tokio_tungstenite::tungstenite::Message as Wire;
         loop {
             let next = tokio::time::timeout(DEADLINE, self.inner.next())

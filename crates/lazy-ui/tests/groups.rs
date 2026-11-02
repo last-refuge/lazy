@@ -145,6 +145,7 @@ impl World {
                     created_by: None,
                     participants: vec![],
                     member_count: 3,
+                    drop_in: None,
                 }],
                 user_state: vec![ConversationUserState {
                     conversation_id: self.general,

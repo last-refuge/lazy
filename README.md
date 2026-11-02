@@ -79,17 +79,17 @@ curl -s localhost:8080/healthz          # {"protocol_version":...}
 
 ### Step 2: install the app
 
-Download **Lazy 0.10.2** from the [latest release](https://github.com/last-refuge/lazy/releases/latest):
+Download **Lazy 0.11.0** from the [latest release](https://github.com/last-refuge/lazy/releases/latest):
 
 | Your computer | Download |
 | --- | --- |
-| **Windows** 10 or 11 (64-bit) | `Lazy-Setup-0.10.2-windows-x64.exe`, or the portable `lazy-0.10.2-windows-x64.zip` |
-| **macOS** 11 or later (Apple silicon or Intel) | `Lazy-0.10.2-macos-universal.dmg` |
-| **Linux** (64-bit Intel or AMD) | `lazy-chat_0.10.2_amd64.deb` or `lazy-0.10.2-linux-x86_64.tar.gz` |
+| **Windows** 10 or 11 (64-bit) | `Lazy-Setup-0.11.0-windows-x64.exe`, or the portable `lazy-0.11.0-windows-x64.zip` |
+| **macOS** 11 or later (Apple silicon or Intel) | `Lazy-0.11.0-macos-universal.dmg` |
+| **Linux** (64-bit Intel or AMD) | `lazy-chat_0.11.0_amd64.deb` or `lazy-0.11.0-linux-x86_64.tar.gz` |
 
 - **Windows.** Run the setup program. It installs for you alone and needs no administrator. If Windows says "Windows protected your PC", choose **More info**, then **Run anyway**.
 - **macOS.** Open the disk image and drag **Lazy** to **Applications**. The first time, if macOS says it cannot verify Lazy, open **System Settings, Privacy & Security** and choose **Open Anyway**. On macOS 14 or earlier, right-click **Lazy**, choose **Open**, then **Open**.
-- **Linux.** On Debian and Ubuntu, `sudo apt install ./lazy-chat_0.10.2_amd64.deb`. On anything else, unpack the tarball and run `./install.sh` (`--system` for everyone on the machine, `--uninstall` to remove it). You need a Vulkan driver and a keyring such as GNOME Keyring or KWallet.
+- **Linux.** On Debian and Ubuntu, `sudo apt install ./lazy-chat_0.11.0_amd64.deb`. On anything else, unpack the tarball and run `./install.sh` (`--system` for everyone on the machine, `--uninstall` to remove it). You need a Vulkan driver and a keyring such as GNOME Keyring or KWallet.
 
 The installers are not code-signed yet, which is why Windows and macOS ask you to confirm once. `SHA256SUMS` on the release page lists a checksum for every file. Desktop notifications work on Linux and, in the installed app, on macOS (Lazy asks once, in context, then the system's own dialog); on Windows you get unread counts and the title badge. A macOS client run with `cargo run` shows none (use `scripts/run-client-bundled.sh`).
 

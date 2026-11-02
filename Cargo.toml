@@ -5,7 +5,7 @@ members = ["crates/*"]
 exclude = ["media"]
 
 [workspace.package]
-version = "0.10.2"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.99"
 publish = false
@@ -78,3 +78,13 @@ opt-level = 3
 [profile.dist]
 inherits = "release"
 strip = true
+
+# What the run scripts build: release-grade dependencies (GPUI, the codecs) compiled once, and the
+# workspace crates incremental and lightly optimized so an edit rebuilds in seconds, not a minute.
+[profile.fast]
+inherits = "release"
+incremental = true
+codegen-units = 256
+opt-level = 1
+[profile.fast.package."*"]
+opt-level = 3

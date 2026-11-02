@@ -158,6 +158,9 @@ pub struct TimelineItem {
     pub document: MessageDocument,
     /// An integration's blocks (D40), drawn in place of `document` when present.
     pub rich: Option<lazy_domain::RichContent>,
+    /// For a notice the server posted (D44): what happened, drawn as a line of its own in place
+    /// of `document`.
+    pub notice: Option<lazy_domain::Notice>,
     pub delivery: Delivery,
     /// When the message was last edited, for the "(edited)" mark.
     pub edited_at: Option<Timestamp>,

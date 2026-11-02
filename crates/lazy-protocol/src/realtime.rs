@@ -213,6 +213,21 @@ pub enum ServerFrame {
         code: ErrorCode,
         message: String,
     },
+    /// Who in the workspace is online now (D45): connected on any device. Sent after `CaughtUp`,
+    /// and again whenever the server cannot vouch for the changes in between; it replaces what
+    /// the client knew. Presence is not in the event log: it has no position and is never
+    /// replayed. Older clients cannot read this frame and skip it.
+    Presence {
+        workspace_id: WorkspaceId,
+        online: Vec<UserId>,
+    },
+    /// Someone came online or went offline (D45). Going offline waits out a short grace period,
+    /// so a reconnecting client does not flicker.
+    PresenceChanged {
+        workspace_id: WorkspaceId,
+        user_id: UserId,
+        online: bool,
+    },
 }
 
 #[cfg(test)]
@@ -240,6 +255,7 @@ mod tests {
             reactions: Vec::new(),
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
         }
     }
 
@@ -508,6 +524,7 @@ mod tests {
             created_by: Some(UserId::generate()),
             participants: vec![],
             member_count: 3,
+            drop_in: None,
         }
     }
 

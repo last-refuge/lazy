@@ -841,6 +841,14 @@ impl ClientCore {
         if !live || message.deleted || !self.settings_known {
             return;
         }
+        // Of the notices (D44), only a drop-in starting is worth interrupting someone for.
+        if message
+            .notice
+            .as_ref()
+            .is_some_and(|notice| !notice.counts_as_unread())
+        {
+            return;
+        }
         let Some(me) = self.me.as_ref().map(|me| me.id) else {
             return;
         };
@@ -916,7 +924,10 @@ impl ClientCore {
             seq: message.seq,
         });
         let count = u32::try_from(held.len()).unwrap_or(u32::MAX);
-        let line = if settings.show_content {
+        let line = if message.notice.is_some() {
+            // "Ada started a drop-in": nothing private, so said whatever the setting.
+            Some(format!("{sender} {}", message_text(message)))
+        } else if settings.show_content {
             Some(format!("{sender}: {}", message_text(message)))
         } else if conversation.kind == ConversationKind::Direct {
             Some("New message".to_owned())

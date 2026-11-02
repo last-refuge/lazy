@@ -371,6 +371,10 @@ pub struct IntegrationOptions {
     pub previews: crate::link_previews::PreviewOptions,
     /// The call server drop-ins run on; `None` turns drop-ins off.
     pub drop_ins: Option<crate::drop_ins::DropInOptions>,
+    /// How long someone stays online after their last connection ends (D45); `None` is
+    /// [`crate::presence::GRACE`]. (Not about integrations; kept here so that adding it does not
+    /// change a struct other crates construct.)
+    pub presence_grace: Option<Duration>,
 }
 
 /// Where the bytes of attachments live.

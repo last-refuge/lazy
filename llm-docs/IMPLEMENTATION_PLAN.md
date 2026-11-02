@@ -276,6 +276,7 @@ Goal: dogfood users can do normal work without developer assistance.
   - [X] Decide where notification decisions are computed
   - [X] Notification preferences: per workspace, per conversation, mute
   - [X] Status and do not disturb
+  - [X] Presence: who is online, from the realtime connections, shown on direct conversations in the sidebar (D45; no away state yet)
   - [X] Thread inbox
   - [X] Desktop notifications through a platform interface (built and tested with a fake notifier)
   - [ ] Verify desktop notifications on a real display: a notification daemon, replace and withdraw, click to open, and the launcher count (manual)
@@ -395,7 +396,7 @@ through a real SFU and server, `VERIFICATION.md`); the items below are checked o
 slice finishes them.
 
 - [ ] 5.1 Server signaling and authorization
-  - [ ] Drop-in metadata schema and events
+  - [X] Drop-in metadata schema and events (`drop_ins`, `Conversation.drop_in` through `ConversationUpdated`, kept by the SFU's signed room reports; D44)
   - [ ] Signaling over the realtime connection
   - [X] Expiring room credentials (10-minute join tokens signed with a secret shared with the SFU; D42)
   - [ ] Enforce conversation membership when joining and while connected (joining: done; while connected needs the SFU's admin API)
@@ -429,7 +430,8 @@ slice finishes them.
   - [ ] Persistent dock that remains available while navigating
   - [ ] Participant views for audio, video, and screen share
   - [ ] Join, leave, and device controls with keyboard access and an accessibility pass (join, leave, mute, video, and the Devices menu for camera, microphone, and speakers are built and keyboard-operable; the accessibility pass and real-device checks are not done)
-  - [ ] Drop-in presence in the sidebar and notifications
+  - [ ] Drop-in presence in the sidebar and notifications (built, D44: a Live mark in the sidebar, Join drop-in in the header, the "started a drop-in" notice with Join, which notifies in direct conversations; checked in tests only, not with a real desktop notification or on a deployed call server)
+  - [X] "Started" and "ended" notices, and notices for joins, leaves, and channel changes (quiet: not unread, never notify; D44)
 - [ ] 5.9 Failure handling
   - [ ] Report and recover from media failure without interrupting text messaging
   - [ ] Sleep/wake, network loss, and permission denial handling

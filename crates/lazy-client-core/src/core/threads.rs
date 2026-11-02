@@ -742,6 +742,7 @@ pub(super) fn local_row(
         reactions: Vec::new(),
         reactions_as_of: EventSeq::ZERO,
         rich: None,
+        notice: None,
         mentions: Mentions::default(),
         thread: None,
         thread_root: thread.map(|reply| reply.root),

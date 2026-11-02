@@ -143,8 +143,14 @@ impl ClientCore {
     /// Whether to offer "Edit" on a message: the author's own, in a conversation they can still
     /// post in. The server decides; this only avoids offering the impossible.
     pub fn can_edit_message(&self, conversation: ConversationId, message: MessageId) -> bool {
-        self.message_facts(conversation, message)
-            .is_some_and(|facts| facts.can_edit())
+        // A notice (D44) is the server's to change.
+        let notice = self
+            .find_row(conversation, message)
+            .is_some_and(|row| row.notice.is_some());
+        !notice
+            && self
+                .message_facts(conversation, message)
+                .is_some_and(|facts| facts.can_edit())
     }
 
     /// Whether to offer "Delete" on a message: the author's own, or anyone's for an admin or

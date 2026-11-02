@@ -6,7 +6,7 @@ mod common;
 use common::*;
 use futures_util::future::join_all;
 use lazy_domain::message::deleted_placeholder;
-use lazy_domain::{EventSeq, MessageDocument, MessageId, OperationId};
+use lazy_domain::{ConversationId, EventSeq, MessageDocument, MessageId, OperationId};
 use lazy_protocol::{
     ErrorCode, Event, EventEnvelope, Message, MessageResponse, OperationStatus, PROTOCOL_VERSION,
 };
@@ -31,6 +31,7 @@ async fn message_of(response: reqwest::Response) -> Message {
 async fn history_page(
     app: &App,
     who: &Account,
+    conversation: ConversationId,
     before: Option<EventSeq>,
     limit: u32,
 ) -> lazy_protocol::HistoryPage {
@@ -38,7 +39,7 @@ async fn history_page(
     if let Some(before) = before {
         query.push(("before", before.get().to_string()));
     }
-    app.history_ok(who, app.general, &query).await
+    app.history_ok(who, conversation, &query).await
 }
 
 async fn subscribed(app: &App, who: &Account) -> Ws {
@@ -151,7 +152,7 @@ async fn an_edit_replaces_the_content_and_keeps_the_messages_place(pool: PgPool)
 
     // Everyone sees the edited message in history and when fetching it.
     assert_eq!(
-        app.history_ok(&c.member, app.general, &[]).await.messages,
+        without_notices(app.history_ok(&c.member, app.general, &[]).await.messages),
         vec![edited.clone()]
     );
     assert_eq!(app.get_message(&c.member, original.id).await, edited);
@@ -683,17 +684,20 @@ async fn deleting_twice_returns_the_tombstone_and_appends_nothing_the_second_tim
 async fn deleted_messages_leave_history_and_unread_counts(pool: PgPool) {
     let c = chat(pool).await;
     let app = &c.app;
+    // A direct conversation, which has no notices (#general has one per person who joined), so
+    // its history is only these messages.
+    let direct = app.open(&c.author, &[&c.member]).await.id;
     // g0 (deleted), g1, g2 (deleted), g3, g4, g5 (deleted), g6, all by the author.
     let mut sent = Vec::new();
     for n in 0..7 {
-        sent.push(app.send(&c.author, app.general, &format!("g{n}")).await);
+        sent.push(app.send(&c.author, direct, &format!("g{n}")).await);
     }
     for n in [0, 2, 5] {
         app.delete(&c.author, sent[n].id).await;
     }
     let visible = [&sent[1], &sent[3], &sent[4], &sent[6]];
 
-    let all = app.history_ok(&c.member, app.general, &[]).await;
+    let all = app.history_ok(&c.member, direct, &[]).await;
     assert_eq!(
         all.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
         visible.iter().map(|m| m.id).collect::<Vec<_>>()
@@ -702,13 +706,13 @@ async fn deleted_messages_leave_history_and_unread_counts(pool: PgPool) {
 
     // The page holds `limit` messages that exist, and `has_more` counts only ones that exist,
     // including when deleted messages sit at the edge of a page.
-    let newest = history_page(app, &c.member, None, 2).await;
+    let newest = history_page(app, &c.member, direct, None, 2).await;
     assert_eq!(
         newest.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
         vec![sent[4].id, sent[6].id]
     );
     assert!(newest.has_more);
-    let older = history_page(app, &c.member, Some(sent[4].seq), 2).await;
+    let older = history_page(app, &c.member, direct, Some(sent[4].seq), 2).await;
     assert_eq!(
         older.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
         vec![sent[1].id, sent[3].id]
@@ -717,33 +721,33 @@ async fn deleted_messages_leave_history_and_unread_counts(pool: PgPool) {
         !older.has_more,
         "only a deleted message lies beyond this page"
     );
-    let three = history_page(app, &c.member, None, 3).await;
+    let three = history_page(app, &c.member, direct, None, 3).await;
     assert_eq!(three.messages.len(), 3);
     assert!(three.has_more);
     assert_eq!(
-        history_page(app, &c.member, Some(sent[3].seq), 3)
+        history_page(app, &c.member, direct, Some(sent[3].seq), 3)
             .await
             .messages
             .len(),
         1
     );
     assert!(
-        !history_page(app, &c.member, Some(sent[3].seq), 3)
+        !history_page(app, &c.member, direct, Some(sent[3].seq), 3)
             .await
             .has_more
     );
 
     // The member has read nothing: four messages count, not seven.
-    let state = app.state_of(&c.member, app.general).await;
+    let state = app.state_of(&c.member, direct).await;
     assert_eq!(state.unread_count, 4);
     // Reading up to g3 leaves g4 and g6, not the deleted g5 between them.
     assert!(
-        app.mark_read(&c.member, app.general, sent[3].seq.get())
+        app.mark_read(&c.member, direct, sent[3].seq.get())
             .await
             .status()
             .is_success()
     );
-    assert_eq!(app.state_of(&c.member, app.general).await.unread_count, 2);
+    assert_eq!(app.state_of(&c.member, direct).await.unread_count, 2);
     finish(c).await;
 }
 
@@ -861,6 +865,10 @@ async fn deleting_removes_the_content_from_everywhere_the_server_kept_it(pool: P
             | Event::MessageDeleted { message, .. } => Some(message),
             _ => None,
         })
+        .collect();
+    let about_it: Vec<&Message> = about_it
+        .into_iter()
+        .filter(|m| m.id == message.id)
         .collect();
     assert_eq!(about_it.len(), 4, "created, two edits, deleted");
     assert!(
@@ -1007,10 +1015,17 @@ async fn a_subscriber_returning_after_edits_and_deletes_catches_up_and_a_removed
         }
     }
 
-    // The removed member gets their own removal and not one event about those messages.
+    // The removed member gets their own removal and not one event about those messages (up to
+    // the marker, whose notice that it joined is in #general).
     let mut ws = app.connect_ws(&c.stranger).await;
     ws.subscribe(app.workspace_id, stranger_cursor).await;
     let (replay, _) = ws.replay().await;
+    let replay: Vec<EventEnvelope> = replay
+        .into_iter()
+        .take_while(
+            |e| !matches!(&e.event, Event::MemberJoined { user } if user.id == marker.user.id),
+        )
+        .collect();
     assert!(
         message_events(&replay).is_empty(),
         "nothing about messages in the channel they left"
@@ -1052,26 +1067,17 @@ async fn documents_written_before_formatting_existed_still_read_and_edit(pool: P
     .unwrap();
 
     // It is served, as history and on its own.
-    let page = app.history_ok(&c.member, app.general, &[]).await;
-    assert_eq!(page.messages.len(), 1);
+    let page = without_notices(app.history_ok(&c.member, app.general, &[]).await.messages);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].document.plain_text(), "legacy hello\nsecond line");
+    assert_eq!(app.get_message(&c.member, id).await, page[0]);
     assert_eq!(
-        page.messages[0].document.plain_text(),
-        "legacy hello\nsecond line"
-    );
-    assert_eq!(app.get_message(&c.member, id).await, page.messages[0]);
-    assert_eq!(
-        (
-            page.messages[0].revision,
-            page.messages[0].edited_at,
-            page.messages[0].deleted
-        ),
+        (page[0].revision, page[0].edited_at, page[0].deleted),
         (1, None, false)
     );
 
     // It can be edited; the original is kept exactly as it was stored.
-    let edited = app
-        .edit(&c.author, &page.messages[0], "now *formatted*")
-        .await;
+    let edited = app.edit(&c.author, &page[0], "now *formatted*").await;
     assert_eq!(edited.revision, 2);
     let kept: String =
         sqlx::query_scalar("SELECT document::text FROM message_revisions WHERE message_id = $1")

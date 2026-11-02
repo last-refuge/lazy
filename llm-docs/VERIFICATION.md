@@ -325,7 +325,7 @@ While trying to see the running app, I took one screenshot of a screen region co
 - Docker, beyond what the `server` workflow run measured above (the image build, the compose stack, the smoke test, and the restart check have all passed): pushing to `ghcr.io`, the Coolify compose file on a live Coolify (only its `config` check ran), an arm64 image, and a deployment on anyone's own machine. No machine here can run Docker without sudo, and the owner's user is not in the `docker` group.
 - The `release` workflow and everything it builds: the macOS universal build (with `runtime-shaders`), the `.dmg`, ad-hoc signing and the unwritten-secret signing/notarization path, the Windows build (the `winresource` build script, `windows_subsystem`, the GPUI Windows shader step), the Inno Setup installer and zip, and the `ubuntu-22.04` build and the `.deb` install check in the workflow. The client had never been compiled for macOS or Windows before; platform problems in the code are expected from the first run.
 - The in-app server selection in the client core and runtime: written after the compile-and-test habit stopped; it is not compiled, tested, or simulated, and the sign-in screen's Server row that depends on it was tested only against the recording sink.
-- Desktop notifications on macOS (D44, `lazy-desktop/src/macos.rs`). **Measured**: the offer rules (table and property tests), the core's handling (7 tests), the effects reaching the platform (`DesktopSink` with a fake), the banner and the Preferences row (3 UI tests), the previous-shape and damaged prompt files, the bundle-path check. **Observed** (2026-11-02, by the owner, with `scripts/run-client-bundled.sh` on one Mac, an ad-hoc signed bundle): the feature works end to end; the owner did not itemize which steps (system dialog, toast name and icon, replace by conversation, click to open, dock badge, the denied flow and the System Settings link) were checked one by one. **Unverified**: Developer ID signed and notarized builds, the 7-day re-offer in real time (covered by tests with a fake clock), macOS versions other than this one (the Settings link is the Ventura identifier). Windows has no implementation (logs a warning), so nothing was checked there.
+- Desktop notifications on macOS (D46, `lazy-desktop/src/macos.rs`). **Measured**: the offer rules (table and property tests), the core's handling (7 tests), the effects reaching the platform (`DesktopSink` with a fake), the banner and the Preferences row (3 UI tests), the previous-shape and damaged prompt files, the bundle-path check. **Observed** (2026-11-02, by the owner, with `scripts/run-client-bundled.sh` on one Mac, an ad-hoc signed bundle): the feature works end to end; the owner did not itemize which steps (system dialog, toast name and icon, replace by conversation, click to open, dock badge, the denied flow and the System Settings link) were checked one by one. **Unverified**: Developer ID signed and notarized builds, the 7-day re-offer in real time (covered by tests with a fake clock), macOS versions other than this one (the Settings link is the Ventura identifier). Windows has no implementation (logs a warning), so nothing was checked there.
 
 ## The Soft Signal brand (D26)
 
@@ -499,3 +499,66 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
   - latency, CPU, and bandwidth;
   - more than three people;
   - the drop-in stage with a keyboard or screen reader beyond its labels.
+
+## Notices and drop-ins seen from outside (D44, 2026-11-02)
+
+- *Measured (tests):*
+  - `rtc-proto` webhook: a signed report verifies while fresh; forged, altered, malformed, stale, or future reports, short secrets, and a token-style signature over the same bytes are refused.
+  - `rtc-client/tests/room.rs` `the_host_is_told_who_is_in_a_room`: a real SFU posts signed reports to a stand-in host as Ada joins, Bo joins, Bo leaves, and Ada leaves (the last one empty), in order.
+  - `lazy-server/tests/notices.rs`:
+    - Joining the workspace, joining, leaving, adding, removing, renaming, setting and clearing the topic, and archiving are each posted as a notice by whoever did it, with the expected words.
+    - Notices are not unread, cannot be edited (403), and are not found by search.
+    - A drop-in reported in a direct conversation posts "started a drop-in", which is unread for the other person and sets the conversation's `drop_in`. Heartbeats and older reports change nothing. A second person joining updates the notice in place, with no "edited" mark. An empty report ends it ("started a drop-in, which ended after…"). The other person receives created, live, live, edited, none, edited, in that order. A later report starts a new drop-in.
+    - Forged and hour-old reports get 401. A room that isn't a conversation, or people who aren't users, change nothing. Without a call server the route refuses.
+    - A drop-in that nobody reports on any more is ended by `end_silent`.
+  - The existing server tests were updated for the new notices in #general: positions, event lists, and history counts. That review found a real bug: search with only filters (`from:`, `in:`, dates) returned notices; it now skips them. The log audit caught two error texts in log lines; they now log a fixed code or `.describe()`.
+  - `lazy-client-core` `only_a_drop_in_notice_counts_and_notifies`:
+    - A join notice neither notifies nor counts as unread, even with channels set to all messages.
+    - A drop-in notice in a direct conversation notifies as "ZOE started a drop-in", even with message text hidden, and counts as unread.
+    - A notice cannot be edited.
+  - `lazy-ui` `notices_are_lines_and_a_live_drop_in_can_be_joined`:
+    - Notices are drawn as lines, and the drop-in notice shows its card.
+    - The sidebar shows the Live badge, and the header shows its button.
+    - Join on the notice joins the call.
+    - Once the conversation's drop-in clears, the badge goes.
+  - `lazy-e2e` `two_gui_clients_see_each_other_in_a_drop_in`, now with the SFU reporting to the real server:
+    - Both clients see #general's drop-in with two people and its notice.
+    - After Bob leaves he sees Alice still waiting, from outside the call.
+    - After Alice leaves, the drop-in clears and the notice says it ended.
+  - Other end-to-end tests that read the whole timeline now skip notices.
+  - The full suite (`scripts/test.sh`, `--test-threads=4`) passed 2,834 with 0 failures (7 ignored). The media workspace's tests pass. `cargo fmt --check`, `check-core-deps.sh` and `check-media-deps.sh` pass. Clippy shows only the warning already in `lazy-client-runtime/tests/updates.rs`.
+- *Observed:* the end-to-end screenshot of Bob while Alice waits shows:
+  - **Live 1** on #general in the sidebar;
+  - **Join drop-in · 1** in the header;
+  - the two quiet "joined the workspace" lines;
+  - the "New messages" divider;
+  - "Alice Nguyen started a drop-in", with a card reading "Alice Nguyen is in it" and a **Join** button.
+- *Not checked by anyone:*
+  - a real desktop notification for a drop-in on Linux, macOS, or Windows;
+  - the deployed call server reaching Lazy over HTTPS (`RTC_REPORT_URL` on Coolify; the image now installs CA certificates);
+  - how notices read with a screen reader;
+  - an older client (0.10.2) against this server: by design it shows each notice's words as a message from its author, and a drop-in notice as "(edited)" after it changes.
+
+## Presence (D45, 2026-11-02)
+
+- *Measured (tests):*
+  - `presence.rs` unit tests, on a paused clock:
+    - a person is online at once;
+    - a second device changes nothing;
+    - offline comes only after the grace period;
+    - reconnecting within the grace period announces nothing;
+    - workspaces are separate.
+  - `lazy-server/tests/presence.rs`, over real sockets:
+    - after `caught_up` a subscriber gets the list, itself included;
+    - another person connecting is announced online, and dropping is announced offline after the grace period;
+    - a drop and reconnect within the grace period announces nothing (proved by a later marker arriving first).
+  - Existing realtime tests are unaffected: the test socket skips presence frames unless asked.
+  - `lazy-client-core/tests/presence.rs`: the list and changes set `is_online`; a dropped connection makes it unknown; a change without a list is ignored.
+  - `lazy-ui` `direct_conversations_show_whether_the_other_person_is_online`: no mark while unknown, a green dot when online, a ring when offline.
+  - `lazy-e2e` `two_clients_exchange_messages`: two real clients each see the other online.
+  - The full suite (`scripts/test.sh`, `--test-threads=4`) passed 2,841 with 0 failures (7 ignored). `cargo fmt --check` passes, and clippy shows only the warning already in `lazy-client-runtime/tests/updates.rs`.
+- *Observed:* the offscreen screens (`03`/`04-chat-*-wide`) show a green dot on Bob Okafor's avatar in Direct messages and none on the group. The first, smaller, darker dot was hard to see, so it is now 12 px and a brighter green.
+- *Not checked by anyone:*
+  - two people on the deployed server;
+  - many simultaneous connections;
+  - how the dot reads to a screen reader (the row's label does not say online yet).

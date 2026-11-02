@@ -27,6 +27,43 @@ use crate::keyboard::SHELL_CONTEXT;
 #[action(namespace = lazy_commands, no_json)]
 pub struct RunCommand(pub CommandId);
 
+gpui::actions!(
+    lazy_app,
+    [
+        /// Quits the app (Cmd-Q on a Mac).
+        Quit,
+        /// Closes the focused window (Cmd-W on a Mac).
+        CloseWindow,
+        /// Hides the app (Cmd-H on a Mac).
+        Hide,
+        /// Hides every other app (Option-Cmd-H on a Mac).
+        HideOthers,
+        /// Shows every hidden app again.
+        ShowAll,
+        /// Minimizes the focused window (Cmd-M on a Mac).
+        Minimize,
+        /// Zooms the focused window: the green button's click.
+        Zoom,
+        /// Toggles full screen (Ctrl-Cmd-F on a Mac).
+        ToggleFullScreen
+    ]
+);
+
+/// Binds the Mac's standard application and window shortcuts, app-wide. The handlers live in the
+/// desktop crate, which owns the windows. Elsewhere the window manager provides both.
+pub fn bind_app_shortcuts(cx: &mut App) {
+    if cfg!(target_os = "macos") {
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("cmd-w", CloseWindow, None),
+            KeyBinding::new("cmd-h", Hide, None),
+            KeyBinding::new("alt-cmd-h", HideOthers, None),
+            KeyBinding::new("cmd-m", Minimize, None),
+            KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
+        ]);
+    }
+}
+
 /// What a command is called inside the program and in tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandId {
@@ -628,7 +665,17 @@ pub fn native_menus() -> Vec<gpui::Menu> {
     let plain = |id: CommandId| MenuItem::action(command_for(id).title, RunCommand(id));
     let mut menus = vec![Menu {
         name: "Lazy".into(),
-        items: vec![item(CommandId::Preferences), MenuItem::separator()],
+        items: vec![
+            item(CommandId::Preferences),
+            MenuItem::separator(),
+            MenuItem::os_submenu("Services", gpui::SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action("Hide Lazy", Hide),
+            MenuItem::action("Hide Others", HideOthers),
+            MenuItem::action("Show All", ShowAll),
+            MenuItem::separator(),
+            MenuItem::action("Quit Lazy", Quit),
+        ],
         disabled: false,
     }];
     // The application menu's Preferences is the same command as File's; File keeps the rest.
@@ -646,6 +693,11 @@ pub fn native_menus() -> Vec<gpui::Menu> {
                 }
             })
             .collect();
+        let mut items = items;
+        if group == Group::File {
+            items.push(MenuItem::separator());
+            items.push(MenuItem::action("Close Window", CloseWindow));
+        }
         if !items.is_empty() {
             menus.push(Menu {
                 name: group.title().into(),
@@ -654,6 +706,20 @@ pub fn native_menus() -> Vec<gpui::Menu> {
             });
         }
     }
+    // Between View and Help, where a Mac puts it.
+    let at = menus.len().saturating_sub(1);
+    menus.insert(
+        at,
+        Menu {
+            name: "Window".into(),
+            items: vec![
+                MenuItem::action("Minimize", Minimize),
+                MenuItem::action("Zoom", Zoom),
+                MenuItem::action("Enter Full Screen", ToggleFullScreen),
+            ],
+            disabled: false,
+        },
+    );
     menus
 }
 
@@ -895,7 +961,10 @@ mod tests {
     fn the_native_menus_cover_the_groups() {
         let menus = native_menus();
         let names: Vec<String> = menus.iter().map(|menu| menu.name.to_string()).collect();
-        assert_eq!(names, ["Lazy", "File", "Go", "View", "Workspace", "Help"]);
+        assert_eq!(
+            names,
+            ["Lazy", "File", "Go", "View", "Workspace", "Window", "Help"]
+        );
         assert!(menus.iter().all(|menu| !menu.items.is_empty()));
     }
 }

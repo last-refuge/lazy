@@ -4,7 +4,7 @@ The desktop client ships as installers for Linux, macOS, and Windows, built by a
 by hand (like CI, it never runs on a push): **Actions, release, Run workflow**, or
 
 ```sh
-gh workflow run release -f version=0.10.2 -f publish=true
+gh workflow run release -f version=0.11.0 -f publish=true
 ```
 
 `version` is stamped into the apps (Help, Diagnostics shows it) and into the file names;
@@ -71,6 +71,14 @@ camera, webcams before raw laptop sensor feeds, which 0.10.1 did not (it tried o
 camera Linux listed, an Intel IPU6 sensor feed on the owner's laptop). On Linux, audio devices
 come from PulseAudio when a server answers. Buttons are square with slightly rounded corners
 instead of pills. The protocol is still 14 and the server is unchanged.
+
+Release 0.11.0 (2026-11-02) draws notices (D44): joins, leaves, people added or removed, and
+changes to a channel are quiet lines in the conversation (not unread, never notifying), and a
+drop-in shows from outside it: "started a drop-in" with a Join button (which notifies the other
+person in a direct conversation), a Live mark in the sidebar, "Join drop-in · N" in the header, and
+"Ended · 23 min" afterwards. The protocol is still 14, so 0.10 clients keep working and show
+notices as plain messages. Notices need a server with migration 0026, and drop-ins seen from
+outside also need the call server started with `RTC_REPORT_URL` (`DEPLOY.md`, "Drop-ins").
 
 ## What you get
 
@@ -149,7 +157,7 @@ you work with."
 ## Known gaps
 
 - **Desktop notifications exist on Linux and macOS, not Windows.** On macOS they come from the
-  installed app (D44) and are unverified on screen; on Windows the app shows unread counts and the
+  installed app (D46) and are unverified on screen; on Windows the app shows unread counts and the
   window title badge but sends no operating system notifications. This matters for dogfooding there.
 - Updating from inside Lazy (D28) exists from 0.6.0, the first release after 0.5.0, which has no
   updater and is replaced by hand once. Its tests pass in CI, but it has never updated a real

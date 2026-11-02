@@ -159,6 +159,7 @@ pub fn router(state: AppState) -> Router {
         .route(paths::MESSAGE_ACTIONS_ROUTE, post(press_button))
         .route(paths::MESSAGE_PREVIEWS_ROUTE, get(message_previews))
         .route(paths::DROP_IN_ROUTE, post(join_drop_in))
+        .route(paths::RTC_REPORT_ROUTE, post(rtc_report))
         .route(paths::WORKSPACE_COMMANDS_ROUTE, get(workspace_commands))
         .route(paths::RUN_COMMAND_ROUTE, post(run_command))
         .route(paths::COMMAND_RESPOND_ROUTE, post(command_respond))
@@ -776,6 +777,23 @@ async fn message_previews(
     )
     .await?;
     Ok(Json(lazy_protocol::LinkPreviewsResponse { previews }))
+}
+
+/// `POST /v1/rtc/report`: public, no `Authorization`; the body's signature is the credential.
+async fn rtc_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<StatusCode, AppError> {
+    let signature = headers
+        .get(rtc_proto::webhook::SIGNATURE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if crate::drop_ins::report(&state, signature, &body).await? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(AppError::unauthenticated())
+    }
 }
 
 async fn join_drop_in(
@@ -1630,6 +1648,7 @@ async fn realtime_upgrade(
             let connection = realtime::serve_connection(
                 state.pool.clone(),
                 state.dispatcher.clone(),
+                state.presence.clone(),
                 principal,
                 socket,
                 state.shutdown.child_token(),

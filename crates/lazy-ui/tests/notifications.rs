@@ -112,6 +112,7 @@ impl World {
             created_by: None,
             participants: vec![],
             member_count: 3,
+            drop_in: None,
         }
     }
 
@@ -239,6 +240,7 @@ impl World {
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
             deleted: false,
         }
     }
@@ -512,6 +514,13 @@ fn each_switch_changes_one_setting(cx: &mut TestAppContext) {
     );
 }
 
+/// Select all in a text field: Cmd-A on a Mac, Ctrl-A elsewhere (the field binds each platform's own).
+const SELECT_ALL: &str = if cfg!(target_os = "macos") {
+    "cmd-a"
+} else {
+    "ctrl-a"
+};
+
 #[gpui::test]
 fn quiet_hours_turn_on_with_the_systems_offset_and_check_what_is_typed(cx: &mut TestAppContext) {
     let (world, cx) = start(cx);
@@ -534,7 +543,7 @@ fn quiet_hours_turn_on_with_the_systems_offset_and_check_what_is_typed(cx: &mut 
 
     // A start that is not a time changes nothing and says what to write.
     world.click(cx, "prefs-quiet-start");
-    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_keystrokes(SELECT_ALL);
     cx.simulate_input("25:00");
     assert!(world.on_screen(cx, "prefs-quiet-problem"));
     assert_eq!(
@@ -542,7 +551,7 @@ fn quiet_hours_turn_on_with_the_systems_offset_and_check_what_is_typed(cx: &mut 
         22 * 60
     );
     // A good one is applied at once and the complaint goes.
-    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_keystrokes(SELECT_ALL);
     cx.simulate_input("21:30");
     assert!(!world.on_screen(cx, "prefs-quiet-problem"));
     assert_eq!(
@@ -550,7 +559,7 @@ fn quiet_hours_turn_on_with_the_systems_offset_and_check_what_is_typed(cx: &mut 
         21 * 60 + 30
     );
     // The same time twice is refused.
-    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_keystrokes(SELECT_ALL);
     cx.simulate_input("07:00");
     assert!(world.on_screen(cx, "prefs-quiet-problem"));
     assert_eq!(

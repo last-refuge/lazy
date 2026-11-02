@@ -542,6 +542,7 @@ fn search_answer(workspace: WorkspaceId, query: &str) -> SearchResponse {
         created_by: None,
         participants: Vec::new(),
         member_count: 3,
+        drop_in: None,
     };
     let message = lazy_protocol::Message {
         id: lazy_domain::MessageId::generate(),
@@ -558,6 +559,7 @@ fn search_answer(workspace: WorkspaceId, query: &str) -> SearchResponse {
         reactions: Vec::new(),
         reactions_as_of: lazy_domain::EventSeq::ZERO,
         rich: None,
+        notice: None,
         mentions: lazy_protocol::Mentions::default(),
         deleted: false,
         attachments: Vec::new(),
