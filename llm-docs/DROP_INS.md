@@ -20,6 +20,12 @@ Linux, audio goes through PulseAudio when a server answers (PipeWire desktops), 
 their system names; ALSA otherwise. Cameras are chosen by name; "Automatic" tries every camera,
 webcams before raw laptop sensor feeds (Intel IPU6), which need libcamera or PipeWire (not yet).
 
+Seen from outside (2026-11-02, D44): the SFU reports who is in each room to Lazy (signed room
+reports to `RTC_REPORT_URL`, `/v1/rtc/report`), so the first person in posts "started a drop-in"
+(which notifies the other person in a direct conversation), the sidebar marks the conversation
+**Live**, the header and the notice offer **Join**, and the notice says how long it lasted once
+everyone has left. Joins, leaves, and changes to a channel are posted as quiet notices too.
+
 ## Two products, one boundary
 
 1. **The media library** (working name `rtc`; final name and license are the owner's call): a
@@ -42,7 +48,7 @@ customer of it. Here we also own the media layer.
 | Who is in it, at a glance | Avatars and a headphones mark on the conversation in the sidebar and header | M3 |
 | A drop-in dock that follows you | Bottom of the sidebar: the conversation, participants, mute, devices, leave | M3 |
 | Mute, speaking indicators, device choice | Input and output devices with a level meter; mute visible to all | M3 |
-| "Drop-in started" and "ended" posts | Join from the post; "Drop-in ended · 23 min · 4 people" | M3 |
+| "Drop-in started" and "ended" posts | Join from the post; "Drop-in ended · 23 min · 4 people" (built, D44) | M3 |
 | Reconnect without drama | Network blips, sleep and wake, devices unplugged | M3 |
 | Screen sharing and the drop-in window | Pick a screen or window; others see it large; a "you are sharing" mark | M4 |
 | Camera video | Optional per person; tiles; quality adapts | M5 |

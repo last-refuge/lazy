@@ -3,7 +3,7 @@ mod common;
 use std::collections::HashSet;
 
 use common::*;
-use lazy_domain::{ConversationId, MessageDocument, OperationId};
+use lazy_domain::{ConversationId, MessageDocument, Notice, OperationId};
 use lazy_protocol::{ErrorCode, OperationStatus, SendMessageRequest, SendMessageResponse};
 use sqlx::PgPool;
 
@@ -22,8 +22,8 @@ async fn sends_are_acknowledged_with_what_was_committed(pool: PgPool) {
     assert_eq!(message.author_id, ada.user.id);
     assert_eq!(message.revision, 1);
     assert_eq!(message.document.plain_text(), "hello\nworld");
-    // Registration took positions 1 and 2.
-    assert_eq!(message.seq.get(), 3);
+    // Registration took positions 1 and 2, and its notice 3.
+    assert_eq!(message.seq.get(), 4);
     assert_eq!(app.head().await, message.seq);
 
     let stored: (String, i64) =
@@ -32,7 +32,7 @@ async fn sends_are_acknowledged_with_what_was_committed(pool: PgPool) {
             .fetch_one(&app.pool)
             .await
             .unwrap();
-    assert_eq!(stored, ("hello\nworld".to_owned(), 3));
+    assert_eq!(stored, ("hello\nworld".to_owned(), 4));
     app.server.shutdown().await.unwrap();
 }
 
@@ -56,7 +56,7 @@ async fn repeating_an_operation_returns_the_original_result_without_a_second_mes
         .unwrap();
     assert_eq!(first, again);
 
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages")
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE notice IS NULL")
         .fetch_one(&app.pool)
         .await
         .unwrap();
@@ -81,7 +81,7 @@ async fn reusing_an_operation_id_for_different_content_is_a_conflict(pool: PgPoo
     let (status, error) = api_error(app.send_raw(&ada, other, operation, "original").await).await;
     assert_error(status, &error, ErrorCode::Conflict);
 
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages")
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE notice IS NULL")
         .fetch_one(&app.pool)
         .await
         .unwrap();
@@ -101,7 +101,7 @@ async fn operation_ids_are_scoped_to_the_sender(pool: PgPool) {
         .send_raw(&grace, app.general, operation, "from grace")
         .await;
     assert!(a.status().is_success() && g.status().is_success());
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages")
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE notice IS NULL")
         .fetch_one(&app.pool)
         .await
         .unwrap();
@@ -154,7 +154,7 @@ async fn simultaneous_duplicates_commit_exactly_one_message(pool: PgPool) {
         ids.insert(message.id);
     }
     assert_eq!(ids.len(), 1, "every duplicate gets the same message back");
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages")
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE notice IS NULL")
         .fetch_one(&app.pool)
         .await
         .unwrap();
@@ -194,7 +194,7 @@ async fn a_lost_acknowledgment_is_recoverable_from_the_operation_status(pool: Pg
         .await
         .unwrap();
     assert_eq!(retried.message, committed);
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages")
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE notice IS NULL")
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -349,12 +349,24 @@ async fn history_pages_are_ordered_by_position_and_do_not_overlap(pool: PgPool) 
             &[("limit", "5".into()), ("before", before.get().to_string())],
         )
         .await;
-    assert_eq!(oldest.messages, sent[..2].to_vec());
+    // The oldest page starts with the notices of the two joining the workspace.
+    let joined: Vec<_> = oldest.messages[..2]
+        .iter()
+        .map(|m| (m.author_id, m.notice.clone()))
+        .collect();
+    assert_eq!(
+        joined,
+        vec![
+            (ada.user.id, Some(Notice::JoinedWorkspace)),
+            (grace.user.id, Some(Notice::JoinedWorkspace)),
+        ]
+    );
+    assert_eq!(oldest.messages[2..], sent[..2]);
     assert!(!oldest.has_more);
 
     // Defaults and clamping.
     let all = app.history_ok(&ada, app.general, &[]).await;
-    assert_eq!(all.messages, sent);
+    assert_eq!(all.messages[2..], sent[..]);
     assert!(!all.has_more);
     let clamped = app
         .history_ok(&ada, app.general, &[("limit", "0".into())])

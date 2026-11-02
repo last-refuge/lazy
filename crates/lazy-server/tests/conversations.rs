@@ -113,13 +113,22 @@ async fn new_accounts_join_only_the_default_channel(pool: PgPool) {
         .collect();
     assert_eq!(joined, vec![("general", true), ("random", false)]);
 
-    // Ada learns of grace joining the workspace, then #general, with the count as of that moment.
+    // Ada learns of grace joining the workspace, then #general, with the count as of that moment,
+    // then sees the notice grace posted there that she joined.
     let marker = app.register("marker").await;
     let events = ada_ws.events_until_marker(marker.user.id).await;
     assert_eq!(
         events.iter().map(label).collect::<Vec<_>>(),
-        vec!["member_joined", "member_added"]
+        vec!["member_joined", "member_added", "message_created"]
     );
+    match &events[2].event {
+        Event::MessageCreated { message, .. } => {
+            assert_eq!(message.author_id, grace.user.id);
+            assert_eq!(message.conversation_id, app.general);
+            assert_eq!(message.notice, Some(lazy_domain::Notice::JoinedWorkspace));
+        }
+        other => panic!("unexpected event {other:?}"),
+    }
     match &events[1].event {
         Event::MemberAdded {
             conversation,

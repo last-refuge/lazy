@@ -109,6 +109,7 @@ impl World {
             created_by: None,
             participants: vec![],
             member_count: 2,
+            drop_in: None,
         }
     }
 

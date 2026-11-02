@@ -3,10 +3,12 @@
 //! - [`token`]: the join token a host application signs with a secret it shares with the SFU. It
 //!   names the room, who is joining, and until when.
 //! - [`ClientMessage`] and [`ServerMessage`]: JSON text frames on the SFU's WebSocket (`/rtc`).
+//! - [`webhook`]: the signed room reports the SFU sends the host application (who is in a room).
 //!
 //! Serde only: no runtime, no sockets, so any client (desktop, phone, test) can share it.
 
 pub mod token;
+pub mod webhook;
 
 use serde::{Deserialize, Serialize};
 

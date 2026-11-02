@@ -246,8 +246,9 @@ pub async fn register(
 
 /// Tells a workspace that someone joined it (`MemberJoined`, to everyone) and, if it has a default
 /// channel, that they are in it (`MemberAdded`, to the channel). Used by registration and by
-/// accepting an invitation, so both announce a new member identically. Call it last in the
-/// transaction that added them.
+/// accepting an invitation, so both announce a new member identically, and posts the "joined the
+/// workspace" notice in the default channel (D44). Call it last in the transaction that added
+/// them.
 pub(crate) async fn announce_member(
     conn: &mut PgConnection,
     workspace_id: WorkspaceId,
@@ -255,6 +256,7 @@ pub(crate) async fn announce_member(
     default_channel: Option<Conversation>,
 ) -> Result<(), AppError> {
     let user_id = user.id;
+    let channel = default_channel.as_ref().map(|conversation| conversation.id);
     let mut announcements = vec![PendingEvent {
         kind: "member_joined",
         conversation_id: None,
@@ -275,6 +277,17 @@ pub(crate) async fn announce_member(
         });
     }
     events::append_all(conn, workspace_id, announcements).await?;
+    // And the channel is told in words (D44).
+    if let Some(channel) = channel {
+        crate::notices::post(
+            conn,
+            workspace_id,
+            channel,
+            user_id,
+            lazy_domain::Notice::JoinedWorkspace,
+        )
+        .await?;
+    }
     Ok(())
 }
 

@@ -96,6 +96,8 @@ struct RowData {
     participants: usize,
     /// The person muted it: its unread count is shown, quietly.
     muted: bool,
+    /// How many people are in a drop-in there now (D44); 0 when none is going on.
+    in_drop_in: usize,
 }
 
 pub struct SidebarView {
@@ -208,6 +210,10 @@ impl SidebarView {
                     avatar_seed: other.map_or(id.as_uuid().as_u128(), |u| u.as_uuid().as_u128()),
                     participants: conversation.participants.len(),
                     muted: core.is_muted(*id),
+                    in_drop_in: conversation
+                        .drop_in
+                        .as_ref()
+                        .map_or(0, |live| live.participants.len()),
                 })
             })
             .collect()
@@ -308,6 +314,22 @@ impl SidebarView {
         };
 
         let mut badges = div().flex().items_center().gap_1().flex_none();
+        if row.in_drop_in > 0 {
+            // A drop-in is going on: who is waiting there, at a glance.
+            let selector = format!("drop-in-badge-{}", row.title);
+            let count = row.in_drop_in;
+            badges = badges.child(
+                div()
+                    .debug_selector(move || selector)
+                    .px_1p5()
+                    .rounded(theme.radii.small)
+                    .bg(colors.success)
+                    .text_color(gpui::white())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(theme.type_scale.small)
+                    .child(format!("Live {count}")),
+            );
+        }
         if let Some(text) = badge_text(row.mentions).filter(|_| !row.selected) {
             let selector = format!("mention-badge-{}", row.title);
             badges = badges.child(

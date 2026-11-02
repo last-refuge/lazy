@@ -165,9 +165,11 @@ async fn an_acknowledged_message_survives_a_server_process_crash() {
         .json()
         .await
         .unwrap();
-    assert_eq!(history.messages.len(), 1);
-    assert_eq!(history.messages[0].id, acknowledged.message.id);
-    assert_eq!(history.messages[0].seq, acknowledged.message.seq);
+    // The notice that they joined the workspace, then the message.
+    assert_eq!(history.messages.len(), 2);
+    assert!(history.messages[0].notice.is_some());
+    assert_eq!(history.messages[1].id, acknowledged.message.id);
+    assert_eq!(history.messages[1].seq, acknowledged.message.seq);
 
     // The session, and the record of the operation, survived too.
     let status: OperationStatus = http

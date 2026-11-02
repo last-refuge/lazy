@@ -304,6 +304,13 @@ pub async fn serve_all(
         attachments: Arc::clone(&attachments),
         search,
     };
+    if let Some(drop_ins) = &state.integrations.drop_ins {
+        state.tasks.spawn(crate::drop_ins::sweep(
+            state.pool.clone(),
+            drop_ins.clone(),
+            token.child_token(),
+        ));
+    }
     let attachment_jobs =
         crate::attachments::spawn_jobs(state.pool.clone(), attachments, token.child_token());
     let tasks = state.tasks.clone();

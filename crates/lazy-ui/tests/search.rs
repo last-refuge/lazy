@@ -89,6 +89,7 @@ fn start(cx: &mut TestAppContext) -> (World, &mut VisualTestContext) {
         created_by: None,
         participants: vec![],
         member_count: 3,
+        drop_in: None,
     };
     let world = World {
         model,
@@ -126,6 +127,7 @@ impl World {
             created_by: None,
             participants: vec![],
             member_count: 3,
+            drop_in: None,
         }
     }
 
@@ -143,6 +145,7 @@ impl World {
             created_by: None,
             participants: vec![self.me.id, self.bob.id],
             member_count: 2,
+            drop_in: None,
         }
     }
 
@@ -257,6 +260,7 @@ impl World {
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
             deleted: false,
         }
     }

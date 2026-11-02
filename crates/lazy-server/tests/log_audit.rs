@@ -18,6 +18,8 @@ const ALLOWED_FIELDS: &[&str] = &[
     "github_app_id",
     "connector_id",
     "app_id",
+    // a conversation's id (a drop-in that went silent is ended in it)
+    "conversation",
     // a webhook connector's provider: a fixed name (`linear`, `jira`)
     "provider",
     // counters, sizes, durations

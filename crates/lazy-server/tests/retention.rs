@@ -11,7 +11,8 @@ use sqlx::PgPool;
 use tokio::sync::Barrier;
 use tokio_util::sync::CancellationToken;
 
-/// Registers ada and sends `count` messages, returning her and the log head.
+/// Registers ada and sends `count` messages, returning her and the log head (registering takes
+/// three positions: the workspace, #general, and the notice there).
 async fn log_of(app: &App, count: usize) -> (Account, EventSeq) {
     let ada = app.register("ada").await;
     for n in 0..count {
@@ -36,7 +37,7 @@ fn never() -> CancellationToken {
 async fn pruning_removes_aged_out_events_and_always_keeps_the_newest(pool: PgPool) {
     let app = App::start(pool).await;
     let (_, head) = log_of(&app, 20).await;
-    assert_eq!(head.get(), 22);
+    assert_eq!(head.get(), 23);
     app.backdate_events(head, 40).await;
 
     // Nothing happens when the policy is off, or the events are younger than the window.
@@ -59,26 +60,26 @@ async fn pruning_removes_aged_out_events_and_always_keeps_the_newest(pool: PgPoo
     assert_eq!(reports[0].deleted, 0);
     assert_eq!(
         (app.event_floor().await.get(), count_events(&app).await),
-        (0, 22)
+        (0, 23)
     );
 
     // Everything is old, but the newest five stay.
     let reports = prune_all(&app.pool, retention(5), &never()).await.unwrap();
     assert_eq!(reports.len(), 1);
-    assert_eq!((reports[0].deleted, reports[0].floor.get()), (17, 17));
-    assert_eq!(app.event_floor().await.get(), 17);
+    assert_eq!((reports[0].deleted, reports[0].floor.get()), (18, 18));
+    assert_eq!(app.event_floor().await.get(), 18);
     assert_eq!(
         app.log_positions_after(EventSeq::ZERO).await,
-        vec![18, 19, 20, 21, 22]
+        vec![19, 20, 21, 22, 23]
     );
 
     // Pruning again changes nothing, and a gentler policy never lowers the floor.
     let again = prune_all(&app.pool, retention(5), &never()).await.unwrap();
-    assert_eq!((again[0].deleted, again[0].floor.get()), (0, 17));
+    assert_eq!((again[0].deleted, again[0].floor.get()), (0, 18));
     prune_all(&app.pool, retention(100), &never())
         .await
         .unwrap();
-    assert_eq!(app.event_floor().await.get(), 17);
+    assert_eq!(app.event_floor().await.get(), 18);
     app.server.shutdown().await.unwrap();
 }
 
@@ -86,18 +87,18 @@ async fn pruning_removes_aged_out_events_and_always_keeps_the_newest(pool: PgPoo
 async fn the_default_policy_keeps_the_newest_thousand_events(pool: PgPool) {
     let app = App::start(pool).await;
     let (_, head) = log_of(&app, 1100).await;
-    assert_eq!(head.get(), 1102);
+    assert_eq!(head.get(), 1103);
     app.backdate_events(head, 90).await;
 
     let reports = prune_all(&app.pool, RetentionPolicy::from_days(30), &never())
         .await
         .unwrap();
-    assert_eq!(reports[0].deleted, 102);
-    assert_eq!(app.event_floor().await.get(), 102);
+    assert_eq!(reports[0].deleted, 103);
+    assert_eq!(app.event_floor().await.get(), 103);
     assert_eq!(count_events(&app).await, 1000);
     assert_eq!(
         app.log_positions_after(EventSeq::ZERO).await.first(),
-        Some(&103)
+        Some(&104)
     );
     app.server.shutdown().await.unwrap();
 }
@@ -181,10 +182,10 @@ async fn expired_cursors_take_a_snapshot_and_the_floor_itself_replays(pool: PgPo
     app.backdate_events(head, 40).await;
     prune_all(&app.pool, retention(5), &never()).await.unwrap();
     let floor = app.event_floor().await;
-    assert_eq!(floor.get(), 17);
+    assert_eq!(floor.get(), 18);
 
     let mut ws = app.connect_ws(&ada).await;
-    for stale in [0, 1, 15] {
+    for stale in [0, 1, 16] {
         ws.subscribe(app.workspace_id, EventSeq::new(stale).unwrap())
             .await;
         match ws.next().await {
@@ -203,7 +204,7 @@ async fn expired_cursors_take_a_snapshot_and_the_floor_itself_replays(pool: PgPo
     ws.subscribe(app.workspace_id, floor).await;
     let (replayed, caught_up) = ws.replay().await;
     let positions: Vec<i64> = replayed.iter().map(|e| e.seq.get()).collect();
-    assert_eq!(positions, vec![18, 19, 20, 21, 22]);
+    assert_eq!(positions, vec![19, 20, 21, 22, 23]);
     assert_eq!(caught_up, head);
 
     // A cursor beyond the head is still the other kind of refusal.
@@ -250,10 +251,14 @@ async fn pruning_does_not_affect_history_bootstrap_or_operation_status(pool: PgP
     prune_all(&app.pool, retention(3), &never()).await.unwrap();
     assert!(app.event_floor().await.get() > 0);
 
-    // History comes from messages, not events.
+    // History comes from messages, not events: ada's notice that she joined, then her messages.
     let history = app.history_ok(&ada, app.general, &[]).await;
-    assert_eq!(history.messages.len(), 11);
-    assert_eq!(history.messages[0], committed.message);
+    assert_eq!(history.messages.len(), 12);
+    assert_eq!(
+        history.messages[0].notice,
+        Some(lazy_domain::Notice::JoinedWorkspace)
+    );
+    assert_eq!(history.messages[1], committed.message);
     // Operation receipts are not pruned with the log.
     assert_eq!(
         app.operation(&ada, operation).await,

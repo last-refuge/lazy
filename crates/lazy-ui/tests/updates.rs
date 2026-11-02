@@ -183,6 +183,7 @@ impl World {
             created_by: None,
             participants: vec![],
             member_count: 1,
+            drop_in: None,
         };
         self.dispatch(
             cx,

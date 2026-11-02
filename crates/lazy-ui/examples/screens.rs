@@ -399,6 +399,7 @@ impl Cast {
             created_by: Some(self.me.id),
             participants: vec![],
             member_count: 12,
+            drop_in: None,
         }
     }
 
@@ -422,6 +423,7 @@ impl Cast {
             created_by: Some(self.me.id),
             participants,
             member_count: 1 + others.len() as u32,
+            drop_in: None,
         }
     }
 
@@ -920,6 +922,7 @@ impl Cast {
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
             deleted: false,
         }
     }
@@ -4064,6 +4067,7 @@ impl Gallery {
                 reactions: vec![],
                 reactions_as_of: EventSeq::ZERO,
                 rich: None,
+                notice: None,
             }
         };
         let handles = |cx: &mut Context<Self>| [(); 4].map(|()| cx.focus_handle().tab_stop(true));
@@ -4417,6 +4421,7 @@ impl Render for Gallery {
                 on_press: None,
                 pressing: None,
                 link_previews: &[],
+                notice: None,
                 index,
                 item: &row.item,
                 author_name: row.author.into(),

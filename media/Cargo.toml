@@ -31,6 +31,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync",
 axum = { version = "0.8", features = ["ws"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 futures-util = "0.3"
+# Room reports to the host application (rtc-sfu).
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 clap = { version = "4", features = ["derive", "env"] }
 str0m = { version = "0.24", default-features = false, features = ["rust-crypto"] }
 openh264 = "0.9"

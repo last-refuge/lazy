@@ -252,6 +252,7 @@ mod tests {
             created_by: None,
             participants: Vec::new(),
             member_count: 1,
+            drop_in: None,
         }
     }
 
@@ -271,6 +272,7 @@ mod tests {
             reactions: Vec::new(),
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
             mentions: lazy_protocol::Mentions::default(),
             deleted: false,
             attachments: Vec::new(),

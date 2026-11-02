@@ -68,7 +68,12 @@ pub fn row_layout(
         > GROUP_WINDOW;
     RowLayout {
         day_separator: new_day.then(|| day_label(time.date(), now.date())),
-        show_header: new_day || previous.author_id != item.author_id || gap_exceeded,
+        // A notice is a line of its own (D44), and the message after one starts afresh.
+        show_header: new_day
+            || previous.author_id != item.author_id
+            || gap_exceeded
+            || previous.notice.is_some()
+            || item.notice.is_some(),
     }
 }
 
@@ -350,6 +355,144 @@ pub struct RowProps<'a> {
     pub pressing: Option<(u32, &'a str)>,
     /// What the pages the message links to say about themselves (D41), drawn under the text.
     pub link_previews: &'a [lazy_protocol::LinkPreview],
+    /// For a notice the server posted (D44): the row is one quiet line instead of a message.
+    pub notice: Option<NoticeProps>,
+}
+
+/// A notice, as its row draws it.
+pub struct NoticeProps {
+    /// What happened, after the author's name: "joined #design".
+    pub text: String,
+    /// A drop-in's notice: who is in it, and a way in while it goes on.
+    pub drop_in: Option<DropInLine>,
+}
+
+/// The second line of a drop-in's notice.
+pub struct DropInLine {
+    pub live: bool,
+    /// "Ada and Bo are in it" while it goes on; "Ended · 23 min · 3 people" after.
+    pub detail: String,
+    /// Joining it: `None` once it ended, or for someone already in it.
+    pub on_join: Option<RetryHandler>,
+}
+
+/// A notice's row: a mark where the avatar goes, then the author and what they did, the time,
+/// and for a drop-in a line saying who is in it with a Join button.
+fn notice_content(props: &RowProps<'_>, notice: &NoticeProps, time_text: String) -> AnyElement {
+    let theme = props.theme;
+    let colors = theme.colors;
+    let index = props.index;
+    let prefix = props.label_prefix;
+    let on_profile = props.on_profile.clone();
+    let line = div()
+        .debug_selector(move || format!("{prefix}notice-{index}"))
+        .flex()
+        .flex_wrap()
+        .items_baseline()
+        .gap_x_1()
+        .text_size(theme.type_scale.body)
+        .text_color(colors.text_muted)
+        .child(
+            div()
+                .id(ElementId::NamedInteger("author-name".into(), index as u64))
+                .debug_selector(move || format!("{prefix}author-name-{index}"))
+                .role(gpui::Role::Button)
+                .aria_label(format!("View profile of {}", props.author_name))
+                .cursor_pointer()
+                .hover(|style| style.underline())
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(colors.text)
+                .on_click(move |_, window, cx| on_profile(window, cx))
+                .child(props.author_name.clone()),
+        )
+        .child(notice.text.clone())
+        .child(
+            div()
+                .pl_1()
+                .text_size(theme.type_scale.small)
+                .text_color(colors.text_faint)
+                .child(time_text),
+        );
+    let mut content = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .min_w_0()
+        .flex_1()
+        .child(line);
+    if let Some(drop_in) = &notice.drop_in {
+        let mut card = div()
+            .debug_selector(move || format!("{prefix}drop-in-notice-{index}"))
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_2()
+            .rounded(theme.radii.medium)
+            .border_1()
+            .border_color(if drop_in.live {
+                colors.success
+            } else {
+                colors.border
+            })
+            .bg(colors.surface_raised)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(theme.type_scale.small)
+                    .text_color(if drop_in.live {
+                        colors.text
+                    } else {
+                        colors.text_muted
+                    })
+                    .child(drop_in.detail.clone()),
+            );
+        if let Some(on_join) = drop_in.on_join.clone() {
+            card = card.child(
+                div()
+                    .id(ElementId::NamedInteger("drop-in-join".into(), index as u64))
+                    .debug_selector(move || format!("{prefix}drop-in-join-{index}"))
+                    .role(gpui::Role::Button)
+                    .aria_label("Join the drop-in")
+                    .cursor_pointer()
+                    .flex_none()
+                    .px_3()
+                    .py_0p5()
+                    .rounded(theme.radii.small)
+                    .bg(colors.accent)
+                    .text_color(colors.on_accent)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(theme.type_scale.small)
+                    .hover(|style| style.opacity(0.9))
+                    .on_click(move |_, window, cx| on_join(window, cx))
+                    .child("Join"),
+            );
+        }
+        content = content.child(div().max_w(px(420.)).child(card));
+    }
+    content.into_any_element()
+}
+
+/// The mark where a notice's avatar would be.
+fn notice_mark(notice: &NoticeProps, theme: &Theme) -> AnyElement {
+    div()
+        .w(px(AVATAR))
+        .flex_none()
+        .flex()
+        .justify_center()
+        .text_size(theme.type_scale.body)
+        .text_color(if notice.drop_in.as_ref().is_some_and(|d| d.live) {
+            theme.colors.success
+        } else {
+            theme.colors.text_faint
+        })
+        .child(if notice.drop_in.is_some() {
+            "●"
+        } else {
+            "→"
+        })
+        .into_any_element()
 }
 
 /// The width a row spends beside its content: the padding on both sides, the avatar, and the
@@ -1219,8 +1362,13 @@ pub fn render_message_row(mut props: RowProps<'_>) -> AnyElement {
         None => clock_label(props.now),
     };
     let edited = props.item.is_edited();
+    let notice = props
+        .notice
+        .take()
+        .filter(|_| props.editor.is_none() && !props.tombstone);
+    let notice_time = time_text.clone();
 
-    let header = props.layout.show_header.then(|| {
+    let header = (props.layout.show_header && notice.is_none()).then(|| {
         div()
             .flex()
             .items_baseline()
@@ -1298,7 +1446,9 @@ pub fn render_message_row(mut props: RowProps<'_>) -> AnyElement {
             }))
     });
 
-    let leading = if props.layout.show_header {
+    let leading = if let Some(notice) = &notice {
+        notice_mark(notice, theme)
+    } else if props.layout.show_header {
         avatar(&props)
     } else {
         div().w(px(AVATAR)).flex_none().into_any_element()
@@ -1307,7 +1457,15 @@ pub fn render_message_row(mut props: RowProps<'_>) -> AnyElement {
     let group: SharedString = format!("row-{id}").into();
 
     let mut content = div().flex().flex_col().gap_0p5().min_w_0().flex_1();
-    if let Some(reply) = &props.reply_header {
+    if let Some(notice) = &notice {
+        content = content.child(notice_content(&props, notice, notice_time));
+        if let Some(chips) = reaction_chips(&props, &id) {
+            content = content.child(chips);
+        }
+        if let Some(line) = &props.thread_line {
+            content = content.child(thread_line(line, theme, &id));
+        }
+    } else if let Some(reply) = &props.reply_header {
         content = content.child(reply_header(reply, theme, &id));
     }
     if let Some(header) = header {
@@ -1325,6 +1483,7 @@ pub fn render_message_row(mut props: RowProps<'_>) -> AnyElement {
             .children(files)
     };
     match &props.editor {
+        _ if notice.is_some() => {}
         Some(editor) => {
             content = content.child(editor_body(&props, editor, &id));
             if !files.is_empty() {
@@ -1539,6 +1698,7 @@ mod tests {
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
         }
     }
 
@@ -1612,6 +1772,7 @@ mod tests {
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
         };
         let layout = row_layout(Some(&first), &pending, &TimeZone::UTC, &now_at(BASE + 30));
         assert!(!layout.show_header);

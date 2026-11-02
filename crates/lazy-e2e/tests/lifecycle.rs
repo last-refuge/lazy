@@ -483,6 +483,7 @@ async fn edits_and_deletions_made_while_a_client_was_away_arrive_by_replay(pool:
         core.selected_conversation().is_some_and(|c| {
             core.timeline(c)
                 .iter()
+                .filter(|i| i.notice.is_none())
                 .map(|i| i.document.plain_text())
                 .eq(["one".to_owned(), "two (fixed)".to_owned()])
         })

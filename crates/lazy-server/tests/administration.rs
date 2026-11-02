@@ -1141,7 +1141,14 @@ async fn reactivating_restores_everything_the_person_had(pool: PgPool) {
         after.workspaces[0].conversation_notification_prefs,
         before.workspaces[0].conversation_notification_prefs
     );
-    assert_eq!(app.history_ok(dave, secret.id, &[]).await.messages.len(), 1);
+    // The owner's notice that they added dave, and the message.
+    let history = app.history_ok(dave, secret.id, &[]).await.messages;
+    assert_eq!(history.len(), 2);
+    assert!(matches!(
+        history[0].notice,
+        Some(lazy_domain::Notice::Added { .. })
+    ));
+    assert_eq!(history[1].id, theirs.id);
     assert!(
         app.send_raw(dave, app.general, OperationId::generate(), "back")
             .await

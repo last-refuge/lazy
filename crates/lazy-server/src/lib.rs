@@ -37,6 +37,7 @@ pub mod jobs;
 pub mod link_previews;
 pub mod logging;
 pub mod messages;
+pub mod notices;
 pub mod notifications;
 pub mod onboarding;
 pub mod profile;

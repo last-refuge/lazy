@@ -1034,8 +1034,7 @@ async fn forty_five_deliveries_at_once_get_the_burst_and_no_more(pool: PgPool) {
     let page = app
         .history_ok(&c.alice, app.general, &[("limit", "100".into())])
         .await;
-    let texts: std::collections::HashSet<String> = page
-        .messages
+    let texts: std::collections::HashSet<String> = without_notices(page.messages)
         .iter()
         .map(|m| m.document.plain_text())
         .collect();

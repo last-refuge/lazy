@@ -42,6 +42,16 @@ pub fn retention(keep_newest: u32) -> RetentionPolicy {
 
 pub const PASSWORD: &str = "correct horse battery";
 
+/// What people wrote: `messages` without the notices the server posts when someone joins, leaves,
+/// is added or removed, or a channel changes (D44). For tests about people's messages, not
+/// about notices.
+pub fn without_notices(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .filter(|message| message.notice.is_none())
+        .collect()
+}
+
 pub struct App {
     pub server: TestServer,
     pub pool: PgPool,
