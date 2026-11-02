@@ -4,7 +4,7 @@ The desktop client ships as installers for Linux, macOS, and Windows, built by a
 by hand (like CI, it never runs on a push): **Actions, release, Run workflow**, or
 
 ```sh
-gh workflow run release -f version=0.9.0 -f publish=true
+gh workflow run release -f version=0.10.0 -f publish=true
 ```
 
 `version` is stamped into the apps (Help, Diagnostics shows it) and into the file names;
@@ -52,6 +52,14 @@ Release 0.9.0 (2026-11-01) draws apps' rich messages with buttons (D40) and prev
 in messages (D41), and adds the Buttons section to an app's settings. The protocol is still 14:
 0.8 clients keep working and show a rich message's plain text, without previews. Buttons and
 previews need a server with migrations 0024 and 0025; `chat.lazyto.day` was updated first.
+
+Release 0.10.0 (2026-11-02) adds drop-ins: video calls in a conversation (D42, D43). The protocol
+is still 14, so 0.9 clients keep working without the Drop in button. Drop-ins need a server
+started with `LAZY_RTC_URL` and `LAZY_RTC_SECRET` and the call server (`DEPLOY.md`, "Drop-ins");
+`chat.lazyto.day` and its call server were set up first. It is the first release with camera,
+microphone and video code (nokhwa, cpal, OpenH264, Opus), so the first macOS and Windows builds of
+that code happen in this run; on macOS, the app asks for camera and microphone access the first
+time someone drops in.
 
 ## What you get
 
