@@ -22,12 +22,12 @@ use std::collections::HashMap;
 
 use lazy_domain::conversation::{description_is_valid, topic_is_valid};
 use lazy_domain::{
-    ChannelAccess, ConversationFacts, ConversationId, ConversationKind, EventSeq, OperationId,
-    ParticipantSet, UserId, WorkspaceId, WorkspaceRole,
+    ChannelAccess, ConversationFacts, ConversationId, ConversationKind, EventSeq, Notice,
+    OperationId, ParticipantSet, UserId, WorkspaceId, WorkspaceRole,
 };
 use lazy_protocol::{
     AddMembersRequest, BrowseChannelsQuery, BrowseChannelsResponse, BrowsedChannel, ChannelSort,
-    Conversation, ConversationUserState, CreateChannelRequest, ErrorCode, Event,
+    Conversation, ConversationUserState, CreateChannelRequest, ErrorCode, Event, LiveDropIn,
     OpenConversationRequest, UpdateConversationRequest,
 };
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
@@ -38,6 +38,7 @@ use crate::crypto;
 use crate::db;
 use crate::error::AppError;
 use crate::events::{self, Audience, PendingEvent};
+use crate::notices;
 use crate::receipts::{self, ReceiptKind, ReceiptTarget};
 
 /// Most people one `add members` request may name.
@@ -47,7 +48,7 @@ const MAX_ADD_USERS: usize = 100;
 macro_rules! conversation_columns {
     () => {
         "c.id, c.workspace_id, c.kind, c.name, c.topic, c.description, c.visibility, c.archived, \
-         c.is_default, c.created_by, c.member_count"
+         c.is_default, c.created_by, c.member_count, c.drop_in"
     };
 }
 
@@ -64,6 +65,7 @@ struct ConversationRow {
     is_default: bool,
     created_by: Option<Uuid>,
     member_count: i32,
+    drop_in: Option<sqlx::types::Json<LiveDropIn>>,
 }
 
 impl ConversationRow {
@@ -85,6 +87,7 @@ impl ConversationRow {
             created_by: self.created_by.map(UserId::from_uuid),
             participants,
             member_count: u32::try_from(self.member_count).unwrap_or(0),
+            drop_in: self.drop_in.map(|drop_in| drop_in.0),
         })
     }
 }
@@ -394,7 +397,8 @@ fn seq_from(value: i64) -> Result<EventSeq, AppError> {
 }
 
 /// Messages from other people after `last_read` that the conversation's history lists (top-level
-/// messages and replies sent also to the channel), leaving out deleted ones. A reply that stayed in
+/// messages and replies sent also to the channel), leaving out deleted ones and quiet notices
+/// (D44). A reply that stayed in
 /// its thread is counted by the thread, and a deleted root that remains as a tombstone never counts.
 /// Index-only on the partial `messages_history_idx`.
 async fn unread_count(
@@ -405,7 +409,8 @@ async fn unread_count(
 ) -> Result<u32, AppError> {
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM messages \
-         WHERE conversation_id = $1 AND seq > $2 AND author_id <> $3 AND listed AND NOT deleted",
+         WHERE conversation_id = $1 AND seq > $2 AND author_id <> $3 AND listed AND NOT deleted \
+           AND NOT quiet",
     )
     .bind(conversation.as_uuid())
     .bind(last_read)
@@ -970,6 +975,26 @@ pub async fn update_conversation(
         }],
     )
     .await?;
+    // Each change, in words (D44).
+    let mut said = Vec::new();
+    if let (Some(to), Some(from)) = (&name, &current.name)
+        && to != from
+    {
+        said.push(Notice::Renamed {
+            from: from.clone(),
+            to: to.clone(),
+        });
+    }
+    if let Some(topic) = topic.filter(|topic| *topic != current.topic) {
+        said.push(Notice::TopicChanged { topic });
+    }
+    if let Some(description) = description.filter(|description| *description != current.description)
+    {
+        said.push(Notice::DescriptionChanged { description });
+    }
+    for notice in said {
+        notices::post(&mut tx, loaded.workspace_id, id, actor, notice).await?;
+    }
     tx.commit().await?;
     Ok(conversation)
 }
@@ -1004,6 +1029,7 @@ pub async fn join(
         }],
     )
     .await?;
+    notices::post(&mut tx, loaded.workspace_id, id, actor, Notice::Joined).await?;
     tx.commit().await?;
     Ok(conversation)
 }
@@ -1018,6 +1044,7 @@ pub async fn leave(pool: &PgPool, actor: UserId, id: ConversationId) -> Result<(
         return Err(forbidden("leave this conversation"));
     }
     remove_and_announce(&mut tx, &loaded, actor).await?;
+    notices::post(&mut tx, loaded.workspace_id, id, actor, Notice::Left).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -1048,6 +1075,14 @@ pub async fn remove_member_command(
         ));
     }
     if remove_and_announce(&mut tx, &loaded, target).await? {
+        notices::post(
+            &mut tx,
+            loaded.workspace_id,
+            id,
+            actor,
+            Notice::Removed { user: target },
+        )
+        .await?;
         tx.commit().await?;
     }
     Ok(())
@@ -1155,6 +1190,14 @@ pub async fn add_members_command(
             })
             .collect();
         events::append_all(&mut tx, loaded.workspace_id, events_to_append).await?;
+        notices::post(
+            &mut tx,
+            loaded.workspace_id,
+            id,
+            actor,
+            Notice::Added { users: added },
+        )
+        .await?;
     }
     tx.commit().await?;
     Ok(conversation)
@@ -1225,6 +1268,12 @@ async fn set_archived(
         }],
     )
     .await?;
+    let notice = if archived {
+        Notice::Archived
+    } else {
+        Notice::Unarchived
+    };
+    notices::post(&mut tx, loaded.workspace_id, id, actor, notice).await?;
     tx.commit().await?;
     Ok(conversation)
 }

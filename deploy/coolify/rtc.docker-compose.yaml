@@ -21,6 +21,10 @@ services:
       - RTC_PUBLIC_IP=${RTC_PUBLIC_IP:?set RTC_PUBLIC_IP to this host's public IP address}
       - RTC_UDP=0.0.0.0:${RTC_UDP_PORT:-7881}
       - RTC_MAX_PER_ROOM=${RTC_MAX_PER_ROOM:-12}
+      # Where to tell Lazy who is in each drop-in: Lazy's address followed by /v1/rtc/report (for
+      # example https://chat.example.com/v1/rtc/report). Without it nobody outside a drop-in sees
+      # it: no "started a drop-in" notice, no Join button, no notification in direct messages.
+      - RTC_REPORT_URL=${RTC_REPORT_URL:-}
       - RUST_LOG=${RTC_LOG:-rtc_sfu=info,str0m=warn}
     ports:
       # The same port inside and out: it is the port clients are told to send to.

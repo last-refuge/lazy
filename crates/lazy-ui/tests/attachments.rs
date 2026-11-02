@@ -166,6 +166,7 @@ impl World {
                     created_by: None,
                     participants: vec![],
                     member_count: 2,
+                    drop_in: None,
                 }],
                 user_state: vec![ConversationUserState {
                     conversation_id: self.general,
@@ -203,6 +204,7 @@ impl World {
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
             deleted: false,
         }
     }

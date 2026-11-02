@@ -35,7 +35,7 @@ use lazy_domain::attachment::MAX_ATTACHMENTS_PER_MESSAGE;
 use lazy_domain::mention::{MentionTarget, can_mention_channel};
 use lazy_domain::message::{MessageFacts, deleted_placeholder};
 use lazy_domain::{
-    ConversationId, EventSeq, MAX_REACTION_KINDS, MessageDocument, MessageId, OperationId,
+    ConversationId, EventSeq, MAX_REACTION_KINDS, MessageDocument, MessageId, Notice, OperationId,
     ReactionEmoji, RichContent, Timestamp, UserId,
 };
 use lazy_protocol::{
@@ -68,6 +68,7 @@ struct MessageRow {
     author_id: Uuid,
     document: Json<MessageDocument>,
     rich: Option<Json<RichContent>>,
+    notice: Option<Json<Notice>>,
     created_at: OffsetDateTime,
     revision: i32,
     seq: i64,
@@ -82,8 +83,8 @@ struct MessageRow {
 macro_rules! message_select {
     ($tail:literal) => {
         concat!(
-            "SELECT m.id, m.conversation_id, m.author_id, m.document, m.rich, m.created_at, m.revision, m.seq, \
-                    m.edited_at, m.deleted, m.reactions_as_of, m.mentions, m.thread_root_id, m.in_channel ",
+            "SELECT m.id, m.conversation_id, m.author_id, m.document, m.rich, m.notice, m.created_at, m.revision, \
+                    m.seq, m.edited_at, m.deleted, m.reactions_as_of, m.mentions, m.thread_root_id, m.in_channel ",
             $tail
         )
     };
@@ -101,6 +102,8 @@ impl MessageRow {
             } else {
                 self.rich.map(|rich| rich.0)
             },
+            // Kept when deleted: it is not content, and says whether the message counted as unread.
+            notice: self.notice.map(|notice| notice.0),
             created_at: Timestamp::from(self.created_at),
             revision: u32::try_from(self.revision)
                 .map_err(|_| AppError::internal("stored message revision is negative"))?,
@@ -556,6 +559,7 @@ pub(crate) async fn send_message_with(
         author_id: user,
         document: request.document,
         rich,
+        notice: None,
         created_at: now,
         revision: 1,
         seq,
@@ -649,7 +653,7 @@ pub(crate) async fn send_message_with(
 }
 
 /// Loads a message by id.
-async fn fetch_message(
+pub(crate) async fn fetch_message(
     conn: &mut PgConnection,
     id: MessageId,
 ) -> Result<Option<Message>, AppError> {
@@ -990,6 +994,10 @@ pub(crate) async fn edit_message_with(
     };
     if !facts.can_edit() {
         return Err(AppError::forbidden("you cannot edit this message"));
+    }
+    // A notice says what happened (D44); only the server changes it.
+    if row.notice.is_some() {
+        return Err(AppError::forbidden("a notice cannot be edited"));
     }
     let current = u32::try_from(row.revision)
         .map_err(|_| AppError::internal("stored message revision is negative"))?;

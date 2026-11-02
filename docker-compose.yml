@@ -63,6 +63,8 @@ services:
       RTC_SECRET: ${LAZY_RTC_SECRET:-}
       RTC_PUBLIC_IP: ${RTC_PUBLIC_IP:-}
       RTC_UDP: 0.0.0.0:${RTC_UDP_PORT:-7881}
+      # Who is in each drop-in, told to Lazy over the compose network (D44).
+      RTC_REPORT_URL: ${RTC_REPORT_URL:-http://lazy:8080/v1/rtc/report}
     ports:
       - "${RTC_HTTP_PORT:-7880}:7880"
       - "${RTC_UDP_PORT:-7881}:${RTC_UDP_PORT:-7881}/udp"

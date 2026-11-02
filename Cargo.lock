@@ -6438,6 +6438,7 @@ dependencies = [
  "axum",
  "clap",
  "futures-util",
+ "reqwest",
  "rtc-proto",
  "serde_json",
  "str0m",

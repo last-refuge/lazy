@@ -240,6 +240,7 @@ mod tests {
             reactions: Vec::new(),
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
         }
     }
 
@@ -508,6 +509,7 @@ mod tests {
             created_by: Some(UserId::generate()),
             participants: vec![],
             member_count: 3,
+            drop_in: None,
         }
     }
 

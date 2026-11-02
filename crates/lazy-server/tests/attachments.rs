@@ -1247,9 +1247,9 @@ async fn a_message_carries_its_files_in_order_and_every_view_of_it_shows_them(po
     assert_eq!(sent.document.plain_text(), "three files");
 
     // History, GET, replay, and the status of the operation all show the same files.
-    let page = app.history_ok(&c.bob, app.general, &[]).await;
-    assert_eq!(page.messages.len(), 1);
-    assert_eq!(page.messages[0].attachments, sent.attachments);
+    let page = without_notices(app.history_ok(&c.bob, app.general, &[]).await.messages);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].attachments, sent.attachments);
     assert_eq!(
         app.get_message(&c.bob, sent.id).await.attachments,
         sent.attachments
@@ -1414,10 +1414,7 @@ async fn a_message_that_names_a_file_it_may_not_have_sends_nothing(pool: PgPool)
     // Nothing was sent, and mine is still waiting.
     assert_eq!(app.head().await, head);
     assert_eq!(
-        app.history_ok(&c.alice, app.general, &[])
-            .await
-            .messages
-            .len(),
+        without_notices(app.history_ok(&c.alice, app.general, &[]).await.messages).len(),
         0
     );
     let message = app

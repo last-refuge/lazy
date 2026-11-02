@@ -41,7 +41,7 @@ use lazy_client_core::{
 };
 use lazy_domain::document::MAX_TEXT_BYTES;
 use lazy_domain::{
-    AttachmentId, ConversationId, ConversationKind, MessageId, Permalink, ReactionEmoji,
+    AttachmentId, ConversationId, ConversationKind, MessageId, Permalink, ReactionEmoji, UserId,
 };
 use lazy_protocol::Attachment;
 
@@ -55,9 +55,9 @@ use crate::image_store::{ImageKey, ImageStore, Slot, Source, THUMBNAIL_EDGE};
 use crate::mention_source;
 use crate::menu::{Menu, MenuEvent, MenuItem};
 use crate::message_row::{
-    AnchorHandler, EditorCommand, EditorNotice, EditorPhase, EditorProps, PaneRowProps,
-    ReactionHandler, ReplierAvatar, ReplyHeaderProps, RetryHandler, RowAction, RowActions,
-    RowProps, ThreadLineProps, render_message_row, row_layout,
+    AnchorHandler, DropInLine, EditorCommand, EditorNotice, EditorPhase, EditorProps, NoticeProps,
+    PaneRowProps, ReactionHandler, ReplierAvatar, ReplyHeaderProps, RetryHandler, RowAction,
+    RowActions, RowProps, ThreadLineProps, render_message_row, row_layout,
 };
 use crate::reactions;
 use crate::rich_text::{self, HitSink, LinkHandler, LinkTarget, SelectProps};
@@ -1486,6 +1486,84 @@ impl TimelineView {
         }
         actions.push(RowAction::CopyText);
         actions
+    }
+
+    /// How a notice row reads (D44): what happened, with the names as they are now, and for a
+    /// drop-in who is in it and a way in. `None` for a message, and for a notice of a kind this
+    /// build does not know (its words are drawn as a message).
+    fn notice_props(
+        &self,
+        core: &ClientCore,
+        conversation: ConversationId,
+        item: &TimelineItem,
+    ) -> Option<NoticeProps> {
+        let notice = item.notice.as_ref()?;
+        if *notice == lazy_domain::Notice::Unsupported || item.deleted {
+            return None;
+        }
+        let place = match core.conversation(conversation) {
+            Some(c) if c.kind == ConversationKind::Channel => {
+                format!("#{}", core.conversation_title(conversation))
+            }
+            _ => "the conversation".to_owned(),
+        };
+        let name = |user: UserId| core.display_name(user).to_owned();
+        let text = notice.describe(&place, &name);
+        let drop_in = notice.as_drop_in().map(|drop_in| {
+            // The conversation says whether it goes on; the notice says how it went.
+            let live = core
+                .conversation(conversation)
+                .and_then(|c| c.drop_in.as_ref())
+                .filter(|live| Some(live.message_id) == item.message_id());
+            let names = |people: &[UserId]| -> Vec<String> {
+                people.iter().map(|user| name(*user)).collect()
+            };
+            match live {
+                Some(live) => {
+                    let people = names(&live.participants);
+                    let detail = match people.len() {
+                        0 => "Starting…".to_owned(),
+                        1 => format!("{} is in it", people[0]),
+                        _ => format!("{} are in it", lazy_domain::notice::list_words(&people)),
+                    };
+                    let in_it = core
+                        .drop_in()
+                        .is_some_and(|d| d.conversation == conversation);
+                    let model = self.model.clone();
+                    let on_join: RetryHandler = Rc::new(move |_window, cx| {
+                        model.update(cx, |model, cx| {
+                            model.dispatch(Input::JoinDropIn(conversation), cx)
+                        });
+                    });
+                    DropInLine {
+                        live: true,
+                        detail,
+                        on_join: (!in_it).then_some(on_join),
+                    }
+                }
+                None => {
+                    let mut detail = "Ended".to_owned();
+                    if drop_in.ended_at.is_some() {
+                        detail.push_str(&format!(
+                            " · {}",
+                            lazy_domain::notice::duration_words(
+                                drop_in.minutes(lazy_domain::Timestamp::now())
+                            )
+                        ));
+                    }
+                    match drop_in.joined.len() {
+                        0 | 1 => {}
+                        n => detail.push_str(&format!(" · {n} people")),
+                    }
+                    DropInLine {
+                        live: false,
+                        detail,
+                        on_join: None,
+                    }
+                }
+            }
+        });
+        Some(NoticeProps { text, drop_in })
     }
 
     fn open_menu(&mut self, key: ItemKey, window: &mut Window, cx: &mut Context<Self>) {
@@ -2921,6 +2999,7 @@ impl TimelineView {
             }),
         });
 
+        let notice = self.notice_props(core, conversation, item);
         let shows_author = layout.show_header;
         let element = render_message_row(RowProps {
             new_messages_divider: marker == Some(key),
@@ -2984,6 +3063,7 @@ impl TimelineView {
                 .as_ref()
                 .map(|(block, action)| (*block, action.as_str())),
             link_previews: &link_previews,
+            notice,
         });
         self.wanted_emoji.extend(emoji_ids);
         if shows_author {

@@ -2203,6 +2203,18 @@ impl ShellView {
         let star_to = this.clone();
         let details_to = this.clone();
         let in_this_drop_in = core.drop_in().is_some_and(|h| h.conversation == id);
+        // Someone is in a drop-in here already (D44): the button joins them, and stands out.
+        let others_waiting = conversation
+            .as_ref()
+            .and_then(|c| c.drop_in.as_ref())
+            .map_or(0, |live| live.participants.len());
+        let drop_in_label = if in_this_drop_in {
+            "Leave drop-in".to_owned()
+        } else if others_waiting > 0 {
+            format!("Join drop-in · {others_waiting}")
+        } else {
+            "Drop in".to_owned()
+        };
         let drop_in_to = self.model.downgrade();
         div()
             .h(px(52.))
@@ -2257,13 +2269,11 @@ impl ShellView {
             .child(form::button(
                 theme,
                 "drop-in-button",
-                if in_this_drop_in {
-                    "Leave drop-in"
-                } else {
-                    "Drop in"
-                },
+                drop_in_label,
                 if in_this_drop_in {
                     ButtonKind::Danger
+                } else if others_waiting > 0 {
+                    ButtonKind::Primary
                 } else {
                     ButtonKind::Secondary
                 },

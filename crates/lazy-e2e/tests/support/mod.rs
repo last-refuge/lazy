@@ -285,12 +285,18 @@ impl Client {
         });
     }
 
+    /// The rows people wrote in the selected conversation, oldest first: the server's notices
+    /// (someone joined; D44) are left out, as these tests are about messages.
     pub fn items(&self) -> Vec<TimelineItem> {
         self.read(|core| {
             let conversation = core
                 .selected_conversation()
                 .expect("a selected conversation");
-            core.timeline(conversation).to_vec()
+            core.timeline(conversation)
+                .iter()
+                .filter(|item| item.notice.is_none())
+                .cloned()
+                .collect()
         })
     }
 

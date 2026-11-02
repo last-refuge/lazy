@@ -336,23 +336,51 @@ async fn joining_and_leaving_a_channel(pool: PgPool) {
     let marker = app.register("marker").await;
     let hers = creator_ws.events_until_marker(marker.user.id).await;
     let kinds: Vec<_> = hers.iter().map(|e| crate_label(e)).collect();
+    // Each change is followed by the member's notice of it: joined, then left.
     assert_eq!(
         kinds,
-        vec!["member_added", "member_removed", "conversation_updated"]
+        vec![
+            "member_added",
+            "message_created",
+            "member_removed",
+            "conversation_updated",
+            "message_created"
+        ]
     );
-    match &hers[2].event {
+    match &hers[3].event {
         Event::ConversationUpdated { conversation } => assert_eq!(conversation.member_count, 1),
         other => panic!("unexpected {other:?}"),
     }
-    // The person who left learns of their own removal but not of the count update after it.
-    // (Whether they also saw their own arrival depends on whether it was delivered before they
-    // left, so assert the stable part: their removal is the last word on the channel.)
+    let notices: Vec<_> = [&hers[1], &hers[4]]
+        .iter()
+        .map(|e| match &e.event {
+            Event::MessageCreated { message, .. } => {
+                assert_eq!(
+                    (message.author_id, message.conversation_id),
+                    (w.member.user.id, team.id)
+                );
+                message.notice.clone()
+            }
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        notices,
+        vec![
+            Some(lazy_domain::Notice::Joined),
+            Some(lazy_domain::Notice::Left)
+        ]
+    );
+    // The person who left learns of their own removal but not of the count update or their
+    // notice after it. (Whether they also saw their own arrival and its notice depends on whether
+    // it was delivered before they left, so assert the stable part: their removal is the last
+    // word on the channel.)
     let his = member_ws.events_until_marker(marker.user.id).await;
     assert_ends_with_removal(&his, team.id, w.member.user.id);
-    assert!(
-        his.iter()
-            .all(|e| matches!(crate_label(e), "member_added" | "member_removed"))
-    );
+    assert!(his.iter().all(|e| matches!(
+        crate_label(e),
+        "member_added" | "message_created" | "member_removed"
+    )));
 
     // Joining is for public, unarchived channels; the default channel can never be left.
     let old = app.create_channel(&w.creator, "old", "public").await;
@@ -475,7 +503,8 @@ async fn adding_people_to_a_channel(pool: PgPool) {
     }
     let marker = app.register("marker").await;
     let events = creator_ws.events_until_marker(marker.user.id).await;
-    let counts: Vec<(lazy_domain::UserId, u32)> = events
+    let (added, notice) = events.split_at(events.len() - 1);
+    let counts: Vec<(lazy_domain::UserId, u32)> = added
         .iter()
         .map(|e| match &e.event {
             Event::MemberAdded {
@@ -486,8 +515,21 @@ async fn adding_people_to_a_channel(pool: PgPool) {
         })
         .collect();
     assert_eq!(counts, vec![(w.member.user.id, 2), (w.stranger.user.id, 3)]);
-    // The person added receives the event too (and so does everyone else already inside).
-    assert_eq!(member_ws.events_until_marker(marker.user.id).await.len(), 2);
+    // Then one notice, by whoever added them, naming both in order.
+    match &notice[0].event {
+        Event::MessageCreated { message, .. } => {
+            assert_eq!(message.author_id, w.creator.user.id);
+            assert_eq!(
+                message.notice,
+                Some(lazy_domain::Notice::Added {
+                    users: vec![w.member.user.id, w.stranger.user.id]
+                })
+            );
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    // The person added receives the events too (and so does everyone else already inside).
+    assert_eq!(member_ws.events_until_marker(marker.user.id).await.len(), 3);
 
     // Any member may add people, but they must belong to the workspace.
     ok_conversation(app.add_members(&w.member, hush.id, &[&w.admin]).await).await;
@@ -660,11 +702,21 @@ async fn archiving_closes_a_channel_but_keeps_its_history(pool: PgPool) {
     let archived = ok_conversation(app.act(&w.creator, team.id, "archive").await).await;
     assert!(archived.archived);
 
-    // History stays readable; posting, joining, and detail changes are closed.
+    // History stays readable; posting, joining, and detail changes are closed. Besides the
+    // message, it holds the notices of the member joining and the creator archiving.
+    let history = app.history_ok(&w.member, team.id, &[]).await.messages;
     assert_eq!(
-        app.history_ok(&w.member, team.id, &[]).await.messages,
-        vec![before]
+        history
+            .iter()
+            .map(|m| (m.author_id, m.notice.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (w.member.user.id, Some(lazy_domain::Notice::Joined)),
+            (w.member.user.id, None),
+            (w.creator.user.id, Some(lazy_domain::Notice::Archived)),
+        ]
     );
+    assert_eq!(without_notices(history), vec![before]);
     denied(
         app.send_raw(&w.member, team.id, OperationId::generate(), "after")
             .await,

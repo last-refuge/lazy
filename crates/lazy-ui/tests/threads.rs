@@ -138,6 +138,7 @@ impl World {
             created_by: None,
             participants: vec![],
             member_count: 3,
+            drop_in: None,
         }
     }
 
@@ -190,6 +191,7 @@ impl World {
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
             deleted: false,
         }
     }

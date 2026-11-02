@@ -17,6 +17,7 @@ pub mod markdown;
 pub mod mention;
 pub mod message;
 pub mod names;
+pub mod notice;
 pub mod notification;
 pub mod rich;
 pub mod search;
@@ -41,6 +42,7 @@ pub use message::{MAX_THREAD_REPLIERS_LISTED, MessageFacts, Permalink};
 pub use names::{
     ChannelName, DisplayName, EmojiName, GroupHandle, NameError, Username, WorkspaceName,
 };
+pub use notice::{DropInNotice, Notice};
 pub use rich::{Button, ButtonStyle, RichBlock, RichContent, RichError};
 pub use search::{FileKind, SearchError, SearchQuery};
 pub use time_stamp::Timestamp;

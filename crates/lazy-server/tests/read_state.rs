@@ -44,13 +44,20 @@ async fn unread_counts_other_peoples_messages_after_the_read_position(pool: PgPo
     let ada = app.register("ada").await;
     let grace = app.register("grace").await;
 
-    // Ada has not looked since she joined; grace writes three messages.
+    // Ada has not looked since she joined (her read position is at her own notice that she
+    // joined); grace writes three messages. Grace's notice that she joined is quiet: not unread.
+    let ada_joined = app.history_ok(&ada, app.general, &[]).await.messages[0].clone();
+    assert_eq!(ada_joined.author_id, ada.user.id);
+    assert!(ada_joined.notice.is_some());
     let mut sent = Vec::new();
     for text in ["one", "two", "three"] {
         sent.push(app.send(&grace, app.general, text).await);
     }
     let ada_state = app.state_of(&ada, app.general).await;
-    assert_eq!((ada_state.last_read.get(), ada_state.unread_count), (0, 3));
+    assert_eq!(
+        (ada_state.last_read, ada_state.unread_count),
+        (ada_joined.seq, 3)
+    );
     assert_eq!(ada_state.mention_count, 0);
     // Grace wrote them, so for her they are read: her position moved to her newest message.
     let grace_state = app.state_of(&grace, app.general).await;
@@ -244,9 +251,18 @@ async fn joining_late_starts_with_nothing_unread_and_leaving_forgets_the_state(p
     }
 
     // A late joiner does not face a wall of unread; history is theirs to scroll back through.
+    // Their read position is at their own notice that they joined, just after the history.
     app.act(&grace, team.id, "join").await;
+    let joined = app
+        .history_ok(&grace, team.id, &[])
+        .await
+        .messages
+        .pop()
+        .unwrap();
+    assert_eq!(joined.notice, Some(lazy_domain::Notice::Joined));
+    assert!(joined.seq > history[3].seq);
     let state = app.state_of(&grace, team.id).await;
-    assert_eq!((state.last_read, state.unread_count), (history[3].seq, 0));
+    assert_eq!((state.last_read, state.unread_count), (joined.seq, 0));
     app.send(&ada, team.id, "after").await;
     assert_eq!(app.state_of(&grace, team.id).await.unread_count, 1);
 

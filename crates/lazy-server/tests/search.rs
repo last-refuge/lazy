@@ -261,7 +261,7 @@ async fn nothing_typed_is_an_operator_and_nothing_hostile_is_a_server_error(pool
     }
     // Nothing was damaged by any of it.
     assert_eq!(app.find(&w.bob, "apple").await.hits.len(), 1);
-    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM messages")
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE notice IS NULL")
         .fetch_one(&app.pool)
         .await
         .unwrap();

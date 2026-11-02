@@ -170,6 +170,10 @@ impl ClientCore {
         if message.thread_root.is_some() && (!message.in_channel || own) {
             return;
         }
+        // A quiet notice (someone joined; D44) is neither read nor unread, as on the server.
+        if is_quiet(message) {
+            return;
+        }
         let conversation = message.conversation_id;
         let seq = message.seq;
         let Some(as_of) = self.state_as_of.get(&conversation).copied() else {
@@ -245,7 +249,7 @@ impl ClientCore {
         event_seq: EventSeq,
         out: &mut Output,
     ) {
-        if message.thread_root.is_some() && !message.in_channel {
+        if (message.thread_root.is_some() && !message.in_channel) || is_quiet(message) {
             return;
         }
         let conversation = message.conversation_id;
@@ -634,4 +638,12 @@ impl ClientCore {
             .push(Change::ConversationStateChanged { conversation });
         self.cache_changed(false);
     }
+}
+
+/// A notice that does not count as unread (D44).
+fn is_quiet(message: &Message) -> bool {
+    message
+        .notice
+        .as_ref()
+        .is_some_and(|notice| !notice.counts_as_unread())
 }

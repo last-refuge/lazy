@@ -499,3 +499,42 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
   - latency, CPU, and bandwidth;
   - more than three people;
   - the drop-in stage with a keyboard or screen reader beyond its labels.
+
+## Notices and drop-ins seen from outside (D44, 2026-11-02)
+
+- *Measured (tests):*
+  - `rtc-proto` webhook: a signed report verifies while fresh; forged, altered, malformed, stale, or future reports, short secrets, and a token-style signature over the same bytes are refused.
+  - `rtc-client/tests/room.rs` `the_host_is_told_who_is_in_a_room`: a real SFU posts signed reports to a stand-in host as Ada joins, Bo joins, Bo leaves, and Ada leaves (the last one empty), in order.
+  - `lazy-server/tests/notices.rs`:
+    - Joining the workspace, joining, leaving, adding, removing, renaming, setting and clearing the topic, and archiving are each posted as a notice by whoever did it, with the expected words.
+    - Notices are not unread, cannot be edited (403), and are not found by search.
+    - A drop-in reported in a direct conversation posts "started a drop-in", which is unread for the other person and sets the conversation's `drop_in`. Heartbeats and older reports change nothing. A second person joining updates the notice in place, with no "edited" mark. An empty report ends it ("started a drop-in, which ended after…"). The other person receives created, live, live, edited, none, edited, in that order. A later report starts a new drop-in.
+    - Forged and hour-old reports get 401. A room that isn't a conversation, or people who aren't users, change nothing. Without a call server the route refuses.
+    - A drop-in that nobody reports on any more is ended by `end_silent`.
+  - The existing server tests were updated for the new notices in #general: positions, event lists, and history counts. That review found a real bug: search with only filters (`from:`, `in:`, dates) returned notices; it now skips them. The log audit caught two error texts in log lines; they now log a fixed code or `.describe()`.
+  - `lazy-client-core` `only_a_drop_in_notice_counts_and_notifies`:
+    - A join notice neither notifies nor counts as unread, even with channels set to all messages.
+    - A drop-in notice in a direct conversation notifies as "ZOE started a drop-in", even with message text hidden, and counts as unread.
+    - A notice cannot be edited.
+  - `lazy-ui` `notices_are_lines_and_a_live_drop_in_can_be_joined`:
+    - Notices are drawn as lines, and the drop-in notice shows its card.
+    - The sidebar shows the Live badge, and the header shows its button.
+    - Join on the notice joins the call.
+    - Once the conversation's drop-in clears, the badge goes.
+  - `lazy-e2e` `two_gui_clients_see_each_other_in_a_drop_in`, now with the SFU reporting to the real server:
+    - Both clients see #general's drop-in with two people and its notice.
+    - After Bob leaves he sees Alice still waiting, from outside the call.
+    - After Alice leaves, the drop-in clears and the notice says it ended.
+  - Other end-to-end tests that read the whole timeline now skip notices.
+  - The full suite (`scripts/test.sh`, `--test-threads=4`) passed 2,834 with 0 failures (7 ignored). The media workspace's tests pass. `cargo fmt --check`, `check-core-deps.sh` and `check-media-deps.sh` pass. Clippy shows only the warning already in `lazy-client-runtime/tests/updates.rs`.
+- *Observed:* the end-to-end screenshot of Bob while Alice waits shows:
+  - **Live 1** on #general in the sidebar;
+  - **Join drop-in · 1** in the header;
+  - the two quiet "joined the workspace" lines;
+  - the "New messages" divider;
+  - "Alice Nguyen started a drop-in", with a card reading "Alice Nguyen is in it" and a **Join** button.
+- *Not checked by anyone:*
+  - a real desktop notification for a drop-in on Linux, macOS, or Windows;
+  - the deployed call server reaching Lazy over HTTPS (`RTC_REPORT_URL` on Coolify; the image now installs CA certificates);
+  - how notices read with a screen reader;
+  - an older client (0.10.2) against this server: by design it shows each notice's words as a message from its author, and a drop-in notice as "(edited)" after it changes.

@@ -489,40 +489,45 @@ async fn accepting_joins_the_workspace_and_announces_it_exactly_as_registration_
     assert_eq!(boot.workspaces.len(), 2);
     assert_eq!(boot.workspaces[1], joined);
 
-    // Alice, in the workspace, is told: someone joined, and is in #general.
+    // Alice, in the workspace, is told: someone joined, is in #general, and said so there.
     let events = ws.events_through(joined.head).await;
-    assert_eq!(events.len(), 2);
-    match (&events[0].event, &events[1].event) {
+    assert_eq!(events.len(), 3);
+    match (&events[0].event, &events[1].event, &events[2].event) {
         (
             Event::MemberJoined { user },
             Event::MemberAdded {
                 conversation,
                 user_id,
             },
+            Event::MessageCreated { message, .. },
         ) => {
             assert_eq!(user.id, bob.user.id);
             assert_eq!(*user_id, bob.user.id);
             assert_eq!(conversation.id, general);
             assert_eq!(conversation.member_count, 2);
+            assert_eq!(message.author_id, bob.user.id);
+            assert_eq!(message.conversation_id, general);
+            assert_eq!(message.notice, Some(lazy_domain::Notice::JoinedWorkspace));
         }
         other => panic!("unexpected events {other:?}"),
     }
 
-    // Registration with the same invitation announces the same two, with the same audiences.
+    // Registration with the same invitation announces the same three, with the same audiences.
     let after_accept = app.head_of(id).await;
     let registered = app
         .try_register_with("carol", PASSWORD, Some(invite.code.expose()))
         .await;
     assert!(registered.status().is_success());
     let accepted_kinds = log_after(&app, id, team.head).await;
-    let accepted_kinds = &accepted_kinds[..2];
+    let accepted_kinds = &accepted_kinds[..3];
     let registered_kinds = log_after(&app, id, after_accept).await;
     assert_eq!(accepted_kinds, registered_kinds);
     assert_eq!(
         registered_kinds,
         [
             ("member_joined".to_owned(), "workspace".to_owned()),
-            ("member_added".to_owned(), "members".to_owned())
+            ("member_added".to_owned(), "members".to_owned()),
+            ("message_created".to_owned(), "members".to_owned())
         ]
     );
     // Two uses between them.

@@ -1149,7 +1149,7 @@ async fn the_bootstrap_carries_the_newest_two_thousand_readable_saved_messages(p
         .await;
     // Saved in sequence order, so the last is the newest saved.
     sqlx::query(
-        "INSERT INTO saved_messages (user_id, message_id) SELECT $1, id FROM messages ORDER BY seq",
+        "INSERT INTO saved_messages (user_id, message_id) SELECT $1, id FROM messages WHERE notice IS NULL ORDER BY seq",
     )
     .bind(w.bob.user.id.as_uuid())
     .execute(&app.pool)

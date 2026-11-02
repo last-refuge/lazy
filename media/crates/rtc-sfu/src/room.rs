@@ -12,6 +12,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
+use rtc_proto::webhook::{ReportedParticipant, RoomReport};
 use rtc_proto::{
     Claims, ErrorCode, Participant, ParticipantId, ServerMessage, TrackInfo, TrackKind,
 };
@@ -52,20 +53,70 @@ const MAX_WAIT: Duration = Duration::from_millis(10);
 /// A connection that never completes is dropped after this.
 const CONNECT_WITHIN: Duration = Duration::from_secs(30);
 
+/// Where room reports go (to be sent to the host), and how often every room is reported again.
+pub(crate) struct Reports {
+    pub sender: UnboundedSender<RoomReport>,
+    pub every: Duration,
+}
+
+impl Reports {
+    /// Reports who is in `room` now (nobody, if it just emptied).
+    fn room(&self, room: &str, clients: &[Client]) {
+        let participants = clients
+            .iter()
+            .filter(|c| c.room == room)
+            .map(|c| ReportedParticipant {
+                identity: c.participant.identity.clone(),
+                name: c.participant.name.clone(),
+            })
+            .collect();
+        self.sender
+            .send(RoomReport {
+                room: room.to_owned(),
+                participants,
+                sent_at_ms: now_ms(),
+            })
+            .ok();
+    }
+
+    /// Reports every room with someone in it.
+    fn all(&self, clients: &[Client]) {
+        let mut rooms: Vec<&str> = clients.iter().map(|c| c.room.as_str()).collect();
+        rooms.sort_unstable();
+        rooms.dedup();
+        for room in rooms {
+            self.room(room, clients);
+        }
+    }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
 pub(crate) fn run(
     socket: UdpSocket,
     media_addr: SocketAddr,
     commands: Receiver<Command>,
     max_per_room: usize,
+    reports: Option<Reports>,
 ) {
     let mut clients: Vec<Client> = Vec::new();
     let mut queue: VecDeque<Propagated> = VecDeque::new();
     let mut buf = vec![0u8; 2000];
+    let mut reported_at = Instant::now();
     loop {
         // Commands from the signaling side.
         loop {
             match commands.try_recv() {
-                Ok(command) => handle_command(command, &mut clients, media_addr, max_per_room),
+                Ok(command) => {
+                    let joined = handle_command(command, &mut clients, media_addr, max_per_room);
+                    if let (Some(room), Some(reports)) = (joined, &reports) {
+                        reports.room(&room, &clients);
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }
@@ -90,10 +141,23 @@ pub(crate) fn run(
                 false
             }
         });
+        let mut emptied: Vec<String> = Vec::new();
         for (room, id) in gone {
             tracing::info!(%id, room, "left");
             for c in clients.iter_mut().filter(|c| c.room == room) {
                 c.out.send(ServerMessage::ParticipantLeft { id }).ok();
+            }
+            if !emptied.contains(&room) {
+                emptied.push(room);
+            }
+        }
+        if let Some(reports) = &reports {
+            for room in &emptied {
+                reports.room(room, &clients);
+            }
+            if reported_at.elapsed() >= reports.every {
+                reported_at = Instant::now();
+                reports.all(&clients);
             }
         }
 
@@ -141,12 +205,13 @@ pub(crate) fn run(
     }
 }
 
+/// Handles one command; returns the room someone joined, if someone did.
 fn handle_command(
     command: Command,
     clients: &mut Vec<Client>,
     media_addr: SocketAddr,
     max_per_room: usize,
-) {
+) -> Option<String> {
     match command {
         Command::Join {
             id,
@@ -163,7 +228,7 @@ fn handle_command(
                     message: format!("the room is full ({max_per_room} people)"),
                 })
                 .ok();
-                return;
+                return None;
             }
             let participant = Participant {
                 id,
@@ -202,6 +267,7 @@ fn handle_command(
                         }
                     }
                     clients.push(client);
+                    return Some(room);
                 }
                 Err(message) => {
                     tracing::info!(%id, "join failed: {message}");
@@ -219,9 +285,7 @@ fn handle_command(
             audio_muted,
             video_on,
         } => {
-            let Some(client) = clients.iter_mut().find(|c| c.participant.id == id) else {
-                return;
-            };
+            let client = clients.iter_mut().find(|c| c.participant.id == id)?;
             client.participant.audio_muted = audio_muted;
             client.participant.video_on = video_on;
             let participant = client.participant.clone();
@@ -244,6 +308,7 @@ fn handle_command(
             }
         }
     }
+    None
 }
 
 /// Hands one client's output to the others in its room.

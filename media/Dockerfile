@@ -15,6 +15,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && install -D target/release/rtc-sfu /out/rtc-sfu
 
 FROM debian:bookworm-slim
+# CA certificates: room reports go to the host app over HTTPS.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin rtc
 COPY --from=build /out/rtc-sfu /usr/local/bin/rtc-sfu
 ENV RTC_HTTP=0.0.0.0:7880 \

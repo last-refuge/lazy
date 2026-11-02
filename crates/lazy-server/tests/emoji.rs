@@ -958,12 +958,9 @@ async fn renaming_and_deleting_are_announced_and_change_nothing_a_message_alread
     assert_eq!(again, Default::default());
     app.upload_emoji(&c.boss, ws(app), "fiesta", png_bytes(50, 50, 255))
         .await;
-    let page = app.history_ok(&c.carol, app.general, &[]).await;
-    assert_eq!(page.messages[0].document.custom_emoji(), vec![party.id]);
-    assert_eq!(
-        page.messages[0].reactions[0].emoji.custom_id(),
-        Some(party.id)
-    );
+    let page = without_notices(app.history_ok(&c.carol, app.general, &[]).await.messages);
+    assert_eq!(page[0].document.custom_emoji(), vec![party.id]);
+    assert_eq!(page[0].reactions[0].emoji.custom_id(), Some(party.id));
 
     // The log tells it: made, renamed, deleted (and the name taken again).
     let events = emoji_events(&replay_from(app, &c.carol, cursor).await);
@@ -1485,9 +1482,9 @@ async fn custom_emoji_are_reactions_by_identity_that_can_always_be_withdrawn(poo
         ErrorCode::InvalidRequest,
     )
     .await;
-    let page = app.history_ok(&c.alice, app.general, &[]).await;
+    let page = without_notices(app.history_ok(&c.alice, app.general, &[]).await.messages);
     assert!(
-        page.messages[0]
+        page[0]
             .reactions
             .iter()
             .any(|r| r.emoji.custom_id() == Some(party.id))

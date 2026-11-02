@@ -62,6 +62,7 @@ fn channel(
         created_by: None,
         participants: vec![],
         member_count: 2,
+        drop_in: None,
     }
 }
 
@@ -199,6 +200,7 @@ impl Fixture {
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
             deleted: false,
         }
     }
@@ -847,4 +849,98 @@ fn the_devices_menu_lists_the_devices_and_switches_the_call(cx: &mut TestAppCont
         kind: DeviceKind::Camera,
         id: None,
     }));
+}
+
+/// Notices (D44) are quiet lines of their own, and a drop-in going on shows who is in it with a
+/// Join button, in the timeline, the sidebar, and the header.
+#[gpui::test]
+fn notices_are_lines_and_a_live_drop_in_can_be_joined(cx: &mut TestAppContext) {
+    use lazy_domain::{DropInNotice, Notice};
+    let (app, cx) = start(cx);
+    let bob = user("bob");
+    let mut joined = app.message("joined #general", 1);
+    joined.author_id = bob.id;
+    joined.notice = Some(Notice::Joined);
+    let mut started = app.message("started a drop-in", 2);
+    started.author_id = bob.id;
+    started.notice = Some(Notice::DropIn(DropInNotice {
+        started_at: Timestamp::now(),
+        ended_at: None,
+        participants: vec![bob.id],
+        joined: vec![bob.id],
+    }));
+
+    // The bootstrap says a drop-in goes on in #general, the one the notice starts.
+    let mut bootstrap = app.bootstrap();
+    let workspace = &mut bootstrap.workspaces[0];
+    workspace.members = vec![app.me.clone(), bob.clone()];
+    workspace.conversations[0].drop_in = Some(lazy_protocol::LiveDropIn {
+        message_id: started.id,
+        started_at: Timestamp::now(),
+        participants: vec![bob.id],
+    });
+    app.dispatch(
+        cx,
+        Input::Started(StartupState {
+            session_restored: true,
+            ..Default::default()
+        }),
+    );
+    app.dispatch(cx, Input::BootstrapLoaded(Box::new(bootstrap)));
+    let generation = app.fetch_generation();
+    app.dispatch(
+        cx,
+        Input::HistoryLoaded {
+            conversation: app.general,
+            generation,
+            result: Ok(HistoryPage {
+                messages: vec![joined, started],
+                has_more: false,
+            }),
+        },
+    );
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert!(
+        cx.debug_bounds("notice-0").is_some(),
+        "the join is a notice line"
+    );
+    assert!(cx.debug_bounds("notice-1").is_some());
+    assert!(cx.debug_bounds("drop-in-notice-1").is_some());
+    assert!(
+        cx.debug_bounds("drop-in-badge-general").is_some(),
+        "the sidebar shows it"
+    );
+    assert!(cx.debug_bounds("drop-in-button").is_some());
+
+    // Join, from the notice.
+    app.take_effects();
+    app.click(cx, "drop-in-join-1");
+    assert!(
+        app.take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::JoinDropIn { .. })),
+        "the Join button joins"
+    );
+
+    // Once it has ended, the notice says so and offers nothing to join.
+    let mut ended = app.bootstrap().workspaces[0].conversations[0].clone();
+    ended.drop_in = None;
+    app.dispatch(
+        cx,
+        Input::Frame(lazy_protocol::ServerFrame::Event(
+            lazy_protocol::EventEnvelope {
+                workspace_id: app.workspace,
+                seq: EventSeq::new(3).unwrap(),
+                occurred_at: Timestamp::now(),
+                event: lazy_protocol::Event::ConversationUpdated {
+                    conversation: ended,
+                },
+            },
+        )),
+    );
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("drop-in-badge-general").is_none());
 }

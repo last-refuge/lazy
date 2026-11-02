@@ -190,7 +190,8 @@ fn build_plan(
     let fetch = binder.bind(Bind::Int(shape.limit as i64 + 1));
 
     let sql = match (&tsquery, query.has_text()) {
-        // Only filters (and maybe exclusions): newest first.
+        // Only filters (and maybe exclusions): newest first. Notices (D44) are never found: the
+        // text branches skip them by their empty text, and this one, which matches no text, says so.
         (_, false) => {
             let exclusion = tsquery
                 .as_ref()
@@ -198,7 +199,8 @@ fn build_plan(
                 .unwrap_or_default();
             format!(
                 "SELECT m.id, m.seq, 0 AS src, NULL::uuid AS att, 0::bigint AS total \
-                 FROM messages m WHERE m.conversation_id = ANY({acc}) AND NOT m.deleted{filters}{exclusion} \
+                 FROM messages m WHERE m.conversation_id = ANY({acc}) AND NOT m.deleted \
+                 AND m.notice IS NULL{filters}{exclusion} \
                  ORDER BY m.seq DESC OFFSET {offset} LIMIT {fetch}"
             )
         }

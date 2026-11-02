@@ -23,6 +23,18 @@ use lazy_ui::root_view::RootView;
 use sqlx::PgPool;
 use sqlx::postgres::PgConnectOptions;
 
+/// The rows people wrote in a conversation: the server's notices (someone joined; D44) are left
+/// out, as these flows are about messages.
+fn rows_of(
+    core: &lazy_client_core::ClientCore,
+    conversation: lazy_domain::ConversationId,
+) -> Vec<&lazy_client_core::TimelineItem> {
+    core.timeline(conversation)
+        .iter()
+        .filter(|item| item.notice.is_none())
+        .collect()
+}
+
 const DEADLINE: Duration = Duration::from_secs(30);
 const PASSWORD: &str = "correct horse battery";
 
@@ -198,7 +210,7 @@ impl GuiClient {
             let conversation = core
                 .selected_conversation()
                 .expect("a selected conversation");
-            core.timeline(conversation)
+            rows_of(core, conversation)
                 .iter()
                 .map(|item| item.document.plain_text())
                 .collect()
@@ -281,7 +293,7 @@ fn two_gui_clients_exchange_messages_through_a_real_server() {
     alice.key("enter");
     bob.wait_until("Alice's message", |core| {
         core.selected_conversation().is_some_and(|c| {
-            core.timeline(c)
+            rows_of(core, c)
                 .iter()
                 .any(|i| i.document.plain_text() == "Hello Bob, welcome to Lazy!")
         })
@@ -294,7 +306,7 @@ fn two_gui_clients_exchange_messages_through_a_real_server() {
     bob.key("enter");
     alice.wait_until("Bob's reply", |core| {
         core.selected_conversation().is_some_and(|c| {
-            core.timeline(c)
+            rows_of(core, c)
                 .iter()
                 .any(|i| i.document.plain_text() == "Thanks Alice!\nGlad to be here.")
         })
@@ -304,7 +316,7 @@ fn two_gui_clients_exchange_messages_through_a_real_server() {
     for client in [&mut alice, &mut bob] {
         client.wait_until("both messages confirmed", |core| {
             core.selected_conversation().is_some_and(|c| {
-                let rows = core.timeline(c);
+                let rows = rows_of(core, c);
                 rows.len() == 2
                     && rows
                         .iter()
@@ -320,7 +332,7 @@ fn two_gui_clients_exchange_messages_through_a_real_server() {
     assert_eq!(bob.texts(), expected);
     let authors = bob.read(|core| {
         let c = core.selected_conversation().unwrap();
-        core.timeline(c)
+        rows_of(core, c)
             .iter()
             .map(|i| core.display_name(i.author_id).to_owned())
             .collect::<Vec<_>>()
@@ -363,7 +375,7 @@ fn two_gui_clients_format_edit_and_delete_through_the_real_views() {
     alice.key("enter");
     bob.wait_until("the formatted message", |core| {
         core.selected_conversation().is_some_and(|c| {
-            core.timeline(c).iter().any(|i| {
+            rows_of(core, c).iter().any(|i| {
                 i.document.plain_text() == "hello world"
                     && matches!(
                         &i.document.blocks()[0],
@@ -377,7 +389,7 @@ fn two_gui_clients_format_edit_and_delete_through_the_real_views() {
     });
     alice.wait_until("the message confirmed", |core| {
         core.selected_conversation()
-            .is_some_and(|c| core.timeline(c).iter().all(|r| r.is_confirmed()))
+            .is_some_and(|c| rows_of(core, c).iter().all(|r| r.is_confirmed()))
     });
 
     // Up in the empty composer edits the latest message, starting from its source text. Select
@@ -389,7 +401,7 @@ fn two_gui_clients_format_edit_and_delete_through_the_real_views() {
     for client in [&mut alice, &mut bob] {
         client.wait_until("the edit on both screens", |core| {
             core.selected_conversation().is_some_and(|c| {
-                core.timeline(c)
+                rows_of(core, c)
                     .iter()
                     .any(|i| i.document.plain_text() == "hello there" && i.is_edited())
             })
@@ -404,7 +416,7 @@ fn two_gui_clients_format_edit_and_delete_through_the_real_views() {
     for client in [&mut alice, &mut bob] {
         client.wait_until("the rocket reaction on both screens", |core| {
             core.selected_conversation().is_some_and(|c| {
-                core.timeline(c)
+                rows_of(core, c)
                     .iter()
                     .any(|i| i.reactions.len() == 1 && i.reactions[0].emoji.to_string() == "🚀")
             })
@@ -433,7 +445,7 @@ fn two_gui_clients_format_edit_and_delete_through_the_real_views() {
     for client in [&mut alice, &mut bob] {
         client.wait_until("the deletion on both screens", |core| {
             core.selected_conversation()
-                .is_some_and(|c| core.timeline(c).is_empty())
+                .is_some_and(|c| rows_of(core, c).is_empty())
         });
     }
 
@@ -481,7 +493,7 @@ fn two_gui_clients_mention_through_the_autocomplete() {
     let bob_id = bob.read(|core| core.me().unwrap().id);
     bob.wait_until("the mention", move |core| {
         core.selected_conversation().is_some_and(|c| {
-            core.timeline(c).iter().any(|i| {
+            rows_of(core, c).iter().any(|i| {
                 i.document.plain_text() == "hey @bob look at this"
                     && i.document.mentions() == [lazy_domain::MentionTarget::User { id: bob_id }]
             })
@@ -489,7 +501,7 @@ fn two_gui_clients_mention_through_the_autocomplete() {
     });
     alice.wait_until("the message confirmed", |core| {
         core.selected_conversation()
-            .is_some_and(|c| core.timeline(c).iter().all(|r| r.is_confirmed()))
+            .is_some_and(|c| rows_of(core, c).iter().all(|r| r.is_confirmed()))
     });
 
     if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
@@ -528,7 +540,7 @@ fn two_gui_clients_hold_a_thread_through_the_real_views() {
     alice.key("enter");
     bob.wait_until("Alice's message", |core| {
         core.selected_conversation().is_some_and(|c| {
-            core.timeline(c)
+            rows_of(core, c)
                 .iter()
                 .any(|i| i.document.plain_text() == "shall we ship on friday" && i.is_confirmed())
         })
@@ -544,10 +556,10 @@ fn two_gui_clients_hold_a_thread_through_the_real_views() {
     // Alice's channel shows the root with its summary, not the reply itself.
     alice.wait_until("the summary under her message", |core| {
         core.selected_conversation().is_some_and(|c| {
-            core.timeline(c).iter().any(|i| {
+            rows_of(core, c).iter().any(|i| {
                 i.document.plain_text() == "shall we ship on friday"
                     && i.thread.as_ref().is_some_and(|t| t.reply_count == 1)
-            }) && core.timeline(c).len() == 1
+            }) && rows_of(core, c).len() == 1
         })
     });
 
@@ -604,7 +616,7 @@ fn a_gui_client_searches_and_opens_a_result_with_the_keyboard() {
     }
     bob.wait_until("the three messages", |core| {
         core.selected_conversation()
-            .is_some_and(|c| core.timeline(c).len() == 3)
+            .is_some_and(|c| rows_of(core, c).len() == 3)
     });
 
     // Ctrl+F from the composer, a word, Enter to search now.
@@ -656,19 +668,12 @@ fn two_gui_clients_see_each_other_in_a_drop_in() {
         .build()
         .unwrap();
     let database = rt.block_on(TempDatabase::create());
-    let sfu_url = rt.block_on(async {
-        let sfu = rtc_sfu::Sfu::start(rtc_sfu::SfuConfig {
-            secret: SECRET.as_bytes().to_vec(),
-            udp_bind: "127.0.0.1:0".parse().unwrap(),
-            public_ip: None,
-            max_per_room: 12,
-        })
+    // The SFU's address is known before it starts (its listener first), so the server can hand
+    // it out, and the SFU reports who is in each room to the server (D44).
+    let sfu_listener = rt
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
         .unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, sfu.router()).await.unwrap() });
-        format!("ws://{addr}")
-    });
+    let sfu_url = format!("ws://{}", sfu_listener.local_addr().unwrap());
     let server = rt.block_on(async {
         testing::spawn_test_server_configured(
             database.pool.clone(),
@@ -686,6 +691,22 @@ fn two_gui_clients_see_each_other_in_a_drop_in() {
             },
         )
         .await
+    });
+    let report_url = format!(
+        "{}{}",
+        server.base_url,
+        lazy_protocol::api::paths::RTC_REPORT_ROUTE
+    );
+    rt.block_on(async {
+        let sfu = rtc_sfu::Sfu::start(rtc_sfu::SfuConfig {
+            secret: SECRET.as_bytes().to_vec(),
+            udp_bind: "127.0.0.1:0".parse().unwrap(),
+            public_ip: None,
+            max_per_room: 12,
+            report_url: Some(report_url),
+        })
+        .unwrap();
+        tokio::spawn(async move { axum::serve(sfu_listener, sfu.router()).await.unwrap() });
     });
     let dir = tempfile::tempdir().unwrap();
 
@@ -716,6 +737,22 @@ fn two_gui_clients_see_each_other_in_a_drop_in() {
     };
     alice.wait_until("a live drop-in with Bob", live_with("Bob Okafor"));
     bob.wait_until("a live drop-in with Alice", live_with("Alice Nguyen"));
+
+    // Seen from outside the call too (D44): #general says a drop-in goes on with both of them,
+    // and its notice is in the timeline.
+    for client in [&mut alice, &mut bob] {
+        client.wait_until("the drop-in announced in #general", |core| {
+            core.conversation(general)
+                .and_then(|c| c.drop_in.as_ref())
+                .is_some_and(|live| live.participants.len() == 2)
+                && core.timeline(general).iter().any(|item| {
+                    item.notice
+                        .as_ref()
+                        .and_then(lazy_domain::Notice::as_drop_in)
+                        .is_some()
+                })
+        });
+    }
 
     // Each window has the other's picture, and its own.
     for client in [&mut alice, &mut bob] {
@@ -801,6 +838,32 @@ fn two_gui_clients_see_each_other_in_a_drop_in() {
     bob.wait_until("out of the drop-in", |core| core.drop_in().is_none());
     alice.wait_until("alone in the drop-in", |core| {
         core.drop_in().is_some_and(|h| h.peers.is_empty())
+    });
+    bob.wait_until("Alice still waiting, seen from outside", |core| {
+        core.conversation(general)
+            .and_then(|c| c.drop_in.as_ref())
+            .is_some_and(|live| live.participants.len() == 1)
+    });
+    if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
+        bob.screenshot_as(&dir, "drop-in-waiting");
+    }
+
+    // Alice leaves too: it ended, and the notice says so.
+    let model = alice.model.clone();
+    alice.cx.update(|app| {
+        model.update(app, |m, cx| {
+            m.dispatch(lazy_client_core::Input::LeaveDropIn, cx)
+        })
+    });
+    bob.wait_until("the drop-in over", |core| {
+        core.conversation(general)
+            .is_some_and(|c| c.drop_in.is_none())
+            && core.timeline(general).iter().any(|item| {
+                item.notice
+                    .as_ref()
+                    .and_then(lazy_domain::Notice::as_drop_in)
+                    .is_some_and(|d| !d.is_live())
+            })
     });
 
     alice.stop();

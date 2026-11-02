@@ -47,6 +47,7 @@ pub fn channel(workspace: WorkspaceId, name: &str) -> Conversation {
         created_by: None,
         participants: Vec::new(),
         member_count: 2,
+        drop_in: None,
     }
 }
 
@@ -71,6 +72,7 @@ pub fn people(workspace: WorkspaceId, participants: &[&User]) -> Conversation {
         created_by: None,
         participants: ids.clone(),
         member_count: u32::try_from(ids.len()).unwrap(),
+        drop_in: None,
     }
 }
 
@@ -217,6 +219,7 @@ impl World {
             reactions: Vec::new(),
             reactions_as_of: EventSeq::ZERO,
             rich: None,
+            notice: None,
             mentions: lazy_protocol::Mentions::default(),
             deleted: false,
             attachments: Vec::new(),

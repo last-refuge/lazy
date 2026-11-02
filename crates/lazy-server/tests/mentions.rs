@@ -122,8 +122,8 @@ async fn naming_people_notifies_them_and_the_decision_is_stored_with_the_message
         app.get_message(&c.dave, sent.id).await.mentions,
         sent.mentions
     );
-    let page = app.history_ok(&c.dave, app.general, &[]).await;
-    assert_eq!(page.messages[0].mentions, sent.mentions);
+    let page = without_notices(app.history_ok(&c.dave, app.general, &[]).await.messages);
+    assert_eq!(page[0].mentions, sent.mentions);
     let marker = app.register("marker").await;
     let events = ws.events_until_marker(marker.user.id).await;
     match mention_events(&events)[..] {

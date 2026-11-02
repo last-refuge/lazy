@@ -20,6 +20,7 @@ async fn sfu() -> String {
         udp_bind: "127.0.0.1:0".parse().unwrap(),
         public_ip: None,
         max_per_room: 3,
+        report_url: None,
     })
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -319,4 +320,84 @@ async fn switching_camera_and_microphone_mid_call_reaches_the_other_side() {
         "{:?}",
         ada.seen
     );
+}
+
+/// The SFU tells the host who is in a room: when someone joins, when someone leaves, and that the
+/// room emptied; every report is signed with the shared secret.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_host_is_told_who_is_in_a_room() {
+    use axum::body::Bytes;
+    use axum::http::HeaderMap;
+    use rtc_proto::webhook::{self, RoomReport};
+
+    let (sender, mut reports) = tokio::sync::mpsc::unbounded_channel::<RoomReport>();
+    let host = axum::Router::new().route(
+        "/report",
+        axum::routing::post(move |headers: HeaderMap, body: Bytes| {
+            let sender = sender.clone();
+            async move {
+                let signature = headers
+                    .get(webhook::SIGNATURE_HEADER)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default();
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+                let report =
+                    webhook::verify(&body, signature, SECRET, now).expect("a valid report");
+                sender.send(report).ok();
+                "ok"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let host_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, host).await.unwrap() });
+
+    let sfu = Sfu::start(SfuConfig {
+        secret: SECRET.to_vec(),
+        udp_bind: "127.0.0.1:0".parse().unwrap(),
+        public_ip: None,
+        max_per_room: 3,
+        report_url: Some(format!("http://{host_addr}/report")),
+    })
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, sfu.router()).await.unwrap() });
+    let url = format!("ws://{addr}/rtc");
+
+    async fn next(reports: &mut tokio::sync::mpsc::UnboundedReceiver<RoomReport>) -> RoomReport {
+        tokio::time::timeout(Duration::from_secs(20), reports.recv())
+            .await
+            .expect("a report in time")
+            .expect("reports go on")
+    }
+    let names = |report: &RoomReport| -> Vec<String> {
+        report.participants.iter().map(|p| p.name.clone()).collect()
+    };
+
+    let mut ada = Person::join(&url, "reported", "Ada", [30, 40, 200], 440.0);
+    let report = next(&mut reports).await;
+    assert_eq!(report.room, "reported");
+    assert_eq!(names(&report), ["Ada"]);
+    assert_eq!(report.participants[0].identity, "id-Ada");
+
+    let mut bo = Person::join(&url, "reported", "Bo", [40, 180, 60], 660.0);
+    let report = next(&mut reports).await;
+    assert_eq!(names(&report), ["Ada", "Bo"]);
+
+    bo.call.leave();
+    bo.until("bo ended", |p| p.seen.contains(&CallEvent::Ended(None)))
+        .await;
+    let report = next(&mut reports).await;
+    assert_eq!(names(&report), ["Ada"]);
+
+    ada.call.leave();
+    ada.until("ada ended", |p| p.seen.contains(&CallEvent::Ended(None)))
+        .await;
+    let report = next(&mut reports).await;
+    assert_eq!(report.room, "reported");
+    assert!(report.participants.is_empty(), "{report:?}");
 }
