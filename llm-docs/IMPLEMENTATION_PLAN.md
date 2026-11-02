@@ -422,7 +422,8 @@ slice finishes them.
   - [ ] Encoding and subscriber handling
 - [ ] 5.7 Camera video and adaptive quality
   - [ ] Camera adapters
-  - [ ] Codec selection with licensing review (H.264 through OpenH264 from source for the MVP; its patent question is open, D42)
+  - [ ] Codec selection with licensing review (H.264 through OpenH264 from source, kept by the owner on 2026-11-02; the owner signs the AVC pool's licence, D42)
+  - [ ] Pure-Rust H.264 encoder and decoder to replace OpenH264 behind `VideoEncoder`/`VideoDecoder` (the owner's wish, 2026-11-02; after the MVP)
   - [ ] Adaptive quality and per-subscriber layers
 - [ ] 5.8 Drop-in UI
   - [ ] Persistent dock that remains available while navigating
