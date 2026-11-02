@@ -31,8 +31,9 @@ pub trait VideoSource {
 /// Which source to open.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VideoInput {
-    /// The system's first camera.
-    Camera,
+    /// A camera: the one called `name` when it is there and opens, otherwise the first that
+    /// opens and gives a picture (webcams before raw laptop sensors).
+    Camera { name: Option<String> },
     /// A moving pattern on a background of one color (for tests, and machines without a camera).
     TestPattern { color: [u8; 3] },
 }
@@ -41,7 +42,7 @@ impl VideoInput {
     /// Opens the source. Call it on the thread that will read it.
     pub fn open(&self) -> Result<Box<dyn VideoSource>, SourceError> {
         match self {
-            VideoInput::Camera => open_camera(),
+            VideoInput::Camera { name } => open_camera(name.as_deref()),
             VideoInput::TestPattern { color } => Ok(Box::new(TestPattern::new(*color))),
         }
     }
@@ -93,14 +94,28 @@ impl VideoSource for TestPattern {
     }
 }
 
+/// The cameras to choose from, by name: one entry per name (a webcam's infrared or metadata
+/// devices share its name), without raw sensor feeds. Opening a camera by one of these names tries
+/// every device of that name. Empty without camera support.
+pub fn cameras() -> Vec<String> {
+    #[cfg(feature = "camera")]
+    {
+        camera::names()
+    }
+    #[cfg(not(feature = "camera"))]
+    {
+        Vec::new()
+    }
+}
+
 #[cfg(not(feature = "camera"))]
-fn open_camera() -> Result<Box<dyn VideoSource>, SourceError> {
+fn open_camera(_name: Option<&str>) -> Result<Box<dyn VideoSource>, SourceError> {
     Err(SourceError::Unsupported)
 }
 
 #[cfg(feature = "camera")]
-fn open_camera() -> Result<Box<dyn VideoSource>, SourceError> {
-    camera::Camera::open().map(|camera| Box::new(camera) as Box<dyn VideoSource>)
+fn open_camera(name: Option<&str>) -> Result<Box<dyn VideoSource>, SourceError> {
+    camera::Camera::open(name).map(|camera| Box::new(camera) as Box<dyn VideoSource>)
 }
 
 #[cfg(feature = "camera")]
@@ -142,16 +157,68 @@ mod camera {
         true
     }
 
+    /// See [`super::cameras`].
+    pub fn names() -> Vec<String> {
+        let cameras = match nokhwa::query(ApiBackend::Auto) {
+            Ok(cameras) => cameras,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not list cameras");
+                return Vec::new();
+            }
+        };
+        let mut names: Vec<String> = Vec::new();
+        for info in cameras {
+            let name = info.human_name();
+            if !is_raw_sensor(&name) && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
+    }
+
     impl Camera {
-        pub fn open() -> Result<Camera, SourceError> {
+        /// Opens the camera called `preferred` if it opens, otherwise the first that does.
+        pub fn open(preferred: Option<&str>) -> Result<Camera, SourceError> {
             if !permitted() {
                 return Err(SourceError::Camera(
                     "Lazy is not allowed to use the camera".into(),
                 ));
             }
-            let cameras = nokhwa::query(ApiBackend::Auto).map_err(error)?;
-            let first = cameras.first().ok_or(SourceError::NoCamera)?;
-            let index = match first.index() {
+            let mut cameras = nokhwa::query(ApiBackend::Auto).map_err(error)?;
+            if cameras.is_empty() {
+                return Err(SourceError::NoCamera);
+            }
+            // The chosen camera first. Raw sensor feeds (built-in laptop cameras behind an image
+            // processor) last: they list as cameras but give no usable picture without libcamera
+            // or PipeWire.
+            cameras.sort_by_key(|info| {
+                let name = info.human_name();
+                (Some(name.as_str()) != preferred, is_raw_sensor(&name))
+            });
+            let mut first_failure = None;
+            for info in &cameras {
+                let name = info.human_name();
+                match Self::open_one(info.index()) {
+                    Ok(camera) => {
+                        tracing::info!(camera = %name, "camera chosen");
+                        return Ok(camera);
+                    }
+                    Err(e) => {
+                        tracing::info!(camera = %name, error = %e, "camera skipped");
+                        first_failure.get_or_insert(format!("{name}: {e}"));
+                    }
+                }
+            }
+            let failure = first_failure.unwrap_or_default();
+            Err(SourceError::Camera(if cameras.len() == 1 {
+                failure
+            } else {
+                format!("none of the {} cameras opened ({failure})", cameras.len())
+            }))
+        }
+
+        fn open_one(index: &CameraIndex) -> Result<Camera, SourceError> {
+            let index = match index {
                 CameraIndex::Index(i) => CameraIndex::Index(*i),
                 CameraIndex::String(s) => CameraIndex::String(s.clone()),
             };
@@ -177,6 +244,14 @@ mod camera {
             tracing::info!(format = ?camera.camera_format(), "camera open");
             Ok(Camera { camera })
         }
+    }
+
+    /// Whether a camera's name says it is a raw sensor feed rather than a picture: the capture
+    /// nodes of Intel's IPU6 and later image processors ("Intel IPU6 ISYS Capture 0"), which need
+    /// libcamera or Intel's camera software to make an image.
+    pub(super) fn is_raw_sensor(name: &str) -> bool {
+        let name = name.to_ascii_lowercase();
+        name.contains("isys") || name.contains(" ipu")
     }
 
     /// The pixel formats a camera frame can be turned into a picture from.
@@ -252,6 +327,18 @@ mod camera {
 
         fn format(width: u32, height: u32, frame: FrameFormat, fps: u32) -> CameraFormat {
             CameraFormat::new(Resolution::new(width, height), frame, fps)
+        }
+
+        #[test]
+        fn raw_sensor_feeds_are_told_from_webcams() {
+            assert!(is_raw_sensor("Intel IPU6 ISYS Capture 0"));
+            assert!(is_raw_sensor("Intel IPU7 ISYS Capture 12"));
+            assert!(!is_raw_sensor("Logitech BRIO"));
+            assert!(
+                !is_raw_sensor("Intel MIPI Camera"),
+                "the processed loopback works"
+            );
+            assert!(!is_raw_sensor("Integrated Camera: Integrated C"));
         }
 
         #[test]

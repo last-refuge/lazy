@@ -155,6 +155,8 @@ pub enum Change {
     },
     /// `ClientCore::drop_in` or `ClientCore::drop_in_error` changed.
     DropInChanged,
+    /// `ClientCore::media_devices` or `ClientCore::device_choices` changed.
+    MediaDevicesChanged,
     /// `ClientCore::link_previews` of this message arrived.
     PreviewsChanged {
         message: MessageId,

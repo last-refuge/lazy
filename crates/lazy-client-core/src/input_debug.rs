@@ -352,6 +352,19 @@ impl fmt::Debug for Input {
             Input::SetDropInMuted(muted) => f.debug_tuple("SetDropInMuted").field(muted).finish(),
             Input::SetDropInVideo(on) => f.debug_tuple("SetDropInVideo").field(on).finish(),
             Input::DismissDropInError => f.write_str("DismissDropInError"),
+            Input::ListMediaDevices => f.write_str("ListMediaDevices"),
+            // Device names stay out of logs.
+            Input::MediaDevicesListed(devices) => f
+                .debug_struct("MediaDevicesListed")
+                .field("cameras", &devices.cameras.len())
+                .field("microphones", &devices.microphones.len())
+                .field("speakers", &devices.speakers.len())
+                .finish(),
+            Input::ChooseDevice { kind, id } => f
+                .debug_struct("ChooseDevice")
+                .field("kind", kind)
+                .field("automatic", &id.is_none())
+                .finish(),
             // Names and device descriptions stay out of logs.
             Input::DropInReport { session, report } => {
                 let kind = match report {

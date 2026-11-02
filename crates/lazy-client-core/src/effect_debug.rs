@@ -333,13 +333,14 @@ impl fmt::Debug for Effect {
                 conversation,
                 muted,
                 video_on,
+                devices: _,
             } => f
                 .debug_struct("JoinDropIn")
                 .field("session", session)
                 .field("conversation", conversation)
                 .field("muted", muted)
                 .field("video_on", video_on)
-                .finish(),
+                .finish_non_exhaustive(),
             Effect::LeaveDropIn { session } => f
                 .debug_struct("LeaveDropIn")
                 .field("session", session)
@@ -354,6 +355,15 @@ impl fmt::Debug for Effect {
                 .field("session", session)
                 .field("on", on)
                 .finish(),
+            // Device names stay out of logs.
+            Effect::SetDropInDevice { session, kind, id } => f
+                .debug_struct("SetDropInDevice")
+                .field("session", session)
+                .field("kind", kind)
+                .field("automatic", &id.is_none())
+                .finish(),
+            Effect::ListMediaDevices => f.write_str("ListMediaDevices"),
+            Effect::PersistDeviceChoices(_) => f.write_str("PersistDeviceChoices"),
             Effect::LoadPreviews { message, revision } => f
                 .debug_struct("LoadPreviews")
                 .field("message", message)

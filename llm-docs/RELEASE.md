@@ -4,7 +4,7 @@ The desktop client ships as installers for Linux, macOS, and Windows, built by a
 by hand (like CI, it never runs on a push): **Actions, release, Run workflow**, or
 
 ```sh
-gh workflow run release -f version=0.10.1 -f publish=true
+gh workflow run release -f version=0.10.2 -f publish=true
 ```
 
 `version` is stamped into the apps (Help, Diagnostics shows it) and into the file names;
@@ -64,6 +64,13 @@ someone drops in.
 Release 0.10.1 (2026-11-02) fixes Start video on cameras without a 640x480 YUYV mode (common on
 laptop and HD webcams), which 0.10.0 refused with "Failed to Fufill" (`VERIFICATION.md`). The
 protocol is still 14 and the server is unchanged.
+
+Release 0.10.2 (2026-11-02) adds a Devices menu to drop-ins (camera, microphone, speakers; the
+choice switches the call and is remembered on the computer) and makes "Automatic" try every
+camera, webcams before raw laptop sensor feeds, which 0.10.1 did not (it tried only the first
+camera Linux listed, an Intel IPU6 sensor feed on the owner's laptop). On Linux, audio devices
+come from PulseAudio when a server answers. Buttons are square with slightly rounded corners
+instead of pills. The protocol is still 14 and the server is unchanged.
 
 ## What you get
 

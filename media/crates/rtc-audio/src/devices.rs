@@ -1,5 +1,8 @@
-//! The default microphone and speakers through cpal. Each stream lives on its own thread (some
-//! systems tie a stream to the thread that made it) until its [`StopOnDrop`] is dropped.
+//! Microphones and speakers through cpal. Each stream lives on its own thread (some systems tie a
+//! stream to the thread that made it) until its [`StopOnDrop`] is dropped.
+//!
+//! On Linux, cpal's default host is PulseAudio when a server answers (PipeWire desktops run one):
+//! its devices are the ones the system's sound settings show, by name. Without one it is ALSA.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{SyncSender, sync_channel};
@@ -9,12 +12,72 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
 
 use crate::{
-    AudioError, CAPTURE_QUEUE, Capture, FRAME_SAMPLES, Mixer, Playback, Resampler, SAMPLE_RATE,
-    StopOnDrop, offer,
+    AudioDevice, AudioError, CAPTURE_QUEUE, Capture, FRAME_SAMPLES, Mixer, Playback, Resampler,
+    SAMPLE_RATE, StopOnDrop, offer,
 };
 
 fn device_error(e: impl std::fmt::Display) -> AudioError {
     AudioError::Device(e.to_string())
+}
+
+/// The inputs (`input`) or outputs to choose from. PulseAudio's monitor sources (what an output
+/// plays, as an input) are not microphones and are left out.
+pub(crate) fn list(input: bool) -> Vec<AudioDevice> {
+    let host = cpal::default_host();
+    let devices = if input {
+        host.input_devices().map(|d| d.collect::<Vec<_>>())
+    } else {
+        host.output_devices().map(|d| d.collect::<Vec<_>>())
+    };
+    let devices = match devices {
+        Ok(devices) => devices,
+        Err(e) => {
+            tracing::warn!(error = %e, input, "could not list audio devices");
+            return Vec::new();
+        }
+    };
+    let mut listed: Vec<AudioDevice> = Vec::new();
+    for device in devices {
+        let (Ok(id), Ok(description)) = (device.id(), device.description()) else {
+            continue;
+        };
+        let id = id.to_string();
+        // ALSA's "null" device discards or makes silence: never what anyone means.
+        if (input && id.ends_with(".monitor"))
+            || id == "alsa:null"
+            || listed.iter().any(|d| d.id == id)
+        {
+            continue;
+        }
+        listed.push(AudioDevice {
+            id,
+            name: description.name().to_owned(),
+        });
+    }
+    listed
+}
+
+/// The device with this id when it is there, otherwise the default input or output.
+fn find(host: &cpal::Host, id: Option<&str>, input: bool) -> Option<cpal::Device> {
+    let chosen = id
+        .and_then(|id| id.parse::<cpal::DeviceId>().ok())
+        .and_then(|id| host.device_by_id(&id));
+    if chosen.is_none()
+        && let Some(id) = id
+    {
+        tracing::info!(
+            device = id,
+            input,
+            "chosen audio device not found; using the default"
+        );
+    }
+    chosen.or_else(|| {
+        if input {
+            host.default_input_device()
+        } else {
+            host.default_output_device()
+        }
+    })
 }
 
 /// Runs `open` on a new thread, keeps what it opened there until stopped, and reports whether it
@@ -45,12 +108,10 @@ fn on_own_thread<S: 'static>(
     Ok(StopOnDrop(Some(stop)))
 }
 
-pub(crate) fn microphone() -> Result<Capture, AudioError> {
+pub(crate) fn microphone(id: Option<String>) -> Result<Capture, AudioError> {
     let (frames_out, frames) = sync_channel(CAPTURE_QUEUE);
     let stop = on_own_thread("rtc-microphone", move || {
-        let device = cpal::default_host()
-            .default_input_device()
-            .ok_or(AudioError::NoInput)?;
+        let device = find(&cpal::default_host(), id.as_deref(), true).ok_or(AudioError::NoInput)?;
         let supported = device.default_input_config().map_err(device_error)?;
         let format = supported.sample_format();
         let config: StreamConfig = supported.into();
@@ -112,11 +173,10 @@ where
         .map_err(device_error)
 }
 
-pub(crate) fn speakers(mixer: Mixer) -> Result<Playback, AudioError> {
+pub(crate) fn speakers(mixer: Mixer, id: Option<String>) -> Result<Playback, AudioError> {
     let stop = on_own_thread("rtc-speakers", move || {
-        let device = cpal::default_host()
-            .default_output_device()
-            .ok_or(AudioError::NoOutput)?;
+        let device =
+            find(&cpal::default_host(), id.as_deref(), false).ok_or(AudioError::NoOutput)?;
         let supported = device.default_output_config().map_err(device_error)?;
         let format = supported.sample_format();
         let config: StreamConfig = supported.into();

@@ -4,6 +4,7 @@
 //! [`DropInReport`]s. Frames never pass through the core.
 
 use lazy_domain::{ConversationId, UserId};
+use serde::{Deserialize, Serialize};
 
 /// Where a drop-in this person is in stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +46,73 @@ pub struct DropIn {
 impl DropIn {
     pub fn is_speaking(&self, peer: Option<u64>) -> bool {
         self.speaking.contains(&peer)
+    }
+}
+
+/// A kind of device a drop-in uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceKind {
+    Camera,
+    Microphone,
+    Speakers,
+}
+
+/// A camera, microphone, or speakers to choose from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaDevice {
+    /// What the runtime knows it by (for a camera, its name); saved as the choice.
+    pub id: String,
+    /// For people.
+    pub name: String,
+}
+
+/// The devices this computer offers, as last listed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MediaDevices {
+    pub cameras: Vec<MediaDevice>,
+    pub microphones: Vec<MediaDevice>,
+    pub speakers: Vec<MediaDevice>,
+}
+
+impl MediaDevices {
+    pub fn of(&self, kind: DeviceKind) -> &[MediaDevice] {
+        match kind {
+            DeviceKind::Camera => &self.cameras,
+            DeviceKind::Microphone => &self.microphones,
+            DeviceKind::Speakers => &self.speakers,
+        }
+    }
+}
+
+/// The devices drop-ins use on this computer, by [`MediaDevice::id`]; `None` is automatic (the
+/// system's default, or the first camera that works). A preference of the device, not the
+/// account, like the appearance: kept across sign-out, never synced. A chosen device that is not
+/// there when a call starts falls back to automatic.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceChoices {
+    #[serde(default)]
+    pub camera: Option<String>,
+    #[serde(default)]
+    pub microphone: Option<String>,
+    #[serde(default)]
+    pub speakers: Option<String>,
+}
+
+impl DeviceChoices {
+    pub fn get(&self, kind: DeviceKind) -> Option<&str> {
+        match kind {
+            DeviceKind::Camera => self.camera.as_deref(),
+            DeviceKind::Microphone => self.microphone.as_deref(),
+            DeviceKind::Speakers => self.speakers.as_deref(),
+        }
+    }
+
+    pub fn set(&mut self, kind: DeviceKind, id: Option<String>) {
+        match kind {
+            DeviceKind::Camera => self.camera = id,
+            DeviceKind::Microphone => self.microphone = id,
+            DeviceKind::Speakers => self.speakers = id,
+        }
     }
 }
 

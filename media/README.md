@@ -26,6 +26,11 @@ SFU was started with) and gives the client the SFU's address and the token; see
 Building on Linux needs ALSA's headers (`libasound2-dev`) and libclang (`libclang-dev`, for the
 camera bindings); the SFU alone needs neither.
 
-Not here yet: echo cancellation and noise suppression, packet-loss concealment, device choice,
+Devices: `rtc_video::source::cameras()`, `rtc_audio::microphones()` and `rtc_audio::speakers()`
+list what a machine offers (on Linux, audio through PulseAudio when a server answers, else ALSA);
+a call starts with any of them and switches mid-call (`Call::set_video_input`, `set_audio_input`,
+`set_speakers`). `cargo run -p rtc-client --features devices --example devices` prints the lists.
+
+Not here yet: echo cancellation and noise suppression, packet-loss concealment,
 reconnecting after a network change, TURN and TCP for restrictive networks, simulcast, screen
 sharing, and the SFU's webhooks and admin API.

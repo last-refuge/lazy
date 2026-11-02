@@ -257,16 +257,8 @@ async fn session(
     .ok()
     .flatten();
     let mixer = Mixer::new();
-    let _playback = if config.speakers {
-        let playing = mixer.clone();
-        match tokio::task::spawn_blocking(move || Playback::start(playing)).await {
-            Ok(Ok(playback)) => Some(playback),
-            Ok(Err(e)) => {
-                events(CallEvent::DeviceProblem(format!("Speakers: {e}")));
-                None
-            }
-            Err(_) => None,
-        }
+    let mut playback = if config.speakers {
+        start_playback(&mixer, config.speaker_device.clone(), events).await
     } else {
         None
     };
@@ -461,6 +453,31 @@ async fn session(
                         local.video_on.store(on, Ordering::SeqCst);
                         true
                     }
+                    Some(Command::SetVideoInput(input)) => {
+                        local.switch_video(input);
+                        false
+                    }
+                    Some(Command::SetAudioInput(input)) => {
+                        // The old encoder thread ends (and closes its microphone) when its
+                        // receiver is dropped here.
+                        drop(audio_out.take());
+                        let (audio_local, audio_notices) = (local.clone(), notice_sender.clone());
+                        audio_out = tokio::task::spawn_blocking(move || {
+                            media::local_audio(input, audio_local, audio_notices)
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        false
+                    }
+                    Some(Command::SetSpeakers(device)) => {
+                        if config.speakers {
+                            // One output at a time: the old one stops first.
+                            drop(playback.take());
+                            playback = start_playback(&mixer, device, events).await;
+                        }
+                        false
+                    }
                     Some(Command::Leave) | None => {
                         ws_out.send(Message::Text(ClientMessage::Leave.to_json().into())).await.ok();
                         ws_out.close().await.ok();
@@ -617,6 +634,23 @@ fn set_tracks(
 }
 
 /// Stops the local threads when the session ends, however it ends.
+/// Starts the speakers, or says why they could not start.
+async fn start_playback(
+    mixer: &Mixer,
+    device: Option<String>,
+    events: &Events,
+) -> Option<Playback> {
+    let playing = mixer.clone();
+    match tokio::task::spawn_blocking(move || Playback::start(playing, device)).await {
+        Ok(Ok(playback)) => Some(playback),
+        Ok(Err(e)) => {
+            events(CallEvent::DeviceProblem(format!("Speakers: {e}")));
+            None
+        }
+        Err(_) => None,
+    }
+}
+
 struct StopLocal(Local);
 
 impl Drop for StopLocal {

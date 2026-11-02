@@ -8,8 +8,11 @@
 //! - [`Mixer`]: what everyone else says, each with a small buffer to ride out jitter, summed for
 //!   the speakers ([`Playback`]).
 //!
+//! Devices are chosen by the ids [`microphones`] and [`speakers`] list; an id that is not there
+//! (unplugged) means the system default.
+//!
 //! Not here yet (M2 in `llm-docs/DROP_INS.md`): echo cancellation, noise suppression, packet-loss
-//! concealment, device choice. Until then, headphones.
+//! concealment. Until then, headphones.
 
 pub mod opus;
 mod resample;
@@ -46,11 +49,45 @@ pub enum AudioError {
     Codec(String),
 }
 
+/// A microphone or speakers to choose from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioDevice {
+    /// Stable across runs and replugging where the system allows; give it back to choose it.
+    pub id: String,
+    /// For people.
+    pub name: String,
+}
+
+/// The microphones to choose from. Empty without device support.
+pub fn microphones() -> Vec<AudioDevice> {
+    #[cfg(feature = "devices")]
+    {
+        devices::list(true)
+    }
+    #[cfg(not(feature = "devices"))]
+    {
+        Vec::new()
+    }
+}
+
+/// The speakers (and headphones) to choose from. Empty without device support.
+pub fn speakers() -> Vec<AudioDevice> {
+    #[cfg(feature = "devices")]
+    {
+        devices::list(false)
+    }
+    #[cfg(not(feature = "devices"))]
+    {
+        Vec::new()
+    }
+}
+
 /// Where a client's sound comes from.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AudioInput {
-    /// The system's default microphone.
-    Microphone,
+    /// A microphone: the one with this [`AudioDevice::id`] when it is there, otherwise the
+    /// system's default.
+    Microphone { device: Option<String> },
     /// A sine tone (for tests, and machines without a microphone).
     Tone { hz: f32 },
     /// Silence: nothing is sent.
@@ -81,13 +118,14 @@ impl AudioInput {
         match self {
             AudioInput::None => Ok(None),
             AudioInput::Tone { hz } => Ok(Some(tone(*hz))),
-            AudioInput::Microphone => {
+            AudioInput::Microphone { device } => {
                 #[cfg(feature = "devices")]
                 {
-                    devices::microphone().map(Some)
+                    devices::microphone(device.clone()).map(Some)
                 }
                 #[cfg(not(feature = "devices"))]
                 {
+                    let _ = device;
                     Err(AudioError::Unsupported)
                 }
             }
@@ -224,15 +262,16 @@ pub struct Playback {
 }
 
 impl Playback {
-    /// Plays `mixer` on the default output device.
-    pub fn start(mixer: Mixer) -> Result<Playback, AudioError> {
+    /// Plays `mixer` on the speakers with this [`AudioDevice::id`] when they are there,
+    /// otherwise on the system's default output.
+    pub fn start(mixer: Mixer, device: Option<String>) -> Result<Playback, AudioError> {
         #[cfg(feature = "devices")]
         {
-            devices::speakers(mixer)
+            devices::speakers(mixer, device)
         }
         #[cfg(not(feature = "devices"))]
         {
-            let _ = mixer;
+            let _ = (mixer, device);
             Err(AudioError::Unsupported)
         }
     }

@@ -1,6 +1,10 @@
 //! The drop-in stage: while this person is in a drop-in, a band at the top of the main column with a
 //! tile per person (their video, or their avatar while it is off) and the controls (mute, camera,
-//! leave). After a drop-in fails, the band says why until dismissed.
+//! devices, leave). After a drop-in fails, the band says why until dismissed.
+//!
+//! Devices opens a menu with a tab each for the camera, microphone, and speakers: "Automatic" and
+//! every device the computer offers, the one in use marked. Choosing switches the call at once
+//! and is remembered on this computer for the next.
 //!
 //! Frames come from the runtime's [`FrameStore`] (shared through [`AppModel::frames`]), never
 //! through the core. While a drop-in runs, a timer checks the store and redraws when a frame
@@ -16,12 +20,15 @@ use gpui::{
     AnyElement, Context, Entity, FocusHandle, FontWeight, ObjectFit, RenderImage, Role,
     SharedString, Subscription, Task, Window, div, img, px,
 };
-use lazy_client_core::{DropIn, DropInStatus, Input};
+use lazy_client_core::{
+    ClientCore, DeviceChoices, DeviceKind, DropIn, DropInStatus, Input, MediaDevices,
+};
 use rtc_video::{FrameStore, TileKey};
 
 use crate::app_model::AppModel;
 use crate::avatar::Avatar;
 use crate::form::{self, ButtonKind};
+use crate::menu::{Menu, MenuEvent, MenuItem};
 use crate::theme::Theme;
 
 /// A tile's size: 4:3, like the frames.
@@ -35,7 +42,13 @@ pub struct DropInView {
     mute_focus: FocusHandle,
     video_focus: FocusHandle,
     leave_focus: FocusHandle,
+    devices_focus: FocusHandle,
     dismiss_focus: FocusHandle,
+    /// The open Devices menu, what each of its items chooses, and the lists it was made from.
+    devices_menu: Option<Entity<Menu>>,
+    menu_choices: HashMap<SharedString, (DeviceKind, Option<String>)>,
+    menu_made_from: Option<(MediaDevices, DeviceChoices)>,
+    _menu_subscription: Option<Subscription>,
     /// The image drawn for each tile, and the frame serial it was made from.
     images: HashMap<TileKey, (u64, Arc<RenderImage>)>,
     /// Images replaced since the last frame drawn, to drop from the renderer.
@@ -50,6 +63,7 @@ impl DropInView {
     pub fn new(model: Entity<AppModel>, cx: &mut Context<Self>) -> Self {
         let observed = cx.observe(&model, |this, _, cx| {
             this.follow_frames(cx);
+            this.refresh_devices_menu(cx);
             cx.notify();
         });
         let mut view = Self {
@@ -57,7 +71,12 @@ impl DropInView {
             mute_focus: cx.focus_handle().tab_stop(true),
             video_focus: cx.focus_handle().tab_stop(true),
             leave_focus: cx.focus_handle().tab_stop(true),
+            devices_focus: cx.focus_handle().tab_stop(true),
             dismiss_focus: cx.focus_handle().tab_stop(true),
+            devices_menu: None,
+            menu_choices: HashMap::new(),
+            menu_made_from: None,
+            _menu_subscription: None,
             images: HashMap::new(),
             retired: Vec::new(),
             drawn_serial: 0,
@@ -109,6 +128,115 @@ impl DropInView {
                 }
             }
         }));
+    }
+
+    /// The Devices menu's tabs, and what each item chooses.
+    #[allow(clippy::type_complexity)]
+    fn device_tabs(
+        core: &ClientCore,
+    ) -> (
+        Vec<(SharedString, Vec<MenuItem>)>,
+        HashMap<SharedString, (DeviceKind, Option<String>)>,
+    ) {
+        let devices = core.media_devices();
+        let chosen = core.device_choices();
+        let mut choices = HashMap::new();
+        let tabs = [
+            (
+                DeviceKind::Camera,
+                "Camera",
+                "camera",
+                "The first camera that works",
+            ),
+            (
+                DeviceKind::Microphone,
+                "Microphone",
+                "microphone",
+                "The system's default",
+            ),
+            (
+                DeviceKind::Speakers,
+                "Speakers",
+                "speakers",
+                "The system's default",
+            ),
+        ]
+        .into_iter()
+        .map(|(kind, title, key, automatic)| {
+            let current = chosen.get(kind);
+            let listed = devices.of(kind);
+            // A chosen device that is not listed (unplugged) is not in use: automatic is.
+            let in_use_listed = current.is_some_and(|id| listed.iter().any(|d| d.id == id));
+            let mark = |item: MenuItem, on: bool| if on { item.shortcut("In use") } else { item };
+            let auto_id = SharedString::from(format!("{key}-auto"));
+            choices.insert(auto_id.clone(), (kind, None));
+            let mut items = vec![mark(
+                MenuItem::new(auto_id, "Automatic").detail(automatic),
+                !in_use_listed,
+            )];
+            for (index, device) in listed.iter().enumerate() {
+                let id = SharedString::from(format!("{key}-{index}"));
+                choices.insert(id.clone(), (kind, Some(device.id.clone())));
+                items.push(mark(
+                    MenuItem::new(id, device.name.clone()),
+                    current == Some(device.id.as_str()),
+                ));
+            }
+            if listed.is_empty() {
+                items.push(MenuItem::new(format!("{key}-none"), "None found").enabled(false));
+            }
+            (SharedString::from(title), items)
+        })
+        .collect();
+        (tabs, choices)
+    }
+
+    fn open_devices_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Plugged-in devices change: list them again each time.
+        self.model
+            .update(cx, |m, cx| m.dispatch(Input::ListMediaDevices, cx));
+        let core = self.model.read(cx).core();
+        let (tabs, choices) = Self::device_tabs(core);
+        self.menu_made_from = Some((core.media_devices().clone(), core.device_choices().clone()));
+        self.menu_choices = choices;
+        let menu = cx.new(|cx| Menu::tabbed("drop-in-devices", tabs, cx));
+        self._menu_subscription = Some(cx.subscribe(&menu, |this, _, event: &MenuEvent, cx| {
+            if let MenuEvent::Select(id) = event
+                && let Some((kind, choice)) = this.menu_choices.get(id).cloned()
+            {
+                this.model.update(cx, |m, cx| {
+                    m.dispatch(Input::ChooseDevice { kind, id: choice }, cx)
+                });
+            }
+            this.devices_menu = None;
+            this.menu_made_from = None;
+            cx.notify();
+        }));
+        menu.update(cx, |menu, cx| menu.open(window, cx));
+        self.devices_menu = Some(menu);
+        cx.notify();
+    }
+
+    /// Keeps an open Devices menu in step with the lists (the fresh listing arrives after it
+    /// opens), and closes it when the drop-in ends.
+    fn refresh_devices_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(menu) = self.devices_menu.clone() else {
+            return;
+        };
+        let core = self.model.read(cx).core();
+        if core.drop_in().is_none() {
+            self.devices_menu = None;
+            self.menu_made_from = None;
+            return;
+        }
+        let now = (core.media_devices().clone(), core.device_choices().clone());
+        if self.menu_made_from.as_ref() == Some(&now) {
+            return;
+        }
+        let (tabs, choices) = Self::device_tabs(core);
+        self.menu_made_from = Some(now);
+        self.menu_choices = choices;
+        menu.update(cx, |menu, cx| menu.replace_tabs(tabs, cx));
     }
 
     /// The image for `key`'s newest frame, made once per frame.
@@ -211,8 +339,9 @@ impl DropInView {
             .into_any_element()
     }
 
-    fn controls(&self, theme: &Theme, drop_in: &DropIn) -> AnyElement {
+    fn controls(&self, theme: &Theme, drop_in: &DropIn, cx: &mut Context<Self>) -> AnyElement {
         let model = self.model.downgrade();
+        let this = cx.entity().downgrade();
         let (mute_to, video_to, leave_to) = (model.clone(), model.clone(), model);
         let muted = drop_in.muted;
         let video_on = drop_in.video_on;
@@ -250,6 +379,25 @@ impl DropInView {
                         .ok();
                 },
             ))
+            .child(
+                div()
+                    .relative()
+                    .child(form::button(
+                        theme,
+                        "drop-in-devices",
+                        "Devices",
+                        ButtonKind::Secondary,
+                        true,
+                        &self.devices_focus,
+                        move |window, cx| {
+                            this.update(cx, |view, cx| view.open_devices_menu(window, cx))
+                                .ok();
+                        },
+                    ))
+                    .children(self.devices_menu.clone().map(|menu| {
+                        gpui::deferred(div().absolute().top(px(44.)).right_0().child(menu))
+                    })),
+            )
             .child(form::button(
                 theme,
                 "drop-in-leave",
@@ -409,7 +557,7 @@ impl Render for DropInView {
                                 None => status,
                             }),
                     )
-                    .child(self.controls(&theme, &drop_in)),
+                    .child(self.controls(&theme, &drop_in, cx)),
             )
             .child(
                 div()

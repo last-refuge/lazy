@@ -3,7 +3,7 @@
 use lazy_domain::ConversationId;
 
 use super::*;
-use crate::drop_in::{DropIn, DropInReport, DropInStatus};
+use crate::drop_in::{DeviceChoices, DeviceKind, DropIn, DropInReport, DropInStatus, MediaDevices};
 
 impl ClientCore {
     /// The drop-in this person is in, if any.
@@ -14,6 +14,41 @@ impl ClientCore {
     /// Why the last drop-in ended, until dismissed or another is joined.
     pub fn drop_in_error(&self) -> Option<&str> {
         self.drop_in_error.as_deref()
+    }
+
+    /// The cameras, microphones, and speakers this device offered when last listed
+    /// (`Input::ListMediaDevices`).
+    pub fn media_devices(&self) -> &MediaDevices {
+        &self.media_devices
+    }
+
+    /// The devices drop-ins use on this device.
+    pub fn device_choices(&self) -> &DeviceChoices {
+        &self.device_choices
+    }
+
+    pub(super) fn media_devices_listed(&mut self, devices: MediaDevices, out: &mut Output) {
+        if self.media_devices != devices {
+            self.media_devices = devices;
+            out.changes.push(Change::MediaDevicesChanged);
+        }
+    }
+
+    pub(super) fn choose_device(&mut self, kind: DeviceKind, id: Option<String>, out: &mut Output) {
+        if self.device_choices.get(kind) == id.as_deref() {
+            return;
+        }
+        self.device_choices.set(kind, id.clone());
+        out.effects
+            .push(Effect::PersistDeviceChoices(self.device_choices.clone()));
+        if self.drop_in.is_some() {
+            out.effects.push(Effect::SetDropInDevice {
+                session: self.drop_in_session,
+                kind,
+                id,
+            });
+        }
+        out.changes.push(Change::MediaDevicesChanged);
     }
 
     pub(super) fn join_drop_in(&mut self, conversation: ConversationId, out: &mut Output) {
@@ -44,7 +79,10 @@ impl ClientCore {
             conversation,
             muted: drop_in.muted,
             video_on: drop_in.video_on,
+            devices: self.device_choices.clone(),
         });
+        // The device menu is ready by the time someone opens it.
+        out.effects.push(Effect::ListMediaDevices);
         self.drop_in = Some(drop_in);
         out.changes.push(Change::DropInChanged);
     }

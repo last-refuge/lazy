@@ -385,6 +385,15 @@ pub enum Input {
     SetDropInVideo(bool),
     /// Forget why the last drop-in ended.
     DismissDropInError,
+    /// Ask which cameras, microphones, and speakers this device offers now (answered with
+    /// `MediaDevicesListed`).
+    ListMediaDevices,
+    MediaDevicesListed(crate::MediaDevices),
+    /// Use this device for drop-ins from now on (`None`: automatic), in the current one too.
+    ChooseDevice {
+        kind: crate::DeviceKind,
+        id: Option<String>,
+    },
     /// What the runtime says about the call of join number `session`.
     DropInReport {
         session: u64,

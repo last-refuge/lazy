@@ -10,6 +10,7 @@ mod api;
 mod appearance;
 mod blob;
 mod config;
+mod device_choices;
 mod drop_in;
 mod files;
 mod images;

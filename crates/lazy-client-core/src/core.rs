@@ -278,6 +278,9 @@ pub struct ClientCore {
     drop_in_error: Option<String>,
     /// Numbers each join, so reports from a call already left are ignored.
     drop_in_session: u64,
+    /// The devices drop-ins use on this device, and those it offers as last listed.
+    device_choices: crate::drop_in::DeviceChoices,
+    media_devices: crate::drop_in::MediaDevices,
     /// A token just made, for its app, until dismissed. Never cached or saved.
     app_token: Option<(lazy_domain::AppId, crate::model::SecretUrl)>,
     /// A signing secret Lazy just made, for its provider, until dismissed. Never cached or saved.
@@ -442,6 +445,8 @@ impl ClientCore {
             drop_in: None,
             drop_in_error: None,
             drop_in_session: 0,
+            device_choices: crate::drop_in::DeviceChoices::default(),
+            media_devices: crate::drop_in::MediaDevices::default(),
             created_webhook: None,
             draft_selections: HashMap::new(),
             thread_selections: HashMap::new(),
@@ -806,6 +811,9 @@ impl ClientCore {
             Input::SetDropInMuted(muted) => self.set_drop_in_muted(muted, &mut out),
             Input::SetDropInVideo(on) => self.set_drop_in_video(on, &mut out),
             Input::DismissDropInError => self.dismiss_drop_in_error(&mut out),
+            Input::ListMediaDevices => out.effects.push(Effect::ListMediaDevices),
+            Input::MediaDevicesListed(devices) => self.media_devices_listed(devices, &mut out),
+            Input::ChooseDevice { kind, id } => self.choose_device(kind, id, &mut out),
             Input::DropInReport { session, report } => {
                 self.drop_in_report(session, report, &mut out)
             }
@@ -1251,6 +1259,7 @@ impl ClientCore {
         self.restore_view(state.view);
         self.emoji_prefs = state.emoji_prefs.sanitized();
         self.appearance = state.appearance;
+        self.device_choices = state.device_choices;
         self.preferred_active = state.active_workspace;
         self.restore_recent_searches(state.recent_searches);
         self.restore_recent_conversations(state.recent_conversations);

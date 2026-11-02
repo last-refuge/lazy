@@ -428,7 +428,7 @@ slice finishes them.
 - [ ] 5.8 Drop-in UI
   - [ ] Persistent dock that remains available while navigating
   - [ ] Participant views for audio, video, and screen share
-  - [ ] Join, leave, and device controls with keyboard access and an accessibility pass
+  - [ ] Join, leave, and device controls with keyboard access and an accessibility pass (join, leave, mute, video, and the Devices menu for camera, microphone, and speakers are built and keyboard-operable; the accessibility pass and real-device checks are not done)
   - [ ] Drop-in presence in the sidebar and notifications
 - [ ] 5.9 Failure handling
   - [ ] Report and recover from media failure without interrupting text messaging

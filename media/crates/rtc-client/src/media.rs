@@ -2,9 +2,9 @@
 //! and each remote video track (decoded). They talk to the session through channels and flags,
 //! never blocking it.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -39,6 +39,8 @@ pub(crate) struct Local {
     pub muted: Arc<AtomicBool>,
     pub keyframe: Arc<AtomicBool>,
     pub stop: Arc<AtomicBool>,
+    /// A video source to switch to, taken by the camera thread.
+    pub next_video: Arc<Mutex<Option<VideoInput>>>,
 }
 
 impl Local {
@@ -48,7 +50,13 @@ impl Local {
             muted: Arc::new(AtomicBool::new(muted)),
             keyframe: Arc::new(AtomicBool::new(true)),
             stop: Arc::new(AtomicBool::new(false)),
+            next_video: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Asks the camera thread to switch to `input`.
+    pub fn switch_video(&self, input: VideoInput) {
+        *self.next_video.lock().unwrap_or_else(|e| e.into_inner()) = Some(input);
     }
 
     pub fn stop(&self) {
@@ -58,7 +66,7 @@ impl Local {
 
 /// Reads and encodes the camera while video is on; shows the preview in `frames`.
 pub(crate) fn local_video(
-    input: VideoInput,
+    mut input: VideoInput,
     local: Local,
     frames: FrameStore,
     notices: mpsc::UnboundedSender<Notice>,
@@ -76,6 +84,16 @@ pub(crate) fn local_video(
             };
             let mut source: Option<Box<dyn VideoSource>> = None;
             while !local.stop.load(Ordering::SeqCst) {
+                let next = local
+                    .next_video
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take();
+                if let Some(next) = next {
+                    // Close the old source before opening the new: a camera may allow only one.
+                    input = next;
+                    source = None;
+                }
                 if !local.video_on.load(Ordering::SeqCst) {
                     if source.take().is_some() {
                         frames.remove(TileKey::Local);

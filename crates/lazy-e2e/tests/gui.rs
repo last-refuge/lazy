@@ -645,7 +645,8 @@ fn a_gui_client_searches_and_opens_a_result_with_the_keyboard() {
 
 /// The drop-in MVP on the real views: a real SFU, a real server that hands out join tokens, and two
 /// clients whose runtimes run the calls. Each sees the other's video (a test pattern) in the
-/// drop-in stage, and turning video off and leaving reach the other side.
+/// drop-in stage, switching to another camera from the device list reaches the other side, and
+/// turning video off and leaving do too.
 #[test]
 fn two_gui_clients_see_each_other_in_a_drop_in() {
     const SECRET: &str = "an e2e secret for drop-ins, long enough";
@@ -732,6 +733,44 @@ fn two_gui_clients_see_each_other_in_a_drop_in() {
         alice.screenshot_as(&dir, "drop-in");
         bob.screenshot_as(&dir, "drop-in");
     }
+
+    // Alice picks the other (test) camera from the device list: Bob sees her picture change.
+    alice.wait_until("the devices listed", |core| {
+        core.media_devices().cameras.len() == 2
+    });
+    let second = alice.read(|core| core.media_devices().cameras[1].id.clone());
+    let alice_id = bob.read(|core| core.drop_in().unwrap().peers[0].id);
+    let bob_frames = {
+        let model = bob.model.clone();
+        bob.cx.update(|app| model.read(app).frames().clone())
+    };
+    let alice_color = |frames: &rtc_video::FrameStore| {
+        frames
+            .get(rtc_video::TileKey::Remote(alice_id))
+            .map(|tile| tile.frame.pixel(2, tile.frame.height / 2))
+    };
+    let before = alice_color(&bob_frames).expect("Alice's picture");
+    let model = alice.model.clone();
+    alice.cx.update(|app| {
+        model.update(app, |m, cx| {
+            m.dispatch(
+                lazy_client_core::Input::ChooseDevice {
+                    kind: lazy_client_core::DeviceKind::Camera,
+                    id: Some(second),
+                },
+                cx,
+            )
+        })
+    });
+    bob.wait_until("Alice's other camera", |_| {
+        alice_color(&bob_frames).is_some_and(|now| {
+            now.iter()
+                .zip(before)
+                .map(|(a, b)| u32::from(a.abs_diff(b)))
+                .sum::<u32>()
+                > 120
+        })
+    });
 
     // Bob stops his video: Alice's tile for him shows his avatar again.
     let model = bob.model.clone();

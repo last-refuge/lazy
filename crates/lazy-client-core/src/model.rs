@@ -347,6 +347,9 @@ pub struct StartupState {
     pub recent_conversations: Vec<ConversationId>,
     /// How this device looks and moves (the defaults when nothing could be read).
     pub appearance: crate::workspaces::Appearance,
+    /// The camera, microphone, and speakers chosen for drop-ins on this device (automatic when
+    /// nothing could be read).
+    pub device_choices: crate::drop_in::DeviceChoices,
     /// The workspace that was active when the app last ran (`None` when none was saved).
     pub active_workspace: Option<WorkspaceId>,
     /// Human-readable storage problems found while loading, such as a corrupt file that was set
