@@ -106,6 +106,27 @@ fn main() -> ExitCode {
             cx.set_menus(lazy_ui::commands::native_menus());
         }
 
+        lazy_ui::commands::bind_app_shortcuts(cx);
+        {
+            use lazy_ui::commands::{
+                CloseWindow, Hide, HideOthers, Minimize, Quit, ShowAll, ToggleFullScreen, Zoom,
+            };
+            cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.on_action(|_: &Hide, cx| cx.hide());
+            cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+            cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+            // The rest act on the focused window.
+            fn on_window(cx: &mut App, f: impl FnOnce(&mut gpui::Window)) {
+                if let Some(window) = cx.active_window() {
+                    window.update(cx, |_, window, _| f(window)).ok();
+                }
+            }
+            cx.on_action(|_: &CloseWindow, cx| on_window(cx, |w| w.remove_window()));
+            cx.on_action(|_: &Minimize, cx| on_window(cx, |w| w.minimize_window()));
+            cx.on_action(|_: &Zoom, cx| on_window(cx, |w| w.zoom_window()));
+            cx.on_action(|_: &ToggleFullScreen, cx| on_window(cx, |w| w.toggle_fullscreen()));
+        }
+
         let placement = window_state::restore(
             saved_window.as_ref(),
             &window_state::display_rects(cx),
