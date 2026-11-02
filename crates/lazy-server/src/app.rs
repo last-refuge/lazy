@@ -39,6 +39,8 @@ pub struct AppState {
     pub integrations: Arc<Integrations>,
     pub attachments: Arc<Attachments>,
     pub search: SearchOptions,
+    /// Who is online (D45), from the realtime connections.
+    pub presence: crate::presence::Presence,
 }
 
 /// What integrations need at run time.
@@ -264,6 +266,11 @@ pub async fn serve_all(
                 .map_err(|e| AppError::internal(format!("no local address: {e}")))?
         ),
     };
+    let presence = crate::presence::Presence::new(
+        integrations
+            .presence_grace
+            .unwrap_or(crate::presence::GRACE),
+    );
     let token = CancellationToken::new();
     let (dispatcher, dispatcher_tasks) = Dispatcher::spawn(pool.clone(), token.child_token());
     let pruner = pruner::spawn(pool.clone(), options.retention, token.child_token());
@@ -303,6 +310,7 @@ pub async fn serve_all(
         }),
         attachments: Arc::clone(&attachments),
         search,
+        presence,
     };
     if let Some(drop_ins) = &state.integrations.drop_ins {
         state.tasks.spawn(crate::drop_ins::sweep(

@@ -40,6 +40,7 @@ pub mod messages;
 pub mod notices;
 pub mod notifications;
 pub mod onboarding;
+pub mod presence;
 pub mod profile;
 pub mod provider_text;
 pub mod pruner;

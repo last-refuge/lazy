@@ -27,6 +27,19 @@ async fn two_clients_exchange_messages(pool: PgPool) {
     alice.register("alice").await;
     bob.register("bob").await;
 
+    // Each sees the other online (D45), over the real connection.
+    let bob_id = bob.read(|core| core.me().unwrap().id);
+    let alice_id = alice.read(|core| core.me().unwrap().id);
+    alice
+        .wait_until("Bob online", move |core| {
+            core.is_online(bob_id) == Some(true)
+        })
+        .await;
+    bob.wait_until("Alice online", move |core| {
+        core.is_online(alice_id) == Some(true)
+    })
+    .await;
+
     alice.send("hello bob");
     alice.wait_confirmed("hello bob").await;
     assert_eq!(world.count_messages("hello bob").await, 1);

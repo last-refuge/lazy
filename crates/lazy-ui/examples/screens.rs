@@ -1354,6 +1354,15 @@ fn reach_chat_threads(
             seq: EventSeq::ZERO,
         }),
     );
+    // Bob is online: his direct conversation shows the green dot (D45).
+    dispatch(
+        cx,
+        model,
+        Input::Frame(ServerFrame::Presence {
+            workspace_id: cast.workspace,
+            online: vec![cast.me.id, cast.bob.id],
+        }),
+    );
     let generation = recorder
         .0
         .borrow()
@@ -2735,6 +2744,15 @@ fn reach_chat_custom(
         Input::Frame(ServerFrame::CaughtUp {
             workspace_id: cast.workspace,
             seq: EventSeq::ZERO,
+        }),
+    );
+    // Bob is online: his direct conversation shows the green dot (D45).
+    dispatch(
+        cx,
+        model,
+        Input::Frame(ServerFrame::Presence {
+            workspace_id: cast.workspace,
+            online: vec![cast.me.id, cast.bob.id],
         }),
     );
     let generation = recorder

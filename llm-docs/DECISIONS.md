@@ -889,3 +889,34 @@ button while it goes on, then "Ended · 23 min · 3 people".
 **Not yet:** ringing (an incoming-call card and a sound) and declining; removing someone from a
 call when they lose access (the SFU has no admin API); a workspace setting to hide join and leave
 notices; the "drop-in thread" that collects messages sent during one.
+
+## D45. Presence: who is online
+
+Asked for by the owner, 2026-11-02: the direct conversations in the sidebar show whether the other
+person is online. **No protocol bump**: two new realtime frames that older clients cannot read and
+skip (their reader logs and ignores a frame it cannot parse), and nothing else changes.
+
+**What online means.** Connected to this server's realtime socket and subscribed to the workspace,
+on any device. There is no "away" (idle) state yet, and presence ignores a person's status and do
+not disturb.
+
+**Server** (`presence.rs`). In memory only: nothing is stored or put in the event log, so presence
+has no position and is never replayed, and a server restart starts everyone offline until their
+clients reconnect (seconds). This relies on the server running as one process (`DEPLOY.md`). Each
+workspace subscription holds a guard. Someone's first subscription announces them online at once;
+when their last one ends they are announced offline only after a grace period (15 seconds,
+`IntegrationOptions::presence_grace` in tests), so a reconnect or a replaced connection never
+flickers. Anyone in the workspace sees anyone's presence, as with Slack.
+
+**Frames.** After `caught_up`, the server sends `presence { workspace_id, online }`, the full list,
+which replaces what the client knew; then `presence_changed { workspace_id, user_id, online }` as
+people come and go. A subscriber that falls behind on changes gets the full list again.
+
+**Client.** The core keeps the list per workspace while that connection is live and forgets it when
+the connection drops (`is_online` is then `None`: unknown, not offline). The sidebar marks a
+direct conversation with a person (not an app) with a green dot on the avatar when they are online,
+a hollow ring when they are not, and nothing while it isn't known (disconnected, or an older
+server).
+
+**Not yet:** away after inactivity; presence in the people directory, profiles, the conversation
+header, or member lists; `@here` (reserved until presence existed, D14); phone clients' background presence.

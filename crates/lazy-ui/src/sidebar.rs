@@ -98,6 +98,9 @@ struct RowData {
     muted: bool,
     /// How many people are in a drop-in there now (D44); 0 when none is going on.
     in_drop_in: usize,
+    /// For a direct conversation with a person: whether they are online (D45); `None` when that
+    /// isn't known, and for groups, channels, and apps.
+    online: Option<bool>,
 }
 
 pub struct SidebarView {
@@ -214,6 +217,10 @@ impl SidebarView {
                         .drop_in
                         .as_ref()
                         .map_or(0, |live| live.participants.len()),
+                    online: other
+                        .filter(|_| conversation.kind == ConversationKind::Direct)
+                        .filter(|user| !core.is_bot(**user))
+                        .and_then(|user| core.is_online(*user)),
                 })
             })
             .collect()
@@ -290,6 +297,7 @@ impl SidebarView {
                 })
                 .into_any_element(),
             ConversationKind::Direct | ConversationKind::Group => div()
+                .relative()
                 .size(px(18.))
                 .flex_none()
                 .rounded(theme.radii.small)
@@ -310,6 +318,40 @@ impl SidebarView {
                         .to_uppercase()
                         .to_string()
                 })
+                .children(row.online.map(|online| {
+                    // Online: a filled green dot; offline: a hollow ring. Both sit on the corner,
+                    // outlined in the sidebar's color so they read against any avatar.
+                    let selector = format!(
+                        "presence-{}-{}",
+                        row.title,
+                        if online { "online" } else { "offline" }
+                    );
+                    let ring = if row.selected {
+                        colors.sidebar_selected
+                    } else {
+                        colors.sidebar
+                    };
+                    div()
+                        .debug_selector(move || selector)
+                        .absolute()
+                        .right(px(-4.))
+                        .bottom(px(-4.))
+                        .size(px(12.))
+                        .rounded_full()
+                        .border_2()
+                        .border_color(ring)
+                        // A bright green that reads on the light and the dark sidebar alike.
+                        .when(online, |dot| dot.bg(gpui::rgb(0x2bac76)))
+                        .when(!online, |dot| {
+                            dot.bg(ring).child(
+                                div()
+                                    .size_full()
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(colors.sidebar_text_muted),
+                            )
+                        })
+                }))
                 .into_any_element(),
         };
 

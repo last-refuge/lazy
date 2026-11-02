@@ -2631,8 +2631,20 @@ impl Ws {
         .await;
     }
 
-    /// The next server frame, or the way the socket ended. Pings and pongs are skipped.
+    /// The next server frame, or the way the socket ended. Pings and pongs are skipped, and so
+    /// are frames about presence (D45), which most tests do not care about and which can arrive
+    /// whenever anyone connects; [`Ws::next_frame_or_closed`] includes them.
     pub async fn next_or_closed(&mut self) -> Result<ServerFrame, Closed> {
+        loop {
+            match self.next_frame_or_closed().await? {
+                ServerFrame::Presence { .. } | ServerFrame::PresenceChanged { .. } => {}
+                frame => return Ok(frame),
+            }
+        }
+    }
+
+    /// The next frame of any kind, presence included (pings and pongs are still skipped).
+    pub async fn next_frame_or_closed(&mut self) -> Result<ServerFrame, Closed> {
         use tokio_tungstenite::tungstenite::Message as Wire;
         loop {
             let next = tokio::time::timeout(DEADLINE, self.inner.next())

@@ -185,6 +185,10 @@ People on networks that block UDP cannot join yet (no TURN or TCP fallback, M2).
    drop-in sees it: no "started a drop-in" notice, no Join button, no notification in direct
    messages (D44).
 4. Deploy. The log says `SFU media port ready media_addr=<ip>:7881` and `sending room reports`.
+   If the second line is missing, `RTC_REPORT_URL` is empty inside the container (check with
+   `env | grep RTC_REPORT_URL` in the container's terminal). When Coolify reloads the compose file
+   it adds its own empty entry for each `${VAR:-}` it finds; set the value on that entry (keep only
+   one), then redeploy: a restart does not pick up a changed variable.
 5. On the Lazy resource, set `LAZY_RTC_URL=wss://rtc.example.com` and `LAZY_RTC_SECRET` to the same
    secret, and redeploy Lazy. The server refuses to start if only one of them is set, or the secret
    is shorter than 32 characters.

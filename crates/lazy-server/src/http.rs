@@ -1648,6 +1648,7 @@ async fn realtime_upgrade(
             let connection = realtime::serve_connection(
                 state.pool.clone(),
                 state.dispatcher.clone(),
+                state.presence.clone(),
                 principal,
                 socket,
                 state.shutdown.child_token(),
