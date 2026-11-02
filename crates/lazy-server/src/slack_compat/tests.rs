@@ -332,3 +332,85 @@ fn hostile_input_stays_text() {
     let deep = "<".repeat(5000) + &">".repeat(5000);
     assert!(to_markdown(&json!({"text": deep})).is_some());
 }
+
+#[test]
+fn blocks_become_rich_content_with_buttons_for_apps_only() {
+    let body = json!({
+        "text": "Deploy 42 is waiting",
+        "blocks": [
+            {"type": "header", "text": {"type": "plain_text", "text": "Deploy   42\nwaiting"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "*api* to <https://p.example|prod>"},
+             "fields": [{"type": "mrkdwn", "text": "*By*\nalice"}],
+             "accessory": {"type": "button", "text": {"type": "plain_text", "text": "Logs"},
+                           "url": "https://ci.example/42"}},
+            {"type": "divider"},
+            {"type": "image", "image_url": "https://img.example/a.png", "alt_text": "graph"},
+            {"type": "context", "elements": [{"type": "image", "image_url": "x"},
+                                             {"type": "mrkdwn", "text": "3 min ago"}]},
+            {"type": "actions", "block_id": "deploy", "elements": [
+                {"type": "button", "action_id": "ok", "style": "primary", "value": "42",
+                 "text": {"type": "plain_text", "text": "Approve"}},
+                {"type": "button", "action_id": "no", "style": "danger",
+                 "text": {"type": "plain_text", "text": "Reject"}},
+                {"type": "static_select", "action_id": "pick"}
+            ]},
+            {"type": "video", "title": "unknown kind"}
+        ],
+        "attachments": [{"title": "Older", "text": "kept"}]
+    });
+    let rich = to_rich(&body, true).expect("rich");
+    let blocks = rich.blocks();
+    assert_eq!(
+        blocks[0],
+        RichBlock::Header {
+            text: "Deploy 42 waiting".into()
+        }
+    );
+    let RichBlock::Section {
+        text: Some(text),
+        fields,
+        accessory: Some(logs),
+    } = &blocks[1]
+    else {
+        panic!("section: {:?}", blocks[1]);
+    };
+    assert_eq!(text.plain_text(), "api to prod (https://p.example)");
+    assert_eq!(fields.len(), 1);
+    assert_eq!(logs.url.as_deref(), Some("https://ci.example/42"));
+    assert_eq!(blocks[2], RichBlock::Divider);
+    // An image is a link, never fetched.
+    let RichBlock::Section {
+        text: Some(image), ..
+    } = &blocks[3]
+    else {
+        panic!("image");
+    };
+    assert_eq!(image.plain_text(), "graph (https://img.example/a.png)");
+    assert!(matches!(&blocks[4], RichBlock::Context { items } if items.len() == 1));
+    let RichBlock::Actions { block_id, buttons } = &blocks[5] else {
+        panic!("actions");
+    };
+    assert_eq!(block_id.as_deref(), Some("deploy"));
+    assert_eq!(buttons.len(), 2);
+    assert_eq!(buttons[0].style, ButtonStyle::Primary);
+    assert_eq!(buttons[0].value.as_deref(), Some("42"));
+    assert_eq!(buttons[1].style, ButtonStyle::Danger);
+    assert!(rich.button(5, "ok").is_some_and(Button::is_action));
+    // The legacy attachment follows, so nothing the text shows is lost.
+    assert_eq!(blocks.len(), 7);
+
+    // A webhook cannot answer presses: its action buttons go, link buttons stay.
+    let plain = to_rich(&body, false).unwrap();
+    assert!(!plain.has_actions());
+    assert!(
+        !plain
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, RichBlock::Actions { .. }))
+    );
+    assert!(plain.button(1, "button-1").is_some());
+
+    // Text alone, or blocks that show nothing, are not rich.
+    assert_eq!(to_rich(&json!({"text": "hi"}), true), None);
+    assert_eq!(to_rich(&json!({"blocks": [{"type": "video"}]}), true), None);
+}

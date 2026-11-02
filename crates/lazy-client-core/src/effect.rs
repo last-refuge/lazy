@@ -331,6 +331,24 @@ pub enum Effect {
         app: lazy_domain::AppId,
         request: lazy_protocol::SetAppEventsRequest,
     },
+    /// Press a button (D40). Answered, as a command is, with `ActionOutcome::CommandRan` under
+    /// `ActionKind::RunCommand(conversation)`. One attempt: the app acts on each request.
+    PressButton {
+        conversation: ConversationId,
+        message: lazy_domain::MessageId,
+        request: lazy_protocol::PressButtonRequest,
+    },
+    /// Ask for a message's link previews. Answered with `Input::PreviewsLoaded`.
+    LoadPreviews {
+        message: MessageId,
+        revision: u32,
+    },
+    /// Set where an app is told about presses. Answered with `ActionOutcome::App` under
+    /// `ActionKind::AppInteractivity(app)`.
+    SetAppInteractivity {
+        app: lazy_domain::AppId,
+        request: lazy_protocol::SetAppInteractivityRequest,
+    },
     /// Run a command. Answered with `ActionOutcome::CommandRan`. One attempt: the app acts on
     /// each request.
     RunCommand {

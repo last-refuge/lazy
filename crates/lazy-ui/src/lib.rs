@@ -33,6 +33,7 @@ pub mod people_picker;
 pub mod people_view;
 pub mod rail;
 pub mod reactions;
+pub mod rich_blocks;
 pub mod rich_text;
 pub mod root_view;
 pub mod saved_view;

@@ -58,6 +58,8 @@ pub struct Integrations {
     pub github: crate::github::GithubEndpoints,
     /// `None` when no HTTPS client could be built (no CA certificates): GitHub is unavailable.
     pub http: Option<reqwest::Client>,
+    /// Fetches link previews (D41); `None` when no client could be built, and previews are off.
+    pub previews: Option<crate::link_previews::Fetcher>,
 }
 
 /// The kinds of job this server knows how to run. Integrations add theirs here.
@@ -293,6 +295,7 @@ pub async fn serve_all(
             jobs: waker,
             github: integrations.github,
             http: crate::github::http_client(),
+            previews: crate::link_previews::Fetcher::new(integrations.previews),
         }),
         attachments: Arc::clone(&attachments),
         search,

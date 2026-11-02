@@ -536,6 +536,7 @@ pub async fn deliver(
     webhook: ActiveWebhook,
     key: Option<&str>,
     text: &str,
+    rich: Option<lazy_domain::RichContent>,
 ) -> Result<Delivered, Undelivered> {
     if text.trim().is_empty() {
         return Err(AppError::invalid("text must not be empty").into());
@@ -564,7 +565,14 @@ pub async fn deliver(
         // A webhook posts words only.
         attachment_ids: Vec::new(),
     };
-    match messages::send_message(pool, webhook.bot_user_id, webhook.conversation_id, request).await
+    match messages::send_message_with(
+        pool,
+        webhook.bot_user_id,
+        webhook.conversation_id,
+        request,
+        rich,
+    )
+    .await
     {
         Ok(message) => Ok(Delivered {
             message_id: message.id,

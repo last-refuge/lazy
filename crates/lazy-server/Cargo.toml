@@ -27,6 +27,8 @@ aws-lc-rs = "1"
 chacha20poly1305.workspace = true
 # Slack-style webhook bodies sent as a form (`payload=<json>`); already built for reqwest.
 form_urlencoded = "1"
+# Link previews check each address's host before connecting (D41); already built for reqwest.
+url = "2"
 axum.workspace = true
 bytes = "1"
 clap.workspace = true

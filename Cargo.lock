@@ -3474,6 +3474,7 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "zeroize",
 ]
@@ -3492,6 +3493,7 @@ dependencies = [
  "lazy-protocol",
  "proptest",
  "resvg",
+ "serde_json",
  "time",
  "tracing",
  "unicode-segmentation",

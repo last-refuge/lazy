@@ -30,8 +30,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use lazy_domain::app::is_command_name;
 use lazy_domain::{
-    AppCommandId, AppId, ConversationId, MessageDocument, MessageId, OperationId, UserId,
-    WorkspaceId,
+    AppCommandId, AppId, ConversationId, MessageDocument, MessageId, OperationId, RichContent,
+    UserId, WorkspaceId,
 };
 use lazy_protocol::{
     AppCommand, CreateAppCommandRequest, ErrorCode, RunCommandRequest, RunCommandResponse,
@@ -367,14 +367,18 @@ struct CommandRow {
 
 /// What an answer asks for.
 #[derive(Debug, PartialEq, Eq)]
-enum Answer {
+pub(crate) enum Answer {
     Nothing,
     Private(String),
-    InChannel(String),
+    InChannel(String, Option<RichContent>),
+    /// Replace the message a button was pressed on (`replace_original`, D40).
+    Replace(String, Option<RichContent>),
+    /// Delete the message a button was pressed on (`delete_original`, D40).
+    Delete,
 }
 
 /// Reads an app's answer: empty, plain text, or Slack's JSON.
-fn read_answer(content_type: Option<&str>, body: &[u8]) -> Result<Answer, AppError> {
+pub(crate) fn read_answer(content_type: Option<&str>, body: &[u8]) -> Result<Answer, AppError> {
     let text = String::from_utf8_lossy(body);
     if text.trim().is_empty() {
         return Ok(Answer::Nothing);
@@ -388,29 +392,35 @@ fn read_answer(content_type: Option<&str>, body: &[u8]) -> Result<Answer, AppErr
     }
     let value: Value = serde_json::from_str(&text)
         .map_err(|_| AppError::invalid("the app's answer is not JSON"))?;
+    if value["delete_original"] == true {
+        return Ok(Answer::Delete);
+    }
     let Some(markdown) = crate::slack_compat::to_markdown(&value) else {
         return Ok(Answer::Nothing);
     };
-    Ok(if value["response_type"] == "in_channel" {
-        Answer::InChannel(markdown)
+    let rich = || crate::slack_compat::to_rich(&value, true);
+    Ok(if value["replace_original"] == true {
+        Answer::Replace(markdown, rich())
+    } else if value["response_type"] == "in_channel" {
+        Answer::InChannel(markdown, rich())
     } else {
         Answer::Private(markdown)
     })
 }
 
-fn document(markdown: &str) -> Result<MessageDocument, AppError> {
+pub(crate) fn document(markdown: &str) -> Result<MessageDocument, AppError> {
     let source = lazy_domain::emoji::replace_shortcodes(markdown);
     MessageDocument::from_markdown(&source)
         .map_err(|e| AppError::invalid(format!("the app's answer cannot be shown: {e}")))
 }
 
 /// Posts an answer in the conversation as the app's bot, joining it first if it must.
-async fn post_in_channel(
+pub(crate) async fn post_in_channel(
     state: &AppState,
     actor: UserId,
     bot: UserId,
     conversation: ConversationId,
-    markdown: &str,
+    (markdown, rich): (&str, Option<RichContent>),
     operation: OperationId,
 ) -> Result<MessageId, AppError> {
     let joined: bool = sqlx::query_scalar(
@@ -431,10 +441,103 @@ async fn post_in_channel(
         attachment_ids: Vec::new(),
     };
     Ok(
-        messages::send_message(&state.pool, bot, conversation, request)
+        messages::send_message_with(&state.pool, bot, conversation, request, rich)
             .await?
             .id,
     )
+}
+
+/// The host of the server's public address, Slack's `team_domain`.
+pub(crate) fn public_host(state: &AppState) -> String {
+    state
+        .integrations
+        .public_url
+        .split("://")
+        .nth(1)
+        .unwrap_or_default()
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Makes a `response_url` for one use of a command or one button press (`message` is the
+/// message the button is on).
+pub(crate) async fn response_address(
+    state: &AppState,
+    conn: &mut PgConnection,
+    app: Uuid,
+    conversation: ConversationId,
+    user: UserId,
+    message: Option<MessageId>,
+) -> Result<String, AppError> {
+    let token = random_hex()?;
+    let token_hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+    sqlx::query(
+        "INSERT INTO command_responses (token_hash, app_id, conversation_id, user_id, expires_at, message_id) \
+         VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5), $6)",
+    )
+    .bind(&token_hash[..])
+    .bind(app)
+    .bind(conversation.as_uuid())
+    .bind(user.as_uuid())
+    .bind(i32::try_from(RESPONSE_MINUTES).unwrap_or(30))
+    .bind(message.map(|m| m.as_uuid()))
+    .execute(&mut *conn)
+    .await?;
+    Ok(format!(
+        "{}/commands/respond/{token}",
+        state.integrations.public_url
+    ))
+}
+
+/// Sends a signed form to an app, as Slack sends its requests, and reads its answer. The app has
+/// [`ANSWER_SECONDS`]; redirects are not followed. `unreachable` is the error for no answer.
+pub(crate) async fn call_app(
+    http: &reqwest::Client,
+    url: &str,
+    secret: Secret,
+    body: String,
+    (app_id, app_name): (Uuid, &str),
+    unreachable: AppError,
+) -> Result<Answer, AppError> {
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp();
+    let signature = slack_signature(secret.expose(), timestamp, &body);
+    drop(secret);
+    let sent = http
+        .post(url)
+        .timeout(Duration::from_secs(ANSWER_SECONDS))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("x-slack-request-timestamp", timestamp.to_string())
+        .header("x-slack-signature", signature)
+        .body(body)
+        .send()
+        .await;
+    let Ok(response) = sent else {
+        return Err(unreachable);
+    };
+    if !response.status().is_success() {
+        tracing::warn!(
+            app_id = %app_id,
+            status = response.status().as_u16(),
+            "an app refused a request"
+        );
+        return Err(unreachable);
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let Ok(bytes) = response.bytes().await else {
+        return Err(unreachable);
+    };
+    if bytes.len() > MAX_ANSWER_BYTES {
+        return Err(AppError::invalid(format!(
+            "{app_name} answered with too much"
+        )));
+    }
+    read_answer(content_type.as_deref(), &bytes)
 }
 
 /// Runs `/command text` in a conversation the caller can post in.
@@ -497,32 +600,10 @@ pub async fn run(
     .bind(conversation.as_uuid())
     .fetch_one(&mut *conn)
     .await?;
-    // Where a later answer goes.
-    let token = random_hex()?;
-    let token_hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-    sqlx::query(
-        "INSERT INTO command_responses (token_hash, app_id, conversation_id, user_id, expires_at) \
-         VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5))",
-    )
-    .bind(&token_hash[..])
-    .bind(command.app_id)
-    .bind(conversation.as_uuid())
-    .bind(actor.as_uuid())
-    .bind(i32::try_from(RESPONSE_MINUTES).unwrap_or(30))
-    .execute(&mut *conn)
-    .await?;
+    let response_url =
+        response_address(state, &mut conn, command.app_id, conversation, actor, None).await?;
     drop(conn);
-    let response_url = format!("{}/commands/respond/{token}", state.integrations.public_url);
-    let host = state
-        .integrations
-        .public_url
-        .split("://")
-        .nth(1)
-        .unwrap_or_default()
-        .split('/')
-        .next()
-        .unwrap_or_default()
-        .to_owned();
+    let host = public_host(state);
     let trigger = Uuid::new_v4().simple().to_string();
     let body: String = form_urlencoded::Serializer::new(String::new())
         .append_pair("token", "")
@@ -541,47 +622,22 @@ pub async fn run(
         .append_pair("response_url", &response_url)
         .append_pair("trigger_id", &trigger)
         .finish();
-    let timestamp = OffsetDateTime::now_utc().unix_timestamp();
-    let signature = slack_signature(secret.expose(), timestamp, &body);
-    drop(secret);
-    let sent = http
-        .post(&command.url)
-        .timeout(Duration::from_secs(ANSWER_SECONDS))
-        .header("content-type", "application/x-www-form-urlencoded")
-        .header("x-slack-request-timestamp", timestamp.to_string())
-        .header("x-slack-signature", signature)
-        .body(body)
-        .send()
-        .await;
-    let app_name = command.app_name.clone();
-    let unreachable = || {
-        AppError::new(
-            ErrorCode::Unavailable,
-            format!("{app_name} didn't answer /{name}. Try again, or tell an admin"),
-        )
-    };
-    let response = sent.map_err(|_| unreachable())?;
-    if !response.status().is_success() {
-        tracing::warn!(
-            app_id = %command.app_id,
-            status = response.status().as_u16(),
-            "an app refused a slash command"
-        );
-        return Err(unreachable());
-    }
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    let bytes = response.bytes().await.map_err(|_| unreachable())?;
-    if bytes.len() > MAX_ANSWER_BYTES {
-        return Err(AppError::invalid(format!(
-            "{} answered with too much",
+    let unreachable = AppError::new(
+        ErrorCode::Unavailable,
+        format!(
+            "{} didn't answer /{name}. Try again, or tell an admin",
             command.app_name
-        )));
-    }
-    let answer = read_answer(content_type.as_deref(), &bytes)?;
+        ),
+    );
+    let answer = call_app(
+        http,
+        &command.url,
+        secret,
+        body,
+        (command.app_id, &command.app_name),
+        unreachable,
+    )
+    .await?;
     let bot = UserId::from_uuid(command.bot_user_id);
     let mut out = RunCommandResponse {
         app_name: command.app_name,
@@ -589,16 +645,19 @@ pub async fn run(
         posted: None,
     };
     match answer {
-        Answer::Nothing => {}
-        Answer::Private(markdown) => out.reply = Some(document(&markdown)?),
-        Answer::InChannel(markdown) => {
+        // There is no message of the app's to replace or delete for a command.
+        Answer::Nothing | Answer::Delete => {}
+        Answer::Private(markdown) | Answer::Replace(markdown, _) => {
+            out.reply = Some(document(&markdown)?)
+        }
+        Answer::InChannel(markdown, rich) => {
             out.posted = Some(
                 post_in_channel(
                     state,
                     actor,
                     bot,
                     conversation,
-                    &markdown,
+                    (&markdown, rich),
                     OperationId::generate(),
                 )
                 .await?,
@@ -630,15 +689,15 @@ async fn respond_inner(
 ) -> Result<(), AppError> {
     let hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
     let mut tx = state.pool.begin().await?;
-    let found: Option<(Uuid, Uuid, Uuid, i32)> = sqlx::query_as(
-        "SELECT r.app_id, r.conversation_id, r.user_id, r.uses FROM command_responses r \
+    let found: Option<(Uuid, Uuid, Uuid, i32, Option<Uuid>)> = sqlx::query_as(
+        "SELECT r.app_id, r.conversation_id, r.user_id, r.uses, r.message_id FROM command_responses r \
          JOIN apps a ON a.id = r.app_id \
          WHERE r.token_hash = $1 AND r.expires_at > now() AND a.deleted_at IS NULL FOR UPDATE OF r",
     )
     .bind(&hash[..])
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((app, conversation, user, uses)) = found else {
+    let Some((app, conversation, user, uses, pressed_on)) = found else {
         return Err(AppError::not_found(
             "this response address is unknown or has expired",
         ));
@@ -648,16 +707,22 @@ async fn respond_inner(
             "a response address takes at most {RESPONSE_USES} answers"
         )));
     }
-    let answer = match read_answer(content_type, body)? {
+    let answer = read_answer(content_type, body)?;
+    match &answer {
         Answer::Nothing => return Err(AppError::invalid("there is nothing to post")),
         Answer::Private(_) => {
             return Err(AppError::invalid(
                 "Lazy can't show a private answer later yet: answer within 3 seconds, or send \
-                 response_type \"in_channel\"",
+                 response_type \"in_channel\" (or replace_original for a button's message)",
             ));
         }
-        Answer::InChannel(markdown) => markdown,
-    };
+        Answer::Replace(..) | Answer::Delete if pressed_on.is_none() => {
+            return Err(AppError::invalid(
+                "replace_original and delete_original apply to a button's message only",
+            ));
+        }
+        _ => {}
+    }
     sqlx::query("UPDATE command_responses SET uses = uses + 1 WHERE token_hash = $1")
         .bind(&hash[..])
         .execute(&mut *tx)
@@ -672,15 +737,34 @@ async fn respond_inner(
         &Uuid::from_slice(&hash[..16]).unwrap_or_default(),
         (uses + 1).to_string().as_bytes(),
     ));
-    post_in_channel(
-        state,
-        UserId::from_uuid(user),
-        UserId::from_uuid(bot),
-        ConversationId::from_uuid(conversation),
-        &answer,
-        operation,
-    )
-    .await?;
+    let bot = UserId::from_uuid(bot);
+    match (answer, pressed_on) {
+        (Answer::InChannel(markdown, rich), _) => {
+            post_in_channel(
+                state,
+                UserId::from_uuid(user),
+                bot,
+                ConversationId::from_uuid(conversation),
+                (&markdown, rich),
+                operation,
+            )
+            .await?;
+        }
+        (Answer::Replace(markdown, rich), Some(message)) => {
+            crate::interactions::replace(
+                state,
+                bot,
+                MessageId::from_uuid(message),
+                (&markdown, rich),
+                operation,
+            )
+            .await?;
+        }
+        (Answer::Delete, Some(message)) => {
+            messages::delete_message(&state.pool, bot, MessageId::from_uuid(message)).await?;
+        }
+        _ => {}
+    }
     Ok(())
 }
 
@@ -727,7 +811,7 @@ mod tests {
                 br#"{"response_type": "in_channel", "text": "<!here> shipped"}"#
             )
             .unwrap(),
-            Answer::InChannel("\\@here shipped".into())
+            Answer::InChannel("\\@here shipped".into(), None)
         );
         assert!(read_answer(Some("application/json"), b"{nope").is_err());
     }

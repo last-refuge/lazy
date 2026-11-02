@@ -268,6 +268,7 @@ impl ClientCore {
         self.app_signing_secret = None;
         self.slash_commands.clear();
         self.command_replies.clear();
+        self.previews.clear();
         self.webhook_lists.clear();
         self.workspace_webhooks.clear();
         self.webhook_deliveries.clear();

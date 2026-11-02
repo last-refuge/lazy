@@ -168,6 +168,12 @@ pub mod paths {
     pub const RUN_COMMAND_ROUTE: &str = "/v1/conversations/{conversation_id}/commands";
     /// `PUT` an app's event subscription (D38).
     pub const APP_EVENTS_ROUTE: &str = "/v1/apps/{app_id}/events";
+    /// `PUT` where an app is told about presses of its buttons (D40).
+    pub const APP_INTERACTIVITY_ROUTE: &str = "/v1/apps/{app_id}/interactivity";
+    /// `POST` presses a button on a message (D40).
+    pub const MESSAGE_ACTIONS_ROUTE: &str = "/v1/messages/{message_id}/actions";
+    /// `GET` the link previews of a message (D41).
+    pub const MESSAGE_PREVIEWS_ROUTE: &str = "/v1/messages/{message_id}/previews";
     /// Where an app sends a later answer to a command (Slack's `response_url`). Public; the token
     /// is the credential.
     pub const COMMAND_RESPOND_ROUTE: &str = "/commands/respond/{token}";
@@ -398,6 +404,18 @@ pub mod paths {
 
     pub fn app_events(app_id: lazy_domain::AppId) -> String {
         format!("/v1/apps/{app_id}/events")
+    }
+
+    pub fn app_interactivity(app_id: lazy_domain::AppId) -> String {
+        format!("/v1/apps/{app_id}/interactivity")
+    }
+
+    pub fn message_actions(message_id: MessageId) -> String {
+        format!("/v1/messages/{message_id}/actions")
+    }
+
+    pub fn message_previews(message_id: MessageId) -> String {
+        format!("/v1/messages/{message_id}/previews")
     }
 
     pub fn app_signing_secret(app_id: lazy_domain::AppId) -> String {
@@ -925,7 +943,13 @@ pub struct Message {
     pub id: MessageId,
     pub conversation_id: ConversationId,
     pub author_id: UserId,
+    /// The words. For a message with `rich` content this is its fallback: what older clients
+    /// show, what notifications say, and what search finds.
     pub document: MessageDocument,
+    /// Blocks an integration sent (header, sections, buttons; D40), drawn in place of `document`
+    /// by clients that know them. Only bots post them. Older clients ignore the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rich: Option<lazy_domain::RichContent>,
     pub created_at: Timestamp,
     /// Starts at 1 and increases by one with each edit, and with deletion. A client keeps the
     /// highest revision it has seen, so a late or repeated event never undoes a newer one.
@@ -1338,6 +1362,52 @@ pub struct App {
     /// Where it is told what happens in its channels, if anywhere (D38).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub events: Option<AppEvents>,
+    /// Where it is told that someone pressed one of its buttons, if anywhere (D40).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interactivity_url: Option<String>,
+}
+
+/// What a linked page says about itself (D41): plain text only, fetched by the server. At least
+/// one of `title` and `description` is present.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkPreview {
+    /// The link as written in the message.
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The site's name, or its host when the page gives none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_name: Option<String>,
+}
+
+/// Response of `GET /v1/messages/{id}/previews`: a preview for each of the message's first links
+/// that has one, in the order they appear. Empty for a message with no links, an app's message,
+/// or a server that does not fetch previews.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkPreviewsResponse {
+    pub previews: Vec<LinkPreview>,
+}
+
+/// `PUT /v1/apps/{id}/interactivity`. An empty `url` turns button presses off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetAppInteractivityRequest {
+    #[serde(default)]
+    pub url: String,
+}
+
+/// `POST /v1/messages/{id}/actions`: press a button on a message (D40). The button is named by
+/// its block's position in the message's rich content and its `action_id`; the server takes the
+/// button's value from the stored message, never from the client. `press_id` is made by the
+/// client for each press and passed to the app as Slack's `trigger_id`, so an app can tell a
+/// repeated request from a second press. The answer is a [`RunCommandResponse`]: the app's name, a
+/// reply only the presser sees, and a message it posted, as for a slash command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PressButtonRequest {
+    pub block: u32,
+    pub action_id: String,
+    pub press_id: OperationId,
 }
 
 /// An app's event subscription (D38): what it is sent, and where.
@@ -2129,6 +2199,7 @@ mod tests {
             mentions: Mentions::default(),
             reactions: Vec::new(),
             reactions_as_of: EventSeq::ZERO,
+            rich: None,
         }
     }
 

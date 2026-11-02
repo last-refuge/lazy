@@ -43,6 +43,7 @@ mod messages;
 mod notify;
 mod onboarding;
 mod permalink;
+mod previews;
 mod reactions;
 mod readstate;
 mod search;
@@ -265,6 +266,11 @@ pub struct ClientCore {
     command_replies: HashMap<ConversationId, crate::model::CommandReply>,
     /// The command last run in each conversation, as typed, for its reply's heading.
     last_command: HashMap<ConversationId, String>,
+    /// The button last pressed in each conversation (message, block, action id), so the view can
+    /// show which one is waiting while `ActionKind::RunCommand(conversation)` is in flight.
+    pressed: HashMap<ConversationId, (MessageId, u32, String)>,
+    /// Link previews asked for, by message (D41).
+    previews: HashMap<MessageId, previews::PreviewEntry>,
     /// A token just made, for its app, until dismissed. Never cached or saved.
     app_token: Option<(lazy_domain::AppId, crate::model::SecretUrl)>,
     /// A signing secret Lazy just made, for its provider, until dismissed. Never cached or saved.
@@ -424,6 +430,8 @@ impl ClientCore {
             slash_commands: HashMap::new(),
             command_replies: HashMap::new(),
             last_command: HashMap::new(),
+            pressed: HashMap::new(),
+            previews: HashMap::new(),
             created_webhook: None,
             draft_selections: HashMap::new(),
             thread_selections: HashMap::new(),
@@ -770,6 +778,24 @@ impl ClientCore {
             Input::DismissCommandReply(conversation) => {
                 self.dismiss_command_reply(conversation, &mut out)
             }
+            Input::PressButton {
+                conversation,
+                message,
+                block,
+                action_id,
+                label,
+            } => self.press_button(conversation, message, block, action_id, label, &mut out),
+            Input::SetAppInteractivity { app, url } => {
+                self.set_app_interactivity(app, &url, &mut out)
+            }
+            Input::LoadPreviews { message, revision } => {
+                self.load_previews(message, revision, &mut out)
+            }
+            Input::PreviewsLoaded {
+                message,
+                revision,
+                result,
+            } => self.previews_loaded(message, revision, result, &mut out),
             Input::SetAppEvents {
                 app,
                 url,

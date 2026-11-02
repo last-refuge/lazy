@@ -275,6 +275,7 @@ impl World {
             edited_at: None,
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
+            rich: None,
             deleted: false,
         }
     }

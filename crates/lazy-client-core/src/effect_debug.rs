@@ -317,6 +317,26 @@ impl fmt::Debug for Effect {
                 .debug_struct("SetAppEvents")
                 .field("app", app)
                 .finish_non_exhaustive(),
+            Effect::PressButton {
+                conversation,
+                message,
+                request,
+            } => f
+                .debug_struct("PressButton")
+                .field("conversation", conversation)
+                .field("message", message)
+                .field("block", &request.block)
+                .field("action_id", &request.action_id)
+                .finish_non_exhaustive(),
+            Effect::LoadPreviews { message, revision } => f
+                .debug_struct("LoadPreviews")
+                .field("message", message)
+                .field("revision", revision)
+                .finish(),
+            Effect::SetAppInteractivity { app, .. } => f
+                .debug_struct("SetAppInteractivity")
+                .field("app", app)
+                .finish_non_exhaustive(),
             Effect::LoadCommands { workspace } => f
                 .debug_struct("LoadCommands")
                 .field("workspace", workspace)

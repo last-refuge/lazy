@@ -270,6 +270,7 @@ mod tests {
             thread: None,
             reactions: Vec::new(),
             reactions_as_of: EventSeq::ZERO,
+            rich: None,
             mentions: lazy_protocol::Mentions::default(),
             deleted: false,
             attachments: Vec::new(),

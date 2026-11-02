@@ -557,6 +557,7 @@ fn search_answer(workspace: WorkspaceId, query: &str) -> SearchResponse {
         thread: None,
         reactions: Vec::new(),
         reactions_as_of: lazy_domain::EventSeq::ZERO,
+        rich: None,
         mentions: lazy_protocol::Mentions::default(),
         deleted: false,
         attachments: Vec::new(),

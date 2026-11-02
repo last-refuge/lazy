@@ -750,3 +750,62 @@ Goal: an app is told what happens in its channels, as Slack's Events API tells a
 
 **Addendum (automation tools).** Zapier's, n8n's, and Make's catch hooks cannot answer the challenge, so `SetAppEventsRequest.skip_check` (the app's screen: "Don't check the address") saves an address without it. Deliveries are still signed, and a tool that does not check signatures accepts them anyway. The guide is in DEPLOY.md, "Zapier, n8n and Make".
 
+## D39. Huddles: an all-Rust media stack, built as a standalone library
+
+Decided by the owner, 2026-11-01. Huddles use our own Rust media stack, an SFU and a client
+transport on str0m, rather than LiveKit. LiveKit was recommended as the faster route to proven
+audio quality, and Slack itself builds huddles on a bought media layer (the Amazon Chime SDK).
+The owner chose Rust because the same work will be reused: in a standalone Zoom-like client
+later, and in other projects.
+
+So the media code is a library first and Lazy's huddles second. It is a crate family (`rtc-*`,
+working name) with its own signaling, tokens, SFU, client, docs, and CI, and no dependency on
+any `lazy-*` crate. It lives in `media/` as its own workspace so that it can move to its own
+repository unchanged. Lazy is one host: it issues join tokens, receives the SFU's webhooks, and
+draws the UI.
+
+Our code is Rust throughout. Opus, echo cancellation and noise suppression (WebRTC's audio
+processing), and VP8/VP9 come from C/C++ libraries through Rust bindings, behind traits that a
+pure-Rust implementation can replace later. The plan, milestones, and open questions are in
+`HUDDLES.md`. The spike (M0) records what it measures in `VERIFICATION.md`.
+
+
+## D40. Rich messages and buttons (Phase 4, task 4.4)
+
+Goal: an integration can post a structured message (a header, sections with fields, dividers, context lines, buttons) drawn with Lazy's own components, and an app can be told when someone presses one of its buttons, as Slack's Block Kit and interactivity do, so a Slack app's messages and handlers work with an address and secret changed. No protocol bump: every addition is an optional field or a new endpoint, and older clients keep working.
+
+**The content** (`lazy_domain::RichContent`, `rich.rs`): versioned (`{"version": 1, "blocks": [...]}`), declarative, and checked when made. Blocks: `header` (plain, one line, 150 characters), `section` (a `MessageDocument`, up to 10 field documents, and one button beside them), `divider`, `context` (up to 10 small documents), `actions` (up to 10 buttons, an optional `block_id`). A button has a label (75 characters), an `action_id`, an optional `value` (2,000), a style (`default`, `primary`, `danger`), and either a link (the message link rules: http, https, mailto, a Lazy permalink) or nothing, meaning it goes to the app. At most 50 blocks and 40,000 bytes of text. **There is no HTML and nothing remote:** text is a message document, and an image block becomes a link, never fetched.
+
+**Fallback and old clients.** A message keeps its document as well: it is the fallback text that older clients show, notifications use, search indexes, and copying copies. `Message.rich` is optional and skipped when absent, and serde ignores unknown fields, so a 0.8 client reads a rich message as its text. Reading is lenient in the other direction too: a block this build does not know, or cannot read (a newer server's), becomes `Unsupported`, and the client draws the rest with the note "Part of this message needs a newer version of Lazy".
+
+**Who posts it.** Only the server's integration paths: incoming webhooks, the bot API, and apps' answers (`messages::send_message_with`); the client API (`SendMessageRequest`) has no field for it. Slack bodies are read by `slack_compat::to_rich`, beside `to_markdown` for the fallback; legacy `attachments` follow the blocks as sections so nothing the text shows is lost. Senders that cannot be told about presses (webhooks, connectors) keep only link buttons. Stored in `messages.rich` (and `message_revisions.rich`); a deleted message keeps none.
+
+**Pressing** (`POST /v1/messages/{id}/actions {block, action_id, press_id}`). Checked on **every** press: the person can see the message and post in its conversation now; the message is not deleted; the button is in its current content and is not a link; the author is the bot of a live app with an interactivity address (`PUT /v1/apps/{id}/interactivity`, admins; https or this machine) and a signing secret. The button's `value` is taken from the stored message, never from the client. A press counts against the app's rate (the bot API's).
+- **The request:** a form whose `payload` is Slack's `block_actions` JSON (`user`, `team`, `channel`, `container`, `message`, `actions`, `response_url`, and `trigger_id`, the client's `press_id`), signed like a slash command (D36), 3 seconds, no redirects.
+- **The answer**, now or through `response_url` (30 minutes, 5 uses): text is a reply only the presser sees (shown like a command's); `response_type: in_channel` is posted by the bot; `replace_original: true` edits the pressed message as the bot (new text and blocks, through the normal edit path, so it is announced and kept as a revision); `delete_original: true` deletes it. A later private answer is refused, as for commands.
+- **Operations.** A press is a request to an outside app, like a command, not a Lazy mutation: it is sent once, never retried automatically, and the client shows a failure for the person to try again. `press_id` lets an app tell a repeated request from a second press, and an answer posted for one press has an operation derived from it, so it is posted once.
+
+**In the client.** `Input::PressButton` runs under `ActionKind::RunCommand(conversation)`: one press or command at a time per conversation, with "Running Approve…", the app's reply, or why it failed in the box above the composer. The pressed button shows `…` while it waits. The app's screen has a **Buttons** section for the address.
+
+**Not yet:** select menus, date pickers, overflow menus, inputs, and modals (`trigger_id` opens nothing); private answers after the 3 seconds; buttons in replies a command answers privately; rich content in the GitHub and connector posts (they stay Markdown, D32); keyboard focus on the buttons inside a message (they are clickable and labelled for screen readers, but not tab stops).
+
+## D41. Link previews (Phase 4, task 4.7)
+
+Goal: a link a person posts shows what the page says about itself (its site, title, and description), as Slack unfurls links, without the client ever touching the page and without the server becoming a way into private networks. No protocol bump: one endpoint and its types.
+
+**Asked for, not pushed.** A client asks `GET /v1/messages/{id}/previews` when it shows a person's message that has links, once per revision. A new event would break 0.8 clients (they cannot skip an event type they do not know), and asking also means the check is made on every request: the server answers only someone who can read the message now (the same check as reading it), so a preview never reaches anyone outside its conversation. The first viewer waits for the fetch; everyone after is answered from the cache.
+
+**Which links.** `MessageDocument::preview_links` (shared by server and client): `http` and `https` links in paragraphs and lists, not in quotes (someone else's words) or code, once each, at most 3. Messages by apps, webhooks, and connectors get none (they bring their own blocks, D40), nor do deleted messages.
+
+**Fetching** (`link_previews.rs`), under these rules:
+- `http`/`https` on their default ports, no user or password in the address.
+- Every address must be public. Literal addresses are checked before connecting; names go through a resolver that drops every non-public address and fails when none is left, so the connection can only go to a public one (no gap between checking and connecting). Refused: unspecified, loopback, private, link-local (cloud metadata at 169.254.169.254), shared (100.64/10), multicast, broadcast, documentation, benchmarking, reserved; on IPv6 also unique-local, link-local, NAT64, and IPv4-mapped or -compatible forms of any of those. `localhost` names are refused outright.
+- At most 3 redirects, each hop checked the same way; 5 seconds for the whole fetch (3 to connect); only `text/html` or `application/xhtml+xml` with a 2xx answer; at most 256 KB read.
+- No cookies or credentials are sent, and the user agent names Lazy.
+- **What is kept:** Open Graph, then Twitter card, then `<title>` and `<meta name="description">`, as plain one-line text (entities decoded; titles 200, descriptions 300 characters). The site name falls back to the host. A page with neither title nor description has no preview. Nothing else from the page (images, HTML) is kept or sent to clients.
+
+**The cache** (`link_previews`, migration 0025) is per workspace, so one workspace's links never answer another's. A preview is used for 24 hours, and a failed fetch is remembered for an hour, so it is not retried on every view. Rows unused for 7 days are removed when the workspace fetches again. `IntegrationOptions.previews.allow_loopback` lets tests use a stand-in site on 127.0.0.1; nothing else private is allowed even then.
+
+**In the client.** `Input::LoadPreviews`, kept per message and revision (at most 2,000 held), shown under the text as quiet cards: the site, the title (which opens the link), and two lines of description. Plain text only.
+
+**Not yet:** images in previews (they would need the server to fetch and serve them, with the same rules); removing a preview from one's own message; a workspace setting to turn previews off; previews for links in apps' messages; providers' own APIs (oEmbed) beyond what their pages' tags say.

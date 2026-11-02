@@ -368,6 +368,32 @@ pub enum Input {
     LoadCommands(WorkspaceId),
     /// Forget the private reply to a command in this conversation.
     DismissCommandReply(ConversationId),
+    /// Press a button on a message (D40). The app's answer and any failure show like a slash
+    /// command's (`ActionKind::RunCommand(conversation)`, `ClientCore::command_reply`); `label`
+    /// is the button's text, shown as what was run.
+    PressButton {
+        conversation: ConversationId,
+        message: lazy_domain::MessageId,
+        block: u32,
+        action_id: String,
+        label: String,
+    },
+    /// Ask for the link previews of a message at this revision, if not asked yet (D41).
+    LoadPreviews {
+        message: MessageId,
+        revision: u32,
+    },
+    /// The previews of a message arrived (or could not be read).
+    PreviewsLoaded {
+        message: MessageId,
+        revision: u32,
+        result: Result<Vec<lazy_protocol::LinkPreview>, RequestError>,
+    },
+    /// Set where an app is told about presses of its buttons (an empty `url` turns them off).
+    SetAppInteractivity {
+        app: lazy_domain::AppId,
+        url: String,
+    },
     /// Set where an app is told what happens in its channels, and which events (an empty `url`
     /// turns them off). The server checks the address answers first (D38).
     SetAppEvents {

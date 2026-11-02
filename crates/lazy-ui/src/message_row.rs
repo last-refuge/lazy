@@ -344,6 +344,12 @@ pub struct RowProps<'a> {
     /// pane and in the conversation at once can be told apart: empty in the conversation,
     /// `thread-` in the pane.
     pub label_prefix: &'static str,
+    /// Pressing a button in the message's rich content (D40); `None` where it cannot be.
+    pub on_press: Option<crate::rich_blocks::PressHandler>,
+    /// The rich-content button of this message waiting for its app, as (block, action id).
+    pub pressing: Option<(u32, &'a str)>,
+    /// What the pages the message links to say about themselves (D41), drawn under the text.
+    pub link_previews: &'a [lazy_protocol::LinkPreview],
 }
 
 /// The width a row spends beside its content: the padding on both sides, the avatar, and the
@@ -427,6 +433,78 @@ fn body(props: &RowProps<'_>, id: &ElementId) -> AnyElement {
             epoch: select.epoch,
         }),
     })
+}
+
+/// A quiet card for each linked page: its site, its title (which opens the link), and the start of
+/// its description. Plain text only; nothing is loaded from the page.
+fn preview_cards(props: &RowProps<'_>) -> AnyElement {
+    let theme = props.theme;
+    let colors = theme.colors;
+    let prefix = props.label_prefix;
+    let index = props.index;
+    div()
+        .flex()
+        .flex_col()
+        .gap_1p5()
+        .pt_1()
+        .children(props.link_previews.iter().enumerate().map(|(n, preview)| {
+            let target = crate::rich_text::LinkTarget::classify(&preview.url);
+            let on_link = props.on_link.clone();
+            let title = preview.title.clone().unwrap_or_else(|| preview.url.clone());
+            let aria = format!(
+                "Link preview: {title}{}",
+                preview
+                    .site_name
+                    .as_ref()
+                    .map(|site| format!(", from {site}"))
+                    .unwrap_or_default()
+            );
+            div()
+                .debug_selector(move || format!("{prefix}link-preview-{index}-{n}"))
+                .max_w(px(520.))
+                .pl_3()
+                .py_0p5()
+                .border_l_4()
+                .border_color(colors.quote_bar)
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .children(preview.site_name.clone().map(|site| {
+                    div()
+                        .text_size(theme.type_scale.small)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors.text_muted)
+                        .truncate()
+                        .child(site)
+                }))
+                .child(
+                    div()
+                        .id(ElementId::NamedInteger(
+                            format!("link-preview-title-{n}").into(),
+                            index as u64,
+                        ))
+                        .role(gpui::Role::Link)
+                        .aria_label(aria)
+                        .text_size(theme.type_scale.body)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors.accent)
+                        .line_clamp(2)
+                        .when_some(target, |el, target| {
+                            el.cursor_pointer()
+                                .hover(|style| style.underline())
+                                .on_click(move |_, window, cx| on_link(target.clone(), window, cx))
+                        })
+                        .child(title),
+                )
+                .children(preview.description.clone().map(|text| {
+                    div()
+                        .text_size(theme.type_scale.small)
+                        .text_color(colors.text_muted)
+                        .line_clamp(2)
+                        .child(text)
+                }))
+        }))
+        .into_any_element()
 }
 
 fn small_button(
@@ -1254,8 +1332,30 @@ pub fn render_message_row(mut props: RowProps<'_>) -> AnyElement {
             }
         }
         None => {
-            if props.tombstone || !props.item.document.has_no_content() {
-                content = content.child(body(&props, &id));
+            match (&props.item.rich, props.tombstone) {
+                // An integration's blocks are drawn in place of their fallback text (D40).
+                (Some(rich), false) => {
+                    content = content.child(crate::rich_blocks::render_rich(
+                        crate::rich_blocks::RichProps {
+                            content: rich,
+                            theme,
+                            id: id.clone(),
+                            label_prefix: props.label_prefix,
+                            index: props.index,
+                            on_link: props.on_link.clone(),
+                            mentions: props.mentions,
+                            on_press: props.on_press.clone(),
+                            pressing: props.pressing,
+                        },
+                    ));
+                }
+                _ if props.tombstone || !props.item.document.has_no_content() => {
+                    content = content.child(body(&props, &id));
+                }
+                _ => {}
+            }
+            if !props.tombstone && !props.link_previews.is_empty() {
+                content = content.child(preview_cards(&props));
             }
             if !files.is_empty() {
                 content = content.child(files_block(std::mem::take(&mut files)));
@@ -1438,6 +1538,7 @@ mod tests {
             edit: EditState::None,
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
+            rich: None,
         }
     }
 
@@ -1510,6 +1611,7 @@ mod tests {
             edit: EditState::None,
             reactions: vec![],
             reactions_as_of: EventSeq::ZERO,
+            rich: None,
         };
         let layout = row_layout(Some(&first), &pending, &TimeZone::UTC, &now_at(BASE + 30));
         assert!(!layout.show_header);

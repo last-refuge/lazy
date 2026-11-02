@@ -156,6 +156,8 @@ pub struct TimelineItem {
     pub key: ItemKey,
     pub author_id: UserId,
     pub document: MessageDocument,
+    /// An integration's blocks (D40), drawn in place of `document` when present.
+    pub rich: Option<lazy_domain::RichContent>,
     pub delivery: Delivery,
     /// When the message was last edited, for the "(edited)" mark.
     pub edited_at: Option<Timestamp>,
@@ -466,6 +468,8 @@ pub enum ActionKind {
     RunCommand(ConversationId),
     /// Setting an app's events (D38).
     AppEvents(lazy_domain::AppId),
+    /// Setting where an app is told about presses of its buttons (D40).
+    AppInteractivity(lazy_domain::AppId),
     /// Adding a custom emoji (one at a time).
     AddCustomEmoji,
     RenameCustomEmoji(EmojiId),

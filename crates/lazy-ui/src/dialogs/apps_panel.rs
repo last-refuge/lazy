@@ -71,6 +71,8 @@ pub struct AppsPanel {
     command_usage: Entity<TextInput>,
     /// The events address, and the kinds chosen, as being edited (D38).
     events_url: Entity<TextInput>,
+    /// Where presses of the app's buttons go, as being edited (D40).
+    interactivity_url: Entity<TextInput>,
     event_types: Vec<&'static str>,
     /// Save the events address without the challenge (Zapier, n8n, Make).
     skip_check: bool,
@@ -92,6 +94,8 @@ pub struct AppsPanel {
     secret_focus: FocusHandle,
     events_save_focus: FocusHandle,
     events_off_focus: FocusHandle,
+    interactivity_save_focus: FocusHandle,
+    interactivity_off_focus: FocusHandle,
     skip_check_focus: FocusHandle,
     event_type_focus: HashMap<&'static str, FocusHandle>,
     manage_focus: HashMap<AppId, FocusHandle>,
@@ -128,7 +132,25 @@ impl AppsPanel {
             2048,
             cx,
         );
+        let interactivity_url = single_line_field(
+            "https://your-app.example/slack/interactive",
+            "Button presses address",
+            2048,
+            cx,
+        );
         let mut subscriptions = Vec::new();
+        subscriptions.push(cx.subscribe_in(
+            &interactivity_url,
+            window,
+            |this, _input, event: &TextInputEvent, _window, cx| match event {
+                TextInputEvent::Submit => this.save_interactivity(cx),
+                TextInputEvent::Tab { backwards } => cx.emit(AppsPanelEvent::Tab {
+                    backwards: *backwards,
+                }),
+                TextInputEvent::Changed => cx.notify(),
+                _ => {}
+            },
+        ));
         subscriptions.push(cx.subscribe_in(
             &events_url,
             window,
@@ -194,6 +216,7 @@ impl AppsPanel {
             command_description,
             command_usage,
             events_url,
+            interactivity_url,
             event_types: vec!["app_mention"],
             skip_check: false,
             scopes: AppScope::DEFAULT.to_vec(),
@@ -212,6 +235,8 @@ impl AppsPanel {
             secret_focus: cx.focus_handle().tab_stop(true),
             events_save_focus: cx.focus_handle().tab_stop(true),
             events_off_focus: cx.focus_handle().tab_stop(true),
+            interactivity_save_focus: cx.focus_handle().tab_stop(true),
+            interactivity_off_focus: cx.focus_handle().tab_stop(true),
             skip_check_focus: cx.focus_handle().tab_stop(true),
             event_type_focus: HashMap::new(),
             manage_focus: HashMap::new(),
@@ -244,6 +269,7 @@ impl AppsPanel {
             &self.command_description,
             &self.command_usage,
             &self.events_url,
+            &self.interactivity_url,
         ]
         .iter()
         .any(|input| input.read(cx).is_composing())
@@ -262,6 +288,7 @@ impl AppsPanel {
             kinds.push(ActionKind::AppCommand(*app));
             kinds.push(ActionKind::LoadAppSigningSecret(*app));
             kinds.push(ActionKind::AppEvents(*app));
+            kinds.push(ActionKind::AppInteractivity(*app));
             for channel in self.channel_focus.keys() {
                 kinds.push(ActionKind::AppChannel(*app, *channel));
             }
@@ -370,7 +397,14 @@ impl AppsPanel {
             };
             self.events_url
                 .update(cx, |input, cx| input.set_text(&url, cx));
+            let pressed = self
+                .app(app, cx)
+                .and_then(|a| a.interactivity_url)
+                .unwrap_or_default();
+            self.interactivity_url
+                .update(cx, |input, cx| input.set_text(&pressed, cx));
             self.dispatch(Input::DismissAction(ActionKind::AppEvents(app)), cx);
+            self.dispatch(Input::DismissAction(ActionKind::AppInteractivity(app)), cx);
         }
         self.copied = false;
         self.view = AppsView::Details(app);
@@ -430,6 +464,17 @@ impl AppsPanel {
         };
         self.waiting = Some((kind, false));
         self.dispatch(input, cx);
+    }
+
+    fn save_interactivity(&mut self, cx: &mut Context<Self>) {
+        let AppsView::Details(app) = self.view else {
+            return;
+        };
+        let url = self.interactivity_url.read(cx).text().trim().to_owned();
+        if url.is_empty() {
+            return;
+        }
+        self.dispatch(Input::SetAppInteractivity { app, url }, cx);
     }
 
     fn save_events(&mut self, cx: &mut Context<Self>) {
@@ -991,6 +1036,7 @@ impl AppsPanel {
         }
         body = body.child(self.commands_section(&app, theme, cx));
         body = body.child(self.events_section(&app, theme, window, cx));
+        body = body.child(self.interactivity_section(&app, theme, window, cx));
         let delete_to = this;
         body.child(div().flex().justify_end().child(form::button(
             theme,
@@ -1364,6 +1410,97 @@ impl AppsPanel {
                                                 url: String::new(),
                                                 types: Vec::new(),
                                                 skip_check: false,
+                                            },
+                                            cx,
+                                        );
+                                    })
+                                    .ok();
+                            },
+                        ))
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// Buttons: where the app is told someone pressed one of its buttons (D40).
+    fn interactivity_section(
+        &mut self,
+        app: &App,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let this = cx.entity().downgrade();
+        let id = app.id;
+        let state = self.action(ActionKind::AppInteractivity(id), cx);
+        let working = state == ActionState::InFlight;
+        let error = match state {
+            ActionState::Failed(message) => Some(message),
+            _ => None,
+        };
+        let status = match &app.interactivity_url {
+            Some(url) => format!("On: presses of its buttons go to {url}."),
+            None => "Off. Its messages can have buttons that open links; give an address to be \
+                     told when people press its other buttons, as Slack's interactivity does."
+                .to_owned(),
+        };
+        let save_to = this.clone();
+        let off_to = this;
+        let has_url = !self.interactivity_url.read(cx).text().trim().is_empty();
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(self.section_title(theme, "Buttons"))
+            .child(self.note(theme, "apps-interactivity-status", status))
+            .child(form::labeled_field(
+                theme,
+                "Button presses address",
+                &self.interactivity_url,
+                Some(
+                    "Sent Slack's block_actions, signed like its commands. Its answer can reply \
+                     to the person, post, or replace the message."
+                        .into(),
+                ),
+                error.map(Into::into),
+                window,
+                cx,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(form::button(
+                        theme,
+                        "apps-interactivity-save",
+                        if working { "Saving…" } else { "Save address" },
+                        ButtonKind::Secondary,
+                        !working && has_url,
+                        &self.interactivity_save_focus,
+                        move |_, cx| {
+                            save_to
+                                .update(cx, |panel, cx| panel.save_interactivity(cx))
+                                .ok();
+                        },
+                    ))
+                    .when(app.interactivity_url.is_some(), |row| {
+                        row.child(form::button(
+                            theme,
+                            "apps-interactivity-off",
+                            "Turn off",
+                            ButtonKind::Secondary,
+                            !working,
+                            &self.interactivity_off_focus,
+                            move |_, cx| {
+                                off_to
+                                    .update(cx, |panel, cx| {
+                                        panel
+                                            .interactivity_url
+                                            .update(cx, |input, cx| input.set_text("", cx));
+                                        panel.dispatch(
+                                            Input::SetAppInteractivity {
+                                                app: id,
+                                                url: String::new(),
                                             },
                                             cx,
                                         );

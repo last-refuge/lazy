@@ -375,6 +375,8 @@ pub struct TimelineView {
     file_notice: Option<String>,
     /// Thumbnails and decodes the rows drawn since the last flush asked for.
     wanted_thumbnails: Vec<AttachmentId>,
+    /// Messages whose link previews the rows drawn since the last flush need, with their revision.
+    wanted_previews: Vec<(lazy_domain::MessageId, u32)>,
     wanted_decodes: Vec<(ImageKey, Source)>,
     /// Custom emoji the rows drawn since the last flush showed.
     wanted_emoji: Vec<lazy_domain::EmojiId>,
@@ -475,6 +477,7 @@ impl TimelineView {
             download_failed: HashSet::new(),
             file_notice: None,
             wanted_thumbnails: Vec::new(),
+            wanted_previews: Vec::new(),
             wanted_decodes: Vec::new(),
             wanted_emoji: Vec::new(),
             wanted_avatars: Vec::new(),
@@ -671,6 +674,17 @@ impl TimelineView {
             }
             match *change {
                 Change::ImageChanged { .. } => {}
+                Change::PreviewsChanged { message } => {
+                    // The row grows by its cards.
+                    for (scope, state) in &self.lists {
+                        if let Some(index) = rows(model.core(), *scope)
+                            .iter()
+                            .position(|item| item.message_id() == Some(message))
+                        {
+                            state.remeasure_items(index..index + 1);
+                        }
+                    }
+                }
                 Change::DownloadChanged { attachment } => downloads.push(attachment),
                 Change::JumpTargetChanged => {
                     self.pending_jump = model.core().jump_target();
@@ -1694,6 +1708,16 @@ impl TimelineView {
     fn flush_requests(&mut self, cx: &mut Context<Self>) {
         self.requests_queued = false;
         let thumbnails = std::mem::take(&mut self.wanted_thumbnails);
+        let mut previews = std::mem::take(&mut self.wanted_previews);
+        previews.sort_by_key(|(message, revision)| (message.to_string(), *revision));
+        previews.dedup();
+        if !previews.is_empty() {
+            self.model.update(cx, |model, cx| {
+                for (message, revision) in previews {
+                    model.dispatch(Input::LoadPreviews { message, revision }, cx);
+                }
+            });
+        }
         let decodes = std::mem::take(&mut self.wanted_decodes);
         let mut emoji = std::mem::take(&mut self.wanted_emoji);
         emoji.sort_by_key(|id| id.to_string());
@@ -2680,6 +2704,61 @@ impl TimelineView {
                 this.toggle_reaction(scope, key, emoji, cx)
             },
         ));
+        // A button in an integration's rich content (D40): pressed for this message.
+        let on_press: Option<crate::rich_blocks::PressHandler> = item.message_id().map(|message| {
+            let press = cx.processor(
+                move |this,
+                      (block, button): (u32, lazy_domain::Button),
+                      _window: &mut Window,
+                      cx: &mut Context<Self>| {
+                    this.model.update(cx, |model, cx| {
+                        model.dispatch(
+                            Input::PressButton {
+                                conversation,
+                                message,
+                                block,
+                                action_id: button.action_id,
+                                label: button.text,
+                            },
+                            cx,
+                        )
+                    });
+                },
+            );
+            let handler: crate::rich_blocks::PressHandler =
+                Rc::new(move |block, button: &lazy_domain::Button, window, cx| {
+                    press((block, button.clone()), window, cx)
+                });
+            handler
+        });
+        // Link previews (D41): a person's confirmed message with links, asked for once per revision.
+        let preview_revision = match item.delivery {
+            lazy_client_core::Delivery::Confirmed { revision, .. }
+                if !item.deleted
+                    && item.rich.is_none()
+                    && !core.is_bot(item.author_id)
+                    && !item.document.preview_links().is_empty() =>
+            {
+                Some(revision)
+            }
+            _ => None,
+        };
+        let link_previews: Vec<lazy_protocol::LinkPreview> =
+            match (item.message_id(), preview_revision) {
+                (Some(message), Some(revision)) => {
+                    if !core.previews_requested(message, revision) {
+                        self.wanted_previews.push((message, revision));
+                    }
+                    core.link_previews(message, revision)
+                        .map(<[_]>::to_vec)
+                        .unwrap_or_default()
+                }
+                _ => Vec::new(),
+            };
+        let pressing = core
+            .pressing(conversation)
+            .filter(|(message, ..)| Some(*message) == item.message_id())
+            .map(|(_, block, action)| (block, action.to_owned()));
         let on_add_reaction: AnchorHandler = Rc::new(cx.processor(
             move |this,
                   anchor: gpui::Point<Pixels>,
@@ -2900,12 +2979,18 @@ impl TimelineView {
                 Mode::Conversation => "",
                 Mode::Thread => "thread-",
             },
+            on_press,
+            pressing: pressing
+                .as_ref()
+                .map(|(block, action)| (*block, action.as_str())),
+            link_previews: &link_previews,
         });
         self.wanted_emoji.extend(emoji_ids);
         if shows_author {
             self.wanted_avatars.push(item.author_id);
         }
         if (!self.wanted_thumbnails.is_empty()
+            || !self.wanted_previews.is_empty()
             || !self.wanted_decodes.is_empty()
             || !self.wanted_emoji.is_empty()
             || !self.wanted_avatars.is_empty())
