@@ -66,3 +66,5 @@ zeroize = { version = "1", features = ["alloc"] }
 lazy-server = { path = ".", features = ["testing"] }
 reqwest.workspace = true
 tokio-tungstenite.workspace = true
+# Presence's grace period is tested on a paused clock.
+tokio = { workspace = true, features = ["test-util"] }

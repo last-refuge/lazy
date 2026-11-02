@@ -15,6 +15,8 @@ pub enum Change {
     ConnectionChanged,
     /// Workspaces, conversations, members, or display names changed.
     DirectoryChanged,
+    /// Who is online changed, or stopped being known (D45).
+    PresenceChanged,
     SelectionChanged,
     DraftChanged {
         conversation: ConversationId,

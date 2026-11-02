@@ -538,3 +538,27 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
   - the deployed call server reaching Lazy over HTTPS (`RTC_REPORT_URL` on Coolify; the image now installs CA certificates);
   - how notices read with a screen reader;
   - an older client (0.10.2) against this server: by design it shows each notice's words as a message from its author, and a drop-in notice as "(edited)" after it changes.
+
+## Presence (D45, 2026-11-02)
+
+- *Measured (tests):*
+  - `presence.rs` unit tests, on a paused clock:
+    - a person is online at once;
+    - a second device changes nothing;
+    - offline comes only after the grace period;
+    - reconnecting within the grace period announces nothing;
+    - workspaces are separate.
+  - `lazy-server/tests/presence.rs`, over real sockets:
+    - after `caught_up` a subscriber gets the list, itself included;
+    - another person connecting is announced online, and dropping is announced offline after the grace period;
+    - a drop and reconnect within the grace period announces nothing (proved by a later marker arriving first).
+  - Existing realtime tests are unaffected: the test socket skips presence frames unless asked.
+  - `lazy-client-core/tests/presence.rs`: the list and changes set `is_online`; a dropped connection makes it unknown; a change without a list is ignored.
+  - `lazy-ui` `direct_conversations_show_whether_the_other_person_is_online`: no mark while unknown, a green dot when online, a ring when offline.
+  - `lazy-e2e` `two_clients_exchange_messages`: two real clients each see the other online.
+  - The full suite (`scripts/test.sh`, `--test-threads=4`) passed 2,841 with 0 failures (7 ignored). `cargo fmt --check` passes, and clippy shows only the warning already in `lazy-client-runtime/tests/updates.rs`.
+- *Observed:* the offscreen screens (`03`/`04-chat-*-wide`) show a green dot on Bob Okafor's avatar in Direct messages and none on the group. The first, smaller, darker dot was hard to see, so it is now 12 px and a brighter green.
+- *Not checked by anyone:*
+  - two people on the deployed server;
+  - many simultaneous connections;
+  - how the dot reads to a screen reader (the row's label does not say online yet).

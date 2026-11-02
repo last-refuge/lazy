@@ -10,8 +10,12 @@
 //! 4. replays committed events after the cursor from the database, in pages, answering
 //!    `snapshot_required` (`cursor_expired`) if retention has pruned events after the cursor,
 //!    including between two pages of the same replay;
-//! 5. sends `caught_up`;
-//! 6. drains the broadcast, skipping anything at or before its cursor.
+//! 5. sends `caught_up`, then who is online (`presence`, D45);
+//! 6. drains the broadcast, skipping anything at or before its cursor, and passes on presence
+//!    changes as they happen.
+//!
+//! While the subscription lives, its person counts as online in the workspace
+//! ([`crate::presence`]).
 //!
 //! Everything the dispatcher published before step 2 was committed before step 4's reads, so the
 //! replay sees it; everything published after arrives on the broadcast. If the broadcast reports
@@ -42,6 +46,7 @@ use crate::dispatcher::{BATCH_SIZE, Dispatcher};
 use crate::error::AppError;
 use crate::events::{self, StoredEvent, Visibility};
 use crate::logging::Describe;
+use crate::presence::Presence;
 
 /// Frames queued for the socket before senders wait.
 const OUTBOUND_QUEUE: usize = 256;
@@ -75,6 +80,7 @@ impl From<AppError> for Exit {
 pub async fn serve_connection(
     pool: PgPool,
     dispatcher: Dispatcher,
+    presence: Presence,
     principal: Principal,
     socket: WebSocket,
     shutdown: CancellationToken,
@@ -148,7 +154,7 @@ pub async fn serve_connection(
                 match message {
                     Message::Text(text) => {
                         handle_client_text(
-                            text.as_str(), &pool, &dispatcher, principal.user_id, &out,
+                            text.as_str(), &pool, &dispatcher, &presence, principal.user_id, &out,
                             &mut subscriptions, &mut handles,
                         ).await;
                     }
@@ -180,10 +186,12 @@ pub async fn serve_connection(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_client_text(
     text: &str,
     pool: &PgPool,
     dispatcher: &Dispatcher,
+    presence: &Presence,
     user: UserId,
     out: &mpsc::Sender<Message>,
     subscriptions: &mut JoinSet<()>,
@@ -200,6 +208,7 @@ async fn handle_client_text(
             let task = Subscription {
                 pool: pool.clone(),
                 dispatcher: dispatcher.clone(),
+                presence: presence.clone(),
                 user,
                 workspace_id,
                 out: out.clone(),
@@ -234,6 +243,7 @@ async fn send_frame(out: &mpsc::Sender<Message>, frame: &ServerFrame) -> Result<
 struct Subscription {
     pool: PgPool,
     dispatcher: Dispatcher,
+    presence: Presence,
     user: UserId,
     workspace_id: WorkspaceId,
     out: mpsc::Sender<Message>,
@@ -274,6 +284,9 @@ impl Subscription {
         }
         // Subscribe before reading anything from the database (see module docs).
         let mut live = self.dispatcher.subscribe(self.workspace_id).await?;
+        // Online while this subscription lives (the guard goes when the task ends or is aborted).
+        let _online = self.presence.connect(self.workspace_id, self.user);
+        let (online, mut changes) = self.presence.watch(self.workspace_id);
 
         let head = events::head(&self.pool, self.workspace_id)
             .await?
@@ -299,9 +312,37 @@ impl Subscription {
             },
         )
         .await?;
+        send_frame(
+            &self.out,
+            &ServerFrame::Presence {
+                workspace_id: self.workspace_id,
+                online,
+            },
+        )
+        .await?;
 
         loop {
-            match live.recv().await {
+            let received = tokio::select! {
+                received = live.recv() => received,
+                change = changes.recv() => {
+                    let frame = match change {
+                        Ok((user_id, online)) => ServerFrame::PresenceChanged {
+                            workspace_id: self.workspace_id,
+                            user_id,
+                            online,
+                        },
+                        // Changes were missed: the whole list again.
+                        Err(broadcast::error::RecvError::Lagged(_)) => ServerFrame::Presence {
+                            workspace_id: self.workspace_id,
+                            online: self.presence.online(self.workspace_id),
+                        },
+                        Err(broadcast::error::RecvError::Closed) => continue,
+                    };
+                    send_frame(&self.out, &frame).await?;
+                    continue;
+                }
+            };
+            match received {
                 Ok(batch) => {
                     if batch.last_seq <= self.cursor {
                         continue;

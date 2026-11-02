@@ -125,6 +125,9 @@ pub struct ClientCore {
     timelines: HashMap<ConversationId, Timeline>,
     ops: HashMap<OperationId, LocalOp>,
     sockets: HashMap<WorkspaceId, ConnectionState>,
+    /// Who is online in each workspace (D45), as its live connection last said; absent while the
+    /// connection is not live, when nobody's presence is known.
+    presence: HashMap<WorkspaceId, HashSet<UserId>>,
     connection: ConnectionState,
     /// Last event position applied, per workspace.
     applied: HashMap<WorkspaceId, EventSeq>,
@@ -375,6 +378,7 @@ impl ClientCore {
             timelines: HashMap::new(),
             ops: HashMap::new(),
             sockets: HashMap::new(),
+            presence: HashMap::new(),
             connection: ConnectionState::Offline,
             applied: HashMap::new(),
             recovered_journal: Vec::new(),
@@ -511,6 +515,15 @@ impl ClientCore {
     }
 
     /// A conversation of any workspace the person belongs to.
+    /// Whether `user` is online in the workspace on screen (D45): `None` while that isn't known
+    /// (the connection is not live, or the server is older than presence).
+    pub fn is_online(&self, user: UserId) -> Option<bool> {
+        let workspace = self.active?;
+        self.presence
+            .get(&workspace)
+            .map(|people| people.contains(&user))
+    }
+
     pub fn conversation(&self, id: ConversationId) -> Option<&Conversation> {
         self.find_conversation(id)
     }
@@ -1320,6 +1333,7 @@ impl ClientCore {
         self.ops.clear();
         self.clear_files(out);
         self.sockets.clear();
+        self.presence.clear();
         self.subscribed.clear();
         self.members.clear();
         self.applied.clear();
@@ -1409,6 +1423,7 @@ impl ClientCore {
         self.close_admin_views(out);
         self.permalink = None;
         self.sockets.clear();
+        self.presence.clear();
         self.subscribed.clear();
         self.recompute_connection(out);
         out.effects.push(Effect::ForgetSession);
@@ -2603,6 +2618,32 @@ impl ClientCore {
                 }
             }
             ServerFrame::SnapshotRequired { .. } => self.snapshot_required(out),
+            ServerFrame::Presence {
+                workspace_id,
+                online,
+            } => {
+                if self.sockets.contains_key(&workspace_id) {
+                    self.presence
+                        .insert(workspace_id, online.into_iter().collect());
+                    out.changes.push(Change::PresenceChanged);
+                }
+            }
+            ServerFrame::PresenceChanged {
+                workspace_id,
+                user_id,
+                online,
+            } => {
+                if let Some(people) = self.presence.get_mut(&workspace_id) {
+                    let changed = if online {
+                        people.insert(user_id)
+                    } else {
+                        people.remove(&user_id)
+                    };
+                    if changed {
+                        out.changes.push(Change::PresenceChanged);
+                    }
+                }
+            }
             ServerFrame::Error { code, message } => {
                 self.note_error(
                     "realtime",
@@ -2822,6 +2863,12 @@ impl ClientCore {
         };
         if let Some(slot) = self.sockets.get_mut(&workspace) {
             *slot = state;
+            // Until the connection says again, nobody's presence there is known.
+            if !matches!(event, SocketEvent::Opened { .. })
+                && self.presence.remove(&workspace).is_some()
+            {
+                out.changes.push(Change::PresenceChanged);
+            }
             self.recompute_connection(out);
             if matches!(event, SocketEvent::Opened { .. }) {
                 self.retry_revalidation(out);

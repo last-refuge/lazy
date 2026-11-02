@@ -276,6 +276,7 @@ Goal: dogfood users can do normal work without developer assistance.
   - [X] Decide where notification decisions are computed
   - [X] Notification preferences: per workspace, per conversation, mute
   - [X] Status and do not disturb
+  - [X] Presence: who is online, from the realtime connections, shown on direct conversations in the sidebar (D45; no away state yet)
   - [X] Thread inbox
   - [X] Desktop notifications through a platform interface (built and tested with a fake notifier)
   - [ ] Verify desktop notifications on a real display: a notification daemon, replace and withdraw, click to open, and the launcher count (manual)

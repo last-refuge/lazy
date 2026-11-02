@@ -944,3 +944,72 @@ fn notices_are_lines_and_a_live_drop_in_can_be_joined(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(cx.debug_bounds("drop-in-badge-general").is_none());
 }
+
+/// Presence (D45): a direct conversation in the sidebar shows whether the other person is online,
+/// and shows nothing while that isn't known.
+#[gpui::test]
+fn direct_conversations_show_whether_the_other_person_is_online(cx: &mut TestAppContext) {
+    let (app, cx) = start(cx);
+    let bob = user("bob");
+    let mut dm = channel(app.workspace, ConversationId::generate(), "dm", None);
+    dm.kind = ConversationKind::Direct;
+    dm.name = None;
+    dm.is_default = false;
+    dm.participants = vec![app.me.id, bob.id];
+    let mut bootstrap = app.bootstrap();
+    let workspace = &mut bootstrap.workspaces[0];
+    workspace.members = vec![app.me.clone(), bob.clone()];
+    workspace.conversations.push(dm.clone());
+    workspace.user_state.push(read_state(dm.id));
+    app.dispatch(
+        cx,
+        Input::Started(StartupState {
+            session_restored: true,
+            ..Default::default()
+        }),
+    );
+    app.dispatch(cx, Input::BootstrapLoaded(Box::new(bootstrap)));
+    let refresh = |cx: &mut VisualTestContext| {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    };
+    refresh(cx);
+    let title = "User bob";
+    assert!(
+        cx.debug_bounds("conv-User bob").is_some(),
+        "the DM is listed as {title}"
+    );
+    assert!(cx.debug_bounds("presence-User bob-online").is_none());
+    assert!(
+        cx.debug_bounds("presence-User bob-offline").is_none(),
+        "unknown: no mark"
+    );
+
+    app.dispatch(
+        cx,
+        Input::Socket(lazy_client_core::SocketEvent::Opened {
+            workspace: app.workspace,
+        }),
+    );
+    app.dispatch(
+        cx,
+        Input::Frame(lazy_protocol::ServerFrame::Presence {
+            workspace_id: app.workspace,
+            online: vec![app.me.id, bob.id],
+        }),
+    );
+    refresh(cx);
+    assert!(cx.debug_bounds("presence-User bob-online").is_some());
+
+    app.dispatch(
+        cx,
+        Input::Frame(lazy_protocol::ServerFrame::PresenceChanged {
+            workspace_id: app.workspace,
+            user_id: bob.id,
+            online: false,
+        }),
+    );
+    refresh(cx);
+    assert!(cx.debug_bounds("presence-User bob-online").is_none());
+    assert!(cx.debug_bounds("presence-User bob-offline").is_some());
+}
