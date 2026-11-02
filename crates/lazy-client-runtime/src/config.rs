@@ -90,6 +90,10 @@ pub struct RuntimeConfig {
     pub idle_timeout: Duration,
     /// How long draft and cursor writes are coalesced.
     pub save_debounce: Duration,
+    /// What drop-ins send. Defaults from `LAZY_DROP_IN_TEST_MEDIA`.
+    pub drop_in_media: crate::DropInMedia,
+    /// Where drop-in video frames go; the UI draws from a clone of it.
+    pub frames: crate::FrameStore,
 }
 
 impl RuntimeConfig {
@@ -123,6 +127,8 @@ impl RuntimeConfig {
             },
             idle_timeout: Duration::from_secs(90),
             save_debounce: Duration::from_millis(400),
+            drop_in_media: crate::DropInMedia::from_env(),
+            frames: crate::FrameStore::new(),
         }
     }
 }

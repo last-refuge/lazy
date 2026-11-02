@@ -1,8 +1,8 @@
 # Lazy application plan
 
-Lazy will combine familiar workplace chat semantics with a polished native interface. Build it around a shared Rust core, GPUI clients, a Rust server, and Postgres, with huddles handled by a separate Rust media service.
+Lazy will combine familiar workplace chat semantics with a polished native interface. Build it around a shared Rust core, GPUI clients, a Rust server, and Postgres, with drop-ins handled by a separate Rust media service.
 
-The desktop release includes channels, direct and group conversations, threaded discussion, emoji, outside integrations, and huddles with audio, video, and screen sharing. Prepare for native iOS and Android clients from the beginning by keeping application logic independent of GPUI and platform services.
+The desktop release includes channels, direct and group conversations, threaded discussion, emoji, outside integrations, and drop-ins with audio, video, and screen sharing. Prepare for native iOS and Android clients from the beginning by keeping application logic independent of GPUI and platform services.
 
 This is an implementation plan. Technology choices below are proposed choices to validate during foundation work, and performance numbers are targets rather than measured results.
 
@@ -12,7 +12,7 @@ This is an implementation plan. Technology choices below are proposed choices to
 - Use Postgres as the only database. Attachment storage and bounded client files do not require another database.
 - Follow the Rust best practices and GPUI desktop applications skills, along with repository instructions and the actual dependency versions selected for implementation.
 - Make the application beautiful, responsive, accessible, and comfortable for people familiar with Slack.
-- Keep the Rust core portable so native phone clients can reuse application behavior, synchronization, protocol types, and huddle state machines.
+- Keep the Rust core portable so native phone clients can reuse application behavior, synchronization, protocol types, and drop-in state machines.
 
 Current upstream GPUI includes a [native iOS backend](https://github.com/zed-industries/zed/tree/main/crates/gpui_ios). An upstream Android backend was not verified in its [platform configuration](https://github.com/zed-industries/zed/blob/main/crates/gpui_platform/Cargo.toml) during planning on October 28, 2026. Preserve the Rust/GPUI requirement and make Android feasibility an early milestone. An iOS backend's existence does not establish readiness for Lazy's complete mobile workflows.
 
@@ -31,12 +31,12 @@ Keep the behaviors people already understand, and specify edge cases before impl
 | Emoji | Unicode emoji, skin tones, custom workspace emoji, searchable picker, autocomplete, and reactions |
 | Attention | Mentions, unread markers, thread inbox, muted channels, notification preferences, status, and do not disturb |
 | Discovery | Channel directory, people directory, quick switcher, and permission-aware search |
-| Huddles | Channel and conversation huddles with audio, video, screen sharing, and persistent controls |
+| Drop-ins | Channel and conversation drop-ins with audio, video, screen sharing, and persistent controls |
 | Integrations | Incoming webhooks, bots, commands, rich messages, interactive actions, and channel subscriptions |
 
 Define thread notifications, deleted root messages, archived channels, private-channel invitations, membership removal, concurrent message edits, and unread behavior in tested Rust models. Thread replies inherit conversation access. A thread reference in a channel points to the existing reply rather than duplicating its content or identity.
 
-Model workspace roles and authorization explicitly. Server authorization is authoritative for every mutation, history read, search result, attachment request, realtime subscription, and huddle join.
+Model workspace roles and authorization explicitly. Server authorization is authoritative for every mutation, history read, search result, attachment request, realtime subscription, and drop-in join.
 
 ## Experience and visual design
 
@@ -46,7 +46,7 @@ Use a recognizable desktop layout:
 - A channel and conversation sidebar.
 - A central message timeline.
 - A resizable thread or details pane.
-- A compact huddle dock that remains available while navigating.
+- A compact drop-in dock that remains available while navigating.
 
 Give Lazy its own visual identity: warm neutral surfaces, restrained accent colors, excellent typography, comfortable spacing, clear unread indicators, and expressive emoji. Support light and dark themes through semantic design tokens rather than colors embedded in individual views.
 
@@ -77,7 +77,7 @@ flowchart TB
     PG[("Postgres")]
     Workers["Rust integration and notification workers"]
     External["External services"]
-    Media["Rust huddle media service"]
+    Media["Rust drop-in media service"]
     Files["Attachment storage"]
 
     Desktop --> Core
@@ -105,7 +105,7 @@ The proposed crate boundaries reflect real reuse and runtime boundaries. Introdu
 | `lazy-ui` | GPUI views, composer, timeline, themes, and reusable components |
 | `lazy-desktop` | Desktop startup, window lifecycle, assets, and packaging |
 | `lazy-server` | Authentication, authorization, application services, Postgres access, and realtime delivery |
-| `lazy-media` | Huddle session state and media service implementation |
+| `lazy-media` | Drop-in session state and media service implementation |
 
 Keep integration and notification modules inside the server initially; expose worker process modes when isolation is useful. Keep provider credentials and server administration capabilities out of client dependencies.
 
@@ -122,7 +122,7 @@ Use Postgres as the only database. Store:
 - Read cursors, thread subscriptions, and notification preferences.
 - Attachment metadata and access relationships.
 - Integration installations, credential references, subscriptions, and deliveries.
-- Huddle metadata, operation receipts, durable events, and background jobs.
+- Drop-in metadata, operation receipts, durable events, and background jobs.
 
 Use a versioned message document representation with a plain-text projection for search. Keep relational identities, membership, ordering, and integrity constraints explicit rather than burying them in unvalidated JSON.
 
@@ -154,9 +154,9 @@ Use bounded, versioned files for encrypted drafts and the submission journal, pl
 
 Begin search with Postgres full-text indexing and authorization filters. Search results, snippets, attachments, and integration previews must respect conversation access. Add indexes and change query strategies based on representative query plans and load measurements.
 
-## Huddles
+## Drop-ins
 
-Treat huddles as a substantial engineering track. A WebRTC transport library covers only part of a good calling experience.
+Treat drop-ins as a substantial engineering track. A WebRTC transport library covers only part of a good calling experience.
 
 The proposed approach is:
 
@@ -176,7 +176,7 @@ Build in this order:
 3. Device selection, permissions, mute, reconnect, echo cancellation, and noise handling.
 4. Screen sharing.
 5. Camera video and adaptive quality.
-6. Polished participant views and persistent huddle controls.
+6. Polished participant views and persistent drop-in controls.
 
 Validate a bounded launch capacity, such as 12 participants, before advertising it. Test Bluetooth devices, speakerphone echo, network loss, device removal, permission denial, restrictive networks, and sleep/wake. Define how media failure is reported and recovered without interrupting text messaging.
 
@@ -205,7 +205,7 @@ Use Postgres-backed jobs initially. Define job ownership, leases, bounded concur
 
 ## Native phone preparation
 
-Reuse the Rust domain model, synchronization engine, protocol, message documents, and huddle state machines. Keep these components free of desktop-only assumptions and GPUI dependencies.
+Reuse the Rust domain model, synchronization engine, protocol, message documents, and drop-in state machines. Keep these components free of desktop-only assumptions and GPUI dependencies.
 
 Keep platform capabilities behind interfaces for:
 
@@ -230,11 +230,11 @@ Android platform support is a feasibility gate. If a suitable GPUI backend is un
 | Familiar chat | Channels, DMs, group messages, threads, reactions, emoji, unread state | Core semantics pass end-to-end tests; private access remains enforced during reconnect |
 | Daily use | Search, attachments, notifications, quick switcher, settings | Dogfood users can complete normal work without developer assistance |
 | Integrations | Webhooks, provider integration, rich messages, delivery controls | Duplicate events and failures recover predictably; credentials can be revoked |
-| Huddles | Group audio, video, screen sharing, device controls | Declared participant capacity passes network and device tests |
+| Drop-ins | Group audio, video, screen sharing, device controls | Declared participant capacity passes network and device tests |
 | Release | Visual refinement, accessibility, installers, updates, operations | Signed packages, verified recovery, native QA, and defined support procedures |
-| Phone delivery | Native iOS and Android experiences using the shared core | Physical-device messaging, push, lifecycle, accessibility, and huddle verification |
+| Phone delivery | Native iOS and Android experiences using the shared core | Physical-device messaging, push, lifecycle, accessibility, and drop-in verification |
 
-Keep full huddles and integrations in the desktop release scope. Their prototypes start early even though complete delivery follows messaging. Build one working vertical slice before expanding each workflow.
+Keep full drop-ins and integrations in the desktop release scope. Their prototypes start early even though complete delivery follows messaging. Build one working vertical slice before expanding each workflow.
 
 Estimate the calendar after foundation establishes media and Android costs. Treat desktop delivery and future phone delivery as distinct release milestones with shared foundations.
 
@@ -293,7 +293,7 @@ Required coverage includes:
 - End-to-end tests with real clients, server, and persistence for submit, settle, restart, reconnect, and history paging.
 - Crash and fault injection at durable boundaries, including lost acknowledgments, interrupted client writes, storage failures, and worker restarts.
 - Native GPUI verification for layout, focus, keyboard input, IME candidate placement, screen readers, display scaling, and sleep/wake.
-- Huddle tests under the declared participant capacity, device changes, loss, latency, and restricted networks.
+- Drop-in tests under the declared participant capacity, device changes, loss, latency, and restricted networks.
 - Integration tests for duplicate provider events, permission changes, credential revocation, and unknown delivery outcomes.
 
 Use provisional performance targets, then validate them on named reference hardware and network conditions:
@@ -304,7 +304,7 @@ Use provisional performance targets, then validate them on named reference hardw
 | Timeline | Smooth interaction with 10,000 loaded messages and bounded mounted rows |
 | Input to frame submission | p95 below 16 ms |
 | Message acknowledgment | p95 below 300 ms in the reference region |
-| Huddle join | p95 below 3 seconds on the reference network |
+| Drop-in join | p95 below 3 seconds on the reference network |
 
 Record build, hardware, workload, network conditions, sample size, and measurement method. Frame submission time is distinct from display-presentation latency.
 

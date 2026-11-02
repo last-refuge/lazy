@@ -26,4 +26,7 @@ sqlx.workspace = true
 tempfile.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+rtc-sfu.workspace = true
+rtc-video.workspace = true
+axum.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "time", "sync", "macros", "rt-multi-thread"] }

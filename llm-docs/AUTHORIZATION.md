@@ -1,6 +1,6 @@
 # Authorization
 
-Who may do what, as enforced by the server. The server is authoritative for every mutation, history read, search result, attachment request, realtime subscription, and huddle join; clients may use these rules only to decide what to offer. The pure rules live in `lazy-domain` (`ChannelAccess`) and are checked row by row in `crates/lazy-domain/tests/authz_matrix.rs`.
+Who may do what, as enforced by the server. The server is authoritative for every mutation, history read, search result, attachment request, realtime subscription, and drop-in join; clients may use these rules only to decide what to offer. The pure rules live in `lazy-domain` (`ChannelAccess`) and are checked row by row in `crates/lazy-domain/tests/authz_matrix.rs`.
 
 ## Facts the rules use
 
@@ -52,7 +52,7 @@ These are specified now so later phases do not invent rules.
 | Search | Results are filtered by Read at query time, so removal from a channel removes its messages from results immediately; snippets obey the same filter |
 | Attachment download or upload | Read to download; Post to upload into a conversation |
 | Thread reply | Inherits the conversation's Read and Post |
-| Join a huddle in a conversation | Read, rechecked while connected |
+| Join a drop-in in a conversation | Read, rechecked while connected |
 | Manage channels and members | Admins and owners, plus channel creators for their private channels |
 
 Membership removal takes effect on the next delivery, history read, or mutation: replay and live delivery use current membership, never the membership at subscribe time.

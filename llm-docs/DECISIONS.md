@@ -750,15 +750,15 @@ Goal: an app is told what happens in its channels, as Slack's Events API tells a
 
 **Addendum (automation tools).** Zapier's, n8n's, and Make's catch hooks cannot answer the challenge, so `SetAppEventsRequest.skip_check` (the app's screen: "Don't check the address") saves an address without it. Deliveries are still signed, and a tool that does not check signatures accepts them anyway. The guide is in DEPLOY.md, "Zapier, n8n and Make".
 
-## D39. Huddles: an all-Rust media stack, built as a standalone library
+## D39. Drop-ins: an all-Rust media stack, built as a standalone library
 
-Decided by the owner, 2026-11-01. Huddles use our own Rust media stack, an SFU and a client
+Decided by the owner, 2026-11-01. Drop-ins use our own Rust media stack, an SFU and a client
 transport on str0m, rather than LiveKit. LiveKit was recommended as the faster route to proven
 audio quality, and Slack itself builds huddles on a bought media layer (the Amazon Chime SDK).
 The owner chose Rust because the same work will be reused: in a standalone Zoom-like client
 later, and in other projects.
 
-So the media code is a library first and Lazy's huddles second. It is a crate family (`rtc-*`,
+So the media code is a library first and Lazy's drop-ins second. It is a crate family (`rtc-*`,
 working name) with its own signaling, tokens, SFU, client, docs, and CI, and no dependency on
 any `lazy-*` crate. It lives in `media/` as its own workspace so that it can move to its own
 repository unchanged. Lazy is one host: it issues join tokens, receives the SFU's webhooks, and
@@ -767,7 +767,7 @@ draws the UI.
 Our code is Rust throughout. Opus, echo cancellation and noise suppression (WebRTC's audio
 processing), and VP8/VP9 come from C/C++ libraries through Rust bindings, behind traits that a
 pure-Rust implementation can replace later. The plan, milestones, and open questions are in
-`HUDDLES.md`. The spike (M0) records what it measures in `VERIFICATION.md`.
+`DROP_INS.md`. The spike (M0) records what it measures in `VERIFICATION.md`.
 
 
 ## D40. Rich messages and buttons (Phase 4, task 4.4)
@@ -809,3 +809,31 @@ Goal: a link a person posts shows what the page says about itself (its site, tit
 **In the client.** `Input::LoadPreviews`, kept per message and revision (at most 2,000 held), shown under the text as quiet cards: the site, the title (which opens the link), and two lines of description. Plain text only.
 
 **Not yet:** images in previews (they would need the server to fetch and serve them, with the same rules); removing a preview from one's own message; a workspace setting to turn previews off; previews for links in apps' messages; providers' own APIs (oEmbed) beyond what their pages' tags say.
+
+## D42. The drop-in MVP: video calls first, as a vertical slice (Phase 5, DROP_INS.md)
+
+Goal: two or more people in a conversation can see and hear each other inside Lazy, end to end on the planned stack (str0m SFU, the `rtc-*` library in `media/`, Lazy as host), so the stack can be tried on real machines before the milestones fill it in. It takes a thin slice of M0 to M5 instead of finishing M0 first; what it leaves out is listed below and in `DROP_INS.md`, "Status".
+
+**Codecs, changed from the plan's VP8.** Video is **H.264 (Constrained Baseline) through OpenH264, compiled from source** by the `openh264` crate: it builds with only a C/C++ compiler on Linux, macOS (both architectures) and Windows, where libvpx needs a system library or its own build system on each. The cost is licensing: OpenH264's source is BSD, but H.264 is patented, and Cisco's royalty cover applies only to its own prebuilt binaries, not to a build from source. Before Lazy is distributed beyond its owner's own use, either load Cisco's binary at runtime (the crate's `libloading` mode) or move to VP8/VP9 (libvpx) or AV1; the codec sits behind `VideoEncoder`/`VideoDecoder`, so that is a contained change. Audio is **Opus through `unsafe-libopus`** (libopus 1.3.1 transpiled to Rust by c2rust, BSD-3-Clause): nothing to compile or link. DTLS and SRTP use str0m's **pure-Rust crypto** (`rust-crypto`, its own DTLS), so the media stack has no OpenSSL or aws-lc dependency. Cameras use `nokhwa` (V4L2, AVFoundation, Media Foundation; its Linux build needs libclang), MJPEG frames are decoded by `zune-jpeg`, and audio devices use `cpal`.
+
+**Shape.**
+- `rtc-proto`: signaling (JSON on the SFU's WebSocket, `/rtc`) and join tokens (`rtc1.<claims>.<HMAC-SHA256>`, room, identity, name, expiry). Serde and pure-Rust crypto only.
+- `rtc-sfu`: ICE-lite on one UDP port, forwarding each participant's tracks to everyone else in the room (str0m's `chat` example, signaling moved to the WebSocket), keyframe requests passed to the sender, a room cap (12 by default). Its own process and container.
+- `rtc-client`: one str0m connection to the SFU per call. Camera and microphone are read and encoded on their own threads; each remote video is decoded on its own thread into a `FrameStore` (the newest frame per tile), remote audio is decoded into a mixer that the speakers play. A camera that fails turns video off and is reported; the call goes on.
+- `rtc-video`, `rtc-audio`: frames and sources (camera, a moving test pattern), the codecs, capture, playback, mixing.
+- Nothing in `media/` depends on Lazy (`scripts/check-media-deps.sh`).
+
+**Lazy's side.** `POST /v1/conversations/{id}/drop-in` answers anyone who can read the conversation with the SFU's address and a token for the room named by the conversation's id, valid 10 minutes; `unavailable` when `LAZY_RTC_URL` and `LAZY_RTC_SECRET` are not set. **No protocol bump**: one route and its types, nothing pushed. The core holds the drop-in (which conversation, who is in it, mute, video, speaking, why one ended); the runtime runs the call and reports `DropInReport`s, numbered by join so a late report from a call already left is dropped. Frames never pass through the core: the runtime and the UI share the `FrameStore`, and the UI's drop-in stage polls it every 40 ms while a drop-in runs, making a GPUI image of each new frame and dropping the one it replaces. `LAZY_DROP_IN_TEST_MEDIA=1` sends a test pattern and no sound (machines without a camera, and tests).
+
+**Left out of the MVP, by milestone:** who is in a drop-in seen from outside it, "drop-in started" posts, ringing, and removal on losing access (M3, needs the SFU's webhooks and a protocol bump); echo cancellation, noise suppression, packet-loss concealment, device choice, reconnecting after network changes, TURN and TCP (M2); simulcast and adaptive quality beyond OpenH264's own rate control (M5); screen sharing (M4). Until echo cancellation exists, use headphones.
+
+## D43. Huddles are called drop-ins
+
+Decided by the owner, 2026-11-02. The calls in a conversation are called **drop-ins** (Slack's
+word for them is "huddles", and these docs used it until now). The button says "Drop in"; the
+panel reads "Drop-in · #channel"; code uses `DropIn`/`drop_in`; the route is
+`POST /v1/conversations/{id}/drop-in`, the client's test switch `LAZY_DROP_IN_TEST_MEDIA`, the
+desktop feature `drop-in-devices`, and the compose profile `drop-ins`. The plan is now
+`DROP_INS.md`. The rename landed before the feature was released, so nothing on the wire or on
+disk changed shape. The media library (`media/`, `rtc-*`) keeps its own names: it knows only
+rooms and calls.

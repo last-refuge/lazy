@@ -328,6 +328,32 @@ impl fmt::Debug for Effect {
                 .field("block", &request.block)
                 .field("action_id", &request.action_id)
                 .finish_non_exhaustive(),
+            Effect::JoinDropIn {
+                session,
+                conversation,
+                muted,
+                video_on,
+            } => f
+                .debug_struct("JoinDropIn")
+                .field("session", session)
+                .field("conversation", conversation)
+                .field("muted", muted)
+                .field("video_on", video_on)
+                .finish(),
+            Effect::LeaveDropIn { session } => f
+                .debug_struct("LeaveDropIn")
+                .field("session", session)
+                .finish(),
+            Effect::SetDropInMuted { session, muted } => f
+                .debug_struct("SetDropInMuted")
+                .field("session", session)
+                .field("muted", muted)
+                .finish(),
+            Effect::SetDropInVideo { session, on } => f
+                .debug_struct("SetDropInVideo")
+                .field("session", session)
+                .field("on", on)
+                .finish(),
             Effect::LoadPreviews { message, revision } => f
                 .debug_struct("LoadPreviews")
                 .field("message", message)

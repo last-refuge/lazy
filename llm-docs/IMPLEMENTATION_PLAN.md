@@ -14,13 +14,13 @@ This document breaks [PLAN.md](PLAN.md) into phases, tasks, and subtasks. Phases
 
 ## Phase order
 
-The delivery order is Phases 0 through 7. Two prototypes start earlier than their phases: the huddle audio proof in Phase 0 and a webhook-posting prototype in Phase 2. Phases 4 and 5 are mostly server and media work and can overlap with Phases 2 and 3 if there is capacity, but each phase gate is still checked in order.
+The delivery order is Phases 0 through 7. Two prototypes start earlier than their phases: the drop-in audio proof in Phase 0 and a webhook-posting prototype in Phase 2. Phases 4 and 5 are mostly server and media work and can overlap with Phases 2 and 3 if there is capacity, but each phase gate is still checked in order.
 
 ---
 
 ## [ ] Phase 0: Foundation
 
-Source: PLAN.md "Requirements and platform constraints", "Architecture", "Huddles", "Native phone preparation".
+Source: PLAN.md "Requirements and platform constraints", "Architecture", "Drop-ins", "Native phone preparation".
 
 Goal: a compiling, CI-checked workspace that launches a native desktop window and has settled the largest unknowns (GPUI pin, Android path, media stack).
 
@@ -57,7 +57,7 @@ Goal: a compiling, CI-checked workspace that launches a native desktop window an
   - [X] Compile the shared crates for iOS and Android targets (`ci` mobile job, green on 2026-10-30, run 41137196338)
 - [X] 0.6 Product semantics and authorization specs
   - [X] Define workspace roles and channel-level permissions (AUTHORIZATION.md)
-  - [X] Write the authorization matrix for mutations, history reads, search, attachments, realtime subscriptions, and huddle joins
+  - [X] Write the authorization matrix for mutations, history reads, search, attachments, realtime subscriptions, and drop-in joins
   - [X] Specify thread notifications, deleted root messages, archived channels, private-channel invitations, and membership removal
   - [X] Specify concurrent message edits and unread behavior
   - [X] Specify group-conversation history rules when participants are added (implemented in 2.1)
@@ -65,7 +65,7 @@ Goal: a compiling, CI-checked workspace that launches a native desktop window an
 - [X] 0.7 Design foundations
   - [X] Define semantic design tokens for light and dark themes (color, type, spacing, radius, motion) (`theme.rs`, D26)
   - [X] Specify the core components: button, input, list row, message row, composer, dialog, avatar, badge, menu (realized in `lazy-ui`)
-  - [X] Specify the shell layout: workspace rail, sidebar, timeline, resizable thread pane, huddle dock (the dock itself is specified in HUDDLES.md and built in Phase 5)
+  - [X] Specify the shell layout: workspace rail, sidebar, timeline, resizable thread pane, drop-in dock (the dock itself is specified in DROP_INS.md and built in Phase 5)
   - [X] Produce representative screens at wide, medium, and narrow widths, with simulated content visibly labeled (the `screens` example)
 - [ ] 0.8 Mobile feasibility
   - [X] Confirm the shared crates compile for iOS and Android, and keep that check in CI
@@ -73,7 +73,7 @@ Goal: a compiling, CI-checked workspace that launches a native desktop window an
   - [ ] Check Android backend status at the pinned revision
   - [ ] If no suitable Android backend exists, estimate the cost of maintaining one
   - [ ] Document the Android path and the decision it requires
-- [ ] 0.9 Huddle media spike (now HUDDLES.md milestone M0: all-Rust on str0m, as a reusable library, D39)
+- [ ] 0.9 Drop-in media spike (now DROP_INS.md milestone M0: all-Rust on str0m, as a reusable library, D39)
   - [ ] Inventory the native libraries, codecs, and OS APIs needed by media adapters, with packaging and licensing notes
   - [ ] Evaluate str0m for the SFU and webrtc-rs for the client transport at candidate versions
   - [ ] Evaluate TURN options, including a Rust implementation
@@ -381,20 +381,24 @@ Goal: generic webhooks and one complete provider integration, with predictable r
 
 ---
 
-## [ ] Phase 5: Huddles
+## [ ] Phase 5: Drop-ins
 
-Source: PLAN.md "Huddles". **The current plan is `HUDDLES.md` (D39):** an all-Rust media stack
+Source: PLAN.md "Drop-ins". **The current plan is `DROP_INS.md` (D39):** an all-Rust media stack
 built as a standalone library (`media/`, `rtc-*` crates) with Lazy as its first host, in
-milestones M0 to M6. The items below remain the checklist; HUDDLES.md says in which milestone each
+milestones M0 to M6. The items below remain the checklist; DROP_INS.md says in which milestone each
 lands.
 
 Goal: group audio, video, and screen sharing at a declared capacity, with media failures isolated from text messaging.
 
+**MVP (D42, 2026-11-01):** a vertical slice with video works end to end in tests (two clients
+through a real SFU and server, `VERIFICATION.md`); the items below are checked only where that
+slice finishes them.
+
 - [ ] 5.1 Server signaling and authorization
-  - [ ] Huddle metadata schema and events
+  - [ ] Drop-in metadata schema and events
   - [ ] Signaling over the realtime connection
-  - [ ] Expiring room credentials
-  - [ ] Enforce conversation membership when joining and while connected
+  - [X] Expiring room credentials (10-minute join tokens signed with a secret shared with the SFU; D42)
+  - [ ] Enforce conversation membership when joining and while connected (joining: done; while connected needs the SFU's admin API)
 - [ ] 5.2 Media service
   - [ ] `lazy-media` process, configuration, and lifecycle
   - [ ] Room and session state machines free of GPUI and platform dependencies
@@ -404,27 +408,27 @@ Goal: group audio, video, and screen sharing at a declared capacity, with media 
   - [ ] Productionize the Phase 0 prototype
   - [ ] Join, leave, and reconnect behavior
 - [ ] 5.4 Multi-person audio through the SFU
-  - [ ] str0m integration (or the stack chosen in Phase 0)
-  - [ ] Forwarding, participant lifecycle, and resource limits
+  - [X] str0m integration (or the stack chosen in Phase 0) (`rtc-sfu`, `rtc-client`; pure-Rust DTLS)
+  - [X] Forwarding, participant lifecycle, and resource limits (rooms, join and leave, a room cap of 12)
   - [ ] TURN deployment for restricted networks
 - [ ] 5.5 Devices and audio quality
   - [ ] Device enumeration, selection, and permissions
   - [ ] Mute, echo cancellation, and noise handling
   - [ ] Reconnect, device removal, Bluetooth, and speakerphone behavior
-  - [ ] Media processing outside the GPUI foreground thread, with bounded buffers
+  - [X] Media processing outside the GPUI foreground thread, with bounded buffers (capture, encode, and decode threads; bounded queues; the UI only draws the newest frame)
 - [ ] 5.6 Screen sharing
   - [ ] Capture adapter for each desktop OS
   - [ ] Source picker, permissions, and a visible sharing indicator
   - [ ] Encoding and subscriber handling
 - [ ] 5.7 Camera video and adaptive quality
   - [ ] Camera adapters
-  - [ ] Codec selection with licensing review
+  - [ ] Codec selection with licensing review (H.264 through OpenH264 from source for the MVP; its patent question is open, D42)
   - [ ] Adaptive quality and per-subscriber layers
-- [ ] 5.8 Huddle UI
+- [ ] 5.8 Drop-in UI
   - [ ] Persistent dock that remains available while navigating
   - [ ] Participant views for audio, video, and screen share
   - [ ] Join, leave, and device controls with keyboard access and an accessibility pass
-  - [ ] Huddle presence in the sidebar and notifications
+  - [ ] Drop-in presence in the sidebar and notifications
 - [ ] 5.9 Failure handling
   - [ ] Report and recover from media failure without interrupting text messaging
   - [ ] Sleep/wake, network loss, and permission denial handling
@@ -433,12 +437,12 @@ Goal: group audio, video, and screen sharing at a declared capacity, with media 
   - [ ] Synthetic-client load tests at capacity
   - [ ] Network tests: loss, latency, and restricted networks
   - [ ] Device tests: Bluetooth, speakerphone echo, device removal, permission denial, sleep/wake
-  - [ ] Measure huddle join latency on the reference network
+  - [ ] Measure drop-in join latency on the reference network
 - [ ] 5.11 Security description
-  - [ ] Document transport encryption accurately, without claiming end-to-end encryption
+  - [X] Document transport encryption accurately, without claiming end-to-end encryption (`DEPLOY.md` Drop-ins, `rtc-sfu` docs, D42)
 - [ ] 5.12 Phase gate
   - [ ] Declared participant capacity passes network and device tests
-  - [ ] Huddle join p95 below 3 seconds on the reference network
+  - [ ] Drop-in join p95 below 3 seconds on the reference network
   - [ ] Verification outcomes recorded
 
 ---
@@ -484,7 +488,7 @@ Goal: a signed, supportable desktop release.
   - [ ] Operational targets from load and recovery exercises
   - [ ] Support procedures
 - [ ] 6.7 Security review
-  - [ ] Authorization audit across mutations, history, search, attachments, subscriptions, and huddle joins
+  - [ ] Authorization audit across mutations, history, search, attachments, subscriptions, and drop-in joins
   - [ ] Fuzz parsers at trust boundaries (message documents, webhook payloads)
   - [ ] Dependency advisory review
   - [ ] Rate limiting and abuse controls
@@ -532,7 +536,7 @@ Goal: native iOS and Android clients on the shared core. Estimate the calendar a
 - [ ] 7.6 Android delivery
   - [ ] Build, sign, and distribute test builds
   - [ ] Physical-device verification
-- [ ] 7.7 Mobile huddles
+- [ ] 7.7 Mobile drop-ins
   - [ ] Platform media adapters for audio routing, camera, and screen capture
   - [ ] Interruption, route change, and background behavior
 - [ ] 7.8 Mobile quality
@@ -540,7 +544,7 @@ Goal: native iOS and Android clients on the shared core. Estimate the calendar a
   - [ ] Power and thermal checks
   - [ ] Lifecycle tests: suspend, resume, and process death
 - [ ] 7.9 Phase gate
-  - [ ] Physical-device messaging, push, lifecycle, accessibility, and huddle verification
+  - [ ] Physical-device messaging, push, lifecycle, accessibility, and drop-in verification
   - [ ] Verification outcomes recorded
 
 ---

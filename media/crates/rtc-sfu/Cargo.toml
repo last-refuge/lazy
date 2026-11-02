@@ -1,0 +1,23 @@
+[package]
+name = "rtc-sfu"
+description = "The rtc media library's server: rooms, forwarding, join tokens (an SFU on str0m)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "rtc-sfu"
+path = "src/main.rs"
+
+[dependencies]
+rtc-proto.workspace = true
+str0m.workspace = true
+tokio.workspace = true
+axum.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+serde_json.workspace = true

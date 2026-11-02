@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# The media library is its own workspace (llm-docs/DROP_INS.md); Lazy uses it by path.
+exclude = ["media"]
 
 [workspace.package]
 version = "0.9.0"
@@ -15,6 +17,13 @@ lazy-protocol = { path = "crates/lazy-protocol" }
 lazy-client-core = { path = "crates/lazy-client-core" }
 lazy-client-runtime = { path = "crates/lazy-client-runtime" }
 lazy-ui = { path = "crates/lazy-ui" }
+
+# The media library (D39), by path until it has its own repository.
+rtc-proto = { path = "media/crates/rtc-proto" }
+rtc-video = { path = "media/crates/rtc-video", default-features = false }
+rtc-audio = { path = "media/crates/rtc-audio", default-features = false }
+rtc-client = { path = "media/crates/rtc-client", default-features = false }
+rtc-sfu = { path = "media/crates/rtc-sfu" }
 
 # GPUI is pinned to one full Zed revision; `gpui` and `gpui_platform` must stay on the same one.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "e5bdd01cd819d6348ae764e69218adfee3d7edab" }
@@ -59,6 +68,13 @@ tempfile = "3"
 
 # What the release workflow ships: the release profile, stripped. (Debug symbols are not needed for
 # bug reports: the log and Diagnostics carry what a report needs, and the binary is half the size.)
+# The codecs are C (OpenH264) and C transpiled to Rust (Opus): unoptimized, they cannot keep up
+# with a call, so they are optimized even in debug builds.
+[profile.dev.package.openh264-sys2]
+opt-level = 3
+[profile.dev.package.unsafe-libopus]
+opt-level = 3
+
 [profile.dist]
 inherits = "release"
 strip = true

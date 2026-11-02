@@ -472,3 +472,27 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
   - previews of real sites, which the tests cannot reach (Miro, GitHub, and sites behind bot protection or consent pages may give nothing);
   - IPv6-only sites;
   - the buttons and cards on a real display, by keyboard (the buttons are not tab stops), or with a screen reader.
+
+## The drop-in MVP: video calls (D42, 2026-11-01)
+
+- *Measured:*
+  - The media library (`media/`, its own workspace): every test passes, `cargo fmt` and clippy are clean, and `scripts/check-media-deps.sh` finds no `lazy-*` dependency.
+    - Unit tests: join tokens (signed, expired, forged, altered, malformed, short secrets); signaling round trips; frames (scaling, mirroring, the store); the test pattern's rate; the resampler; the mixer (buffering, summing, clipping, dropping old audio); Opus and H.264 round trips (colors survive within 24 levels; a requested keyframe arrives).
+    - `rtc-client/tests/room.rs`: a real SFU and two clients in one process over loopback UDP. Each sees the other's video in the other's color, and hears the other's tone (decoded loudly enough to count as speaking). Muting and video off reach the other side (the picture goes), video back on returns it, and leaving ends cleanly and empties the tiles. A forged token is refused, a fourth person is refused from a room of three, and another room is separate. It passed 5 runs in a row after two fixes: the tone source stopped at once (a closure kept only part of its handle), and a decoded frame could reappear after video went off.
+  - Lazy:
+    - `lazy-server/tests/drop_ins.rs`: a reader gets a token for the conversation's room that names them and expires within 11 minutes; a non-member of a private channel gets `not_found`; without a call server the answer is `unavailable`; bad settings are refused, and the secret is not in `Debug`.
+    - `lazy-client-core/tests/drop_ins.rs`: one drop-in at a time, joining another leaves the first, late reports from a left call are ignored, a camera failure turns video off, and a failure is shown until dismissed. Signing out leaves.
+    - `lazy-e2e` `two_gui_clients_see_each_other_in_a_drop_in`: the real views, runtimes, server, and an in-process SFU, with test-pattern video. Both reach Live with each other listed, each has the other's frames and its own, Bob's video off reaches Alice, and Bob leaving leaves Alice alone. About 11 seconds, including registering.
+    - The full suite (`scripts/test.sh`) passed 2,820 tests with 0 failures (7 ignored); `cargo fmt` and `check-core-deps.sh` pass, and clippy shows only the warning already in `lazy-client-runtime/tests/updates.rs`.
+    - Renamed from "huddles" to "drop-ins" (D43, 2026-11-02), then rechecked: `cargo fmt --check` and clippy as above; the full suite again passed 2,820 with 0 failures (7 ignored) at `--test-threads=4`. Two earlier runs at full parallelism had server tests fail with `408 Request Timeout` on registration and `PoolTimedOut` while the machine was busy with other work (password hashing is CPU-bound); those files passed alone and in the slower run, so this was load, not the rename. The e2e drop-in screenshot shows "Drop-in · #general" and the "Leave drop-in" button.
+    - Two UI tests failed on the first full run because of the new header button: the keyboard walk (one more stop) and the narrowest window (Details pushed off the edge). Favorite now shows only its star in the compact layout.
+  - The server builds from exactly what its image copies (`media/Cargo.toml` and `rtc-proto` added to the Dockerfile and `.dockerignore`), and `rtc-sfu` builds from `media/` alone. Docker itself could not be run here (no permission on the socket). The release `rtc-sfu` binary (12 MB) starts with an empty `RTC_PUBLIC_IP`, answers `/healthz`, and refuses a short secret.
+- *Observed:* the end-to-end test's headless screenshot (`.dev/drop-in-shots/gui-alice-drop-in.png`) shows the stage above the conversation: "Drop-in in #general · 2 people", Mute, Stop video, Leave, and two tiles with the test pattern and the names; the header has "Leave drop-in".
+- *Not checked by anyone:*
+  - a real camera, microphone, or speakers on any system (this machine has none);
+  - echo with laptop speakers (there is no echo cancellation: use headphones);
+  - the macOS and Windows builds of the camera and audio code (nokhwa, cpal, OpenH264 cross-built for Intel macOS), and the camera and microphone permission prompts;
+  - two machines on different networks, NAT, or the SFU on Coolify with a published UDP port;
+  - latency, CPU, and bandwidth;
+  - more than three people;
+  - the drop-in stage with a keyboard or screen reader beyond its labels.

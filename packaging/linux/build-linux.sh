@@ -79,7 +79,7 @@ Architecture: amd64
 Installed-Size: ${SIZE_KB}
 Maintainer: Lazy <noreply@users.noreply.github.com>
 Homepage: https://github.com/last-refuge/lazy
-Depends: libc6 (>= 2.35), libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-egl1, libvulkan1, libegl1
+Depends: libc6 (>= 2.35), libasound2 | libasound2t64, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-egl1, libvulkan1, libegl1
 Recommends: mesa-vulkan-drivers | nvidia-vulkan-icd, gnome-keyring | kwalletmanager | keepassxc
 Description: A native place for channels, messages and the people you work with
  Lazy is a desktop chat client for a self-hosted Lazy server: channels, direct messages,

@@ -158,6 +158,7 @@ pub fn router(state: AppState) -> Router {
         .route(paths::APP_INTERACTIVITY_ROUTE, put(app_set_interactivity))
         .route(paths::MESSAGE_ACTIONS_ROUTE, post(press_button))
         .route(paths::MESSAGE_PREVIEWS_ROUTE, get(message_previews))
+        .route(paths::DROP_IN_ROUTE, post(join_drop_in))
         .route(paths::WORKSPACE_COMMANDS_ROUTE, get(workspace_commands))
         .route(paths::RUN_COMMAND_ROUTE, post(run_command))
         .route(paths::COMMAND_RESPOND_ROUTE, post(command_respond))
@@ -775,6 +776,16 @@ async fn message_previews(
     )
     .await?;
     Ok(Json(lazy_protocol::LinkPreviewsResponse { previews }))
+}
+
+async fn join_drop_in(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiPath(conversation_id): ApiPath<ConversationId>,
+) -> Result<Json<lazy_protocol::JoinDropInResponse>, AppError> {
+    crate::drop_ins::join(&state, principal.user_id, conversation_id)
+        .await
+        .map(Json)
 }
 
 async fn workspace_commands(

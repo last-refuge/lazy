@@ -158,6 +158,8 @@ impl Client {
             },
             idle_timeout: Duration::from_secs(5),
             save_debounce: Duration::from_millis(20),
+            drop_in_media: lazy_client_runtime::DropInMedia::TestPattern,
+            frames: lazy_client_runtime::FrameStore::new(),
         })
         .expect("runtime starts");
         let mut client = Self {

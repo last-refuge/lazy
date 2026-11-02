@@ -153,6 +153,8 @@ pub enum Change {
     DownloadChanged {
         attachment: AttachmentId,
     },
+    /// `ClientCore::drop_in` or `ClientCore::drop_in_error` changed.
+    DropInChanged,
     /// `ClientCore::link_previews` of this message arrived.
     PreviewsChanged {
         message: MessageId,

@@ -41,7 +41,8 @@ IDENTITY="${APPLE_SIGN_IDENTITY:--}"
 if [ "$IDENTITY" = "-" ]; then
   codesign --force --deep --sign - "$APP"
 else
-  codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP"
+  codesign --force --deep --options runtime --timestamp \
+    --entitlements "$ROOT/packaging/macos/Lazy.entitlements" --sign "$IDENTITY" "$APP"
 fi
 codesign --verify --deep --strict "$APP"
 

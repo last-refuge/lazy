@@ -15,5 +15,7 @@
   <key>LSApplicationCategoryType</key><string>public.app-category.social-networking</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>NSCameraUsageDescription</key><string>Lazy shows your camera to the people in a drop-in you join.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Lazy sends your voice to the people in a drop-in you join.</string>
 </dict>
 </plist>

@@ -338,6 +338,27 @@ pub enum Effect {
         message: lazy_domain::MessageId,
         request: lazy_protocol::PressButtonRequest,
     },
+    /// Join a conversation's drop-in: ask the server for a token, then run the call. Everything
+    /// that happens is reported as `Input::DropInReport` with this `session`, ending with
+    /// `DropInReport::Ended`.
+    JoinDropIn {
+        session: u64,
+        conversation: ConversationId,
+        muted: bool,
+        video_on: bool,
+    },
+    /// Leave the call of `session` (no report follows; the core already left).
+    LeaveDropIn {
+        session: u64,
+    },
+    SetDropInMuted {
+        session: u64,
+        muted: bool,
+    },
+    SetDropInVideo {
+        session: u64,
+        on: bool,
+    },
     /// Ask for a message's link previews. Answered with `Input::PreviewsLoaded`.
     LoadPreviews {
         message: MessageId,

@@ -132,6 +132,7 @@ All of these are also command-line options (`lazy-server serve --help`).
 | `LAZY_ATTACHMENTS_DIR` | `/data/attachments` in the image | where uploads are kept (a volume) |
 | `LAZY_MAX_ATTACHMENT_BYTES` | 25 MiB | largest upload; the proxy must allow it too |
 | `LAZY_EVENT_RETENTION_DAYS` | 30 | days of event history kept (the newest 1,000 per workspace always stay); 0 keeps all |
+| `LAZY_RTC_URL`, `LAZY_RTC_SECRET` | none | the call server's signaling address (`wss://…`) and the secret shared with it (32+ characters); both or neither; without them drop-ins are off (see Drop-ins) |
 | `LAZY_LOG`, `LAZY_LOG_FORMAT` | `info,sqlx=warn`, `text` | logging; `json` for machine-readable lines. Nothing logged holds a password, token, invitation code, or message content (`SERVER.md`, Logging) |
 
 ## Operating it
@@ -156,6 +157,43 @@ All of these are also command-line options (`lazy-server serve --help`).
 - **One server process only.** The behavior of several server processes against one database is
   not verified; do not scale `lazy` beyond one replica.
 - **Rate limiting** is the proxy's job on a public server.
+
+## Drop-ins
+
+Drop-ins (calls with video, D42) need a second service, the call server (`rtc-sfu`, from the media
+library in `media/`), and two settings on Lazy's server. Without them the Drop-in button says
+"drop-ins aren't set up on this server", and everything else works as before.
+
+**What the call server needs from the host.**
+- A domain for signaling, through the HTTPS proxy like Lazy's own (its port 7880 inside the
+  container): `wss://rtc.example.com`.
+- **One UDP port published directly** (7881 by default), the same number inside and out, and open
+  in the host's firewall and any cloud security group. Media cannot go through Coolify's proxy.
+- The host's **public IP address** (`RTC_PUBLIC_IP`): clients are told to send media there.
+- A secret shared with Lazy (`openssl rand -hex 32`).
+
+People on networks that block UDP cannot join yet (no TURN or TCP fallback, M2).
+
+**On Coolify.**
+1. **New Resource** in the same project, the same repository and branch, **Build Pack: Docker
+   Compose**, base directory `/`, compose file `/deploy/coolify/rtc.docker-compose.yaml`.
+2. Give the `rtc` service a domain, for example `https://rtc.example.com` (routed to port 7880).
+3. Environment variables: `RTC_SECRET` (the shared secret), `RTC_PUBLIC_IP` (the server's public
+   address), and optionally `RTC_UDP_PORT` (default 7881). Open that UDP port on the host.
+4. Deploy. The log says `SFU media port ready media_addr=<ip>:7881`.
+5. On the Lazy resource, set `LAZY_RTC_URL=wss://rtc.example.com` and `LAZY_RTC_SECRET` to the same
+   secret, and redeploy Lazy. The server refuses to start if only one of them is set, or the secret
+   is shorter than 32 characters.
+
+**With Docker Compose.** Set `LAZY_RTC_URL`, `LAZY_RTC_SECRET` and `RTC_PUBLIC_IP` in `.env`, then
+`docker compose --profile drop-ins up -d --build`. The `rtc` service publishes 7880 (signaling;
+put it behind your HTTPS proxy for `wss://`) and 7881/udp.
+
+**Checking it.** Two people open the same channel and press **Drop-in**; each should see the other's
+camera within a few seconds. If the stage stays at "Connecting…" and then ends with "could not
+connect to the call server's media port", UDP 7881 is not reaching the call server (firewall, or
+`RTC_PUBLIC_IP` is wrong). Media is encrypted between each client and the call server (DTLS-SRTP);
+the call server can read it, so this is not end-to-end encryption.
 
 ## Known limits of this deployment
 

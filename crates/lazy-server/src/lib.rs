@@ -24,6 +24,7 @@ pub mod crypto;
 pub mod db;
 pub mod discovery;
 pub mod dispatcher;
+pub mod drop_ins;
 pub mod emoji;
 pub mod error;
 pub mod events;

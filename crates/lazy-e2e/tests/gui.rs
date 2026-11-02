@@ -102,6 +102,8 @@ impl GuiClient {
         config.profile_dir = Some(profile.to_owned());
         config.secure_storage = SecureStorageChoice::Custom(MemoryStorage::new());
         config.request_timeout = Duration::from_secs(5);
+        // Drop-ins send a test pattern: there is no camera here.
+        config.drop_in_media = lazy_client_runtime::DropInMedia::TestPattern;
         let (runtime, inputs) = Runtime::start(config).expect("start the runtime");
         let runtime = Rc::new(runtime);
 
@@ -632,6 +634,135 @@ fn a_gui_client_searches_and_opens_a_result_with_the_keyboard() {
     if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
         bob.screenshot_as(&dir, "search-opened");
     }
+
+    alice.stop();
+    bob.stop();
+    rt.block_on(async {
+        server.shutdown().await.unwrap();
+        database.drop().await;
+    });
+}
+
+/// The drop-in MVP on the real views: a real SFU, a real server that hands out join tokens, and two
+/// clients whose runtimes run the calls. Each sees the other's video (a test pattern) in the
+/// drop-in stage, and turning video off and leaving reach the other side.
+#[test]
+fn two_gui_clients_see_each_other_in_a_drop_in() {
+    const SECRET: &str = "an e2e secret for drop-ins, long enough";
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let database = rt.block_on(TempDatabase::create());
+    let sfu_url = rt.block_on(async {
+        let sfu = rtc_sfu::Sfu::start(rtc_sfu::SfuConfig {
+            secret: SECRET.as_bytes().to_vec(),
+            udp_bind: "127.0.0.1:0".parse().unwrap(),
+            public_ip: None,
+            max_per_room: 12,
+        })
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, sfu.router()).await.unwrap() });
+        format!("ws://{addr}")
+    });
+    let server = rt.block_on(async {
+        testing::spawn_test_server_configured(
+            database.pool.clone(),
+            lazy_server::ServerOptions {
+                open_registration: true,
+                open_workspace_creation: true,
+                password_cost: lazy_server::PasswordCost::FAST_FOR_TESTS,
+                retention: lazy_server::RetentionPolicy::disabled(),
+            },
+            lazy_server::IntegrationOptions {
+                drop_ins: Some(
+                    lazy_server::drop_ins::DropInOptions::new(&sfu_url, SECRET).unwrap(),
+                ),
+                ..lazy_server::IntegrationOptions::default()
+            },
+        )
+        .await
+    });
+    let dir = tempfile::tempdir().unwrap();
+
+    let mut alice = GuiClient::start("alice", &server.base_url, &dir.path().join("alice"));
+    let mut bob = GuiClient::start("bob", &server.base_url, &dir.path().join("bob"));
+    alice.register_with_the_keyboard("alice", "Alice Nguyen");
+    bob.register_with_the_keyboard("bob", "Bob Okafor");
+    let general = alice.read(|core| core.selected_conversation().unwrap());
+
+    // What the header's Drop-in button does.
+    for client in [&mut alice, &mut bob] {
+        let model = client.model.clone();
+        client.cx.update(|app| {
+            model.update(app, |m, cx| {
+                m.dispatch(lazy_client_core::Input::JoinDropIn(general), cx)
+            })
+        });
+    }
+    let live_with = |name: &'static str| {
+        move |core: &lazy_client_core::ClientCore| {
+            core.drop_in().is_some_and(|h| {
+                h.status == lazy_client_core::DropInStatus::Live
+                    && h.peers.len() == 1
+                    && h.peers[0].name == name
+                    && h.peers[0].video_on
+            })
+        }
+    };
+    alice.wait_until("a live drop-in with Bob", live_with("Bob Okafor"));
+    bob.wait_until("a live drop-in with Alice", live_with("Alice Nguyen"));
+
+    // Each window has the other's picture, and its own.
+    for client in [&mut alice, &mut bob] {
+        let peer = client.read(|core| core.drop_in().unwrap().peers[0].id);
+        let frames = {
+            let model = client.model.clone();
+            client.cx.update(|app| model.read(app).frames().clone())
+        };
+        client.wait_until("the other's video", |_| {
+            frames.get(rtc_video::TileKey::Remote(peer)).is_some()
+                && frames.get(rtc_video::TileKey::Local).is_some()
+        });
+    }
+    if let Some(dir) = std::env::var_os("LAZY_SCREENSHOT_DIR").map(PathBuf::from) {
+        alice.screenshot_as(&dir, "drop-in");
+        bob.screenshot_as(&dir, "drop-in");
+    }
+
+    // Bob stops his video: Alice's tile for him shows his avatar again.
+    let model = bob.model.clone();
+    bob.cx.update(|app| {
+        model.update(app, |m, cx| {
+            m.dispatch(lazy_client_core::Input::SetDropInVideo(false), cx)
+        })
+    });
+    let bob_id = alice.read(|core| core.drop_in().unwrap().peers[0].id);
+    let alice_frames = {
+        let model = alice.model.clone();
+        alice.cx.update(|app| model.read(app).frames().clone())
+    };
+    alice.wait_until("Bob's video off", |core| {
+        core.drop_in().is_some_and(|h| !h.peers[0].video_on)
+            && alice_frames
+                .get(rtc_video::TileKey::Remote(bob_id))
+                .is_none()
+    });
+
+    // Bob leaves: Alice is alone in it.
+    let model = bob.model.clone();
+    bob.cx.update(|app| {
+        model.update(app, |m, cx| {
+            m.dispatch(lazy_client_core::Input::LeaveDropIn, cx)
+        })
+    });
+    bob.wait_until("out of the drop-in", |core| core.drop_in().is_none());
+    alice.wait_until("alone in the drop-in", |core| {
+        core.drop_in().is_some_and(|h| h.peers.is_empty())
+    });
 
     alice.stop();
     bob.stop();

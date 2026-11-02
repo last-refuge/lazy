@@ -23,7 +23,7 @@ gpui.workspace = true
 gpui_platform.workspace = true
 lazy-client-core.workspace = true
 lazy-domain.workspace = true
-lazy-client-runtime.workspace = true
+lazy-client-runtime = { workspace = true, features = ["drop-in-devices"] }
 lazy-ui.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

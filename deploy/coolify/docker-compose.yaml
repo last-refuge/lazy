@@ -49,6 +49,10 @@ services:
       # credential (llm-docs/DEPLOY.md).
       - LAZY_CREDENTIALS_KEY=${LAZY_CREDENTIALS_KEY:-}
       - LAZY_CREDENTIALS_OLD_KEYS=${LAZY_CREDENTIALS_OLD_KEYS:-}
+      # Drop-ins: the call server (deploy/coolify/rtc.docker-compose.yaml) and the secret shared
+      # with it. Leave both empty and drop-ins are off (llm-docs/DEPLOY.md, "Drop-ins").
+      - LAZY_RTC_URL=${LAZY_RTC_URL:-}
+      - LAZY_RTC_SECRET=${LAZY_RTC_SECRET:-}
     volumes:
       - attachments:/data/attachments
     healthcheck:

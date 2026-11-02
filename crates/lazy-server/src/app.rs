@@ -60,6 +60,8 @@ pub struct Integrations {
     pub http: Option<reqwest::Client>,
     /// Fetches link previews (D41); `None` when no client could be built, and previews are off.
     pub previews: Option<crate::link_previews::Fetcher>,
+    /// The call server drop-ins run on; `None` when drop-ins are off.
+    pub drop_ins: Option<crate::drop_ins::DropInOptions>,
 }
 
 /// The kinds of job this server knows how to run. Integrations add theirs here.
@@ -161,6 +163,7 @@ pub async fn run(
         setup_code: config.setup_code,
         credential_keys: config.credential_keys,
         jobs: config.run_jobs.then(crate::jobs::WorkerOptions::default),
+        drop_ins: config.drop_ins,
         ..IntegrationOptions::default()
     };
     let attachments = AttachmentOptions {
@@ -296,6 +299,7 @@ pub async fn serve_all(
             github: integrations.github,
             http: crate::github::http_client(),
             previews: crate::link_previews::Fetcher::new(integrations.previews),
+            drop_ins: integrations.drop_ins,
         }),
         attachments: Arc::clone(&attachments),
         search,

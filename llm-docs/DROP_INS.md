@@ -1,8 +1,17 @@
-# Huddles: the plan
+# Drop-ins: the plan
 
 Status: decided 2026-11-01 (D39): all-Rust media, built as a standalone, reusable library.
-Lazy's huddles are its first user; a later standalone Zoom-like client, and other projects, are
+Lazy's drop-ins are its first user; a later standalone Zoom-like client, and other projects, are
 the next. Whatever is built here must be liftable into its own repository unchanged.
+
+## Status (2026-11-01): the MVP (D42)
+
+A vertical slice works end to end, video first: the `media/` workspace (`rtc-proto`, `rtc-sfu`,
+`rtc-client`, `rtc-video`, `rtc-audio`), the server's join-token route, and the drop-in stage in
+the desktop client (a tile per person, mute, video on or off, leave). It is not M0 to M3 done:
+see D42 for what it is and what it leaves out, and `DEPLOY.md`, "Drop-ins", for running it. The
+codec changed from the plan: H.264 through OpenH264 built from source, not VP8 (D42, with the
+licensing question it raises).
 
 ## Two products, one boundary
 
@@ -10,31 +19,31 @@ the next. Whatever is built here must be liftable into its own repository unchan
    family of Rust crates for real-time audio, video, and screen sharing. Its own server (an SFU),
    its own client, its own signaling protocol and token format, its own docs and tests. It knows
    nothing about Lazy: no `lazy-*` dependency, no Lazy types, no Lazy database.
-2. **Lazy's huddles**: Lazy's rules and experience on top of the library. Who may join, huddle
-   state and events, the dock and the huddle window, the "started" post, ringing. Lazy issues
+2. **Lazy's drop-ins**: Lazy's rules and experience on top of the library. Who may join, drop-in
+   state and events, the dock and the drop-in window, the "started" post, ringing. Lazy issues
    the library's join tokens, receives its webhooks, and draws its frames.
 
 The split is the same one hosted services use (Slack builds huddles on the Amazon Chime SDK;
 Zed builds calls on LiveKit): the media layer is a product with an API, and the chat app is a
 customer of it. Here we also own the media layer.
 
-## The feature set (Lazy's huddles)
+## The feature set (Lazy's drop-ins)
 
 | Feature | Notes | Milestone |
 | --- | --- | --- |
-| Start or join a huddle from a conversation's header | One click; audio only; anyone who can read the conversation | M3 |
+| Start or join a drop-in from a conversation's header | One click; audio only; anyone who can read the conversation | M3 |
 | Who is in it, at a glance | Avatars and a headphones mark on the conversation in the sidebar and header | M3 |
-| A huddle dock that follows you | Bottom of the sidebar: the conversation, participants, mute, devices, leave | M3 |
+| A drop-in dock that follows you | Bottom of the sidebar: the conversation, participants, mute, devices, leave | M3 |
 | Mute, speaking indicators, device choice | Input and output devices with a level meter; mute visible to all | M3 |
-| "Huddle started" and "ended" posts | Join from the post; "Huddle ended · 23 min · 4 people" | M3 |
+| "Drop-in started" and "ended" posts | Join from the post; "Drop-in ended · 23 min · 4 people" | M3 |
 | Reconnect without drama | Network blips, sleep and wake, devices unplugged | M3 |
-| Screen sharing and the huddle window | Pick a screen or window; others see it large; a "you are sharing" mark | M4 |
+| Screen sharing and the drop-in window | Pick a screen or window; others see it large; a "you are sharing" mark | M4 |
 | Camera video | Optional per person; tiles; quality adapts | M5 |
-| Ringing in direct messages, the huddle thread, ringing someone in | Incoming-call card and ringtone; messages during a huddle collect in a thread | M6 |
+| Ringing in direct messages, the drop-in thread, ringing someone in | Incoming-call card and ringtone; messages during a drop-in collect in a thread | M6 |
 | Keyboard | Start or join (`Ctrl/Cmd+Shift+H`), mute toggle, leave; every control labelled | M3 to M6 |
 
 Not planned: recording, transcripts, drawing on a shared screen, dial-in. Launch capacity is 12
-per huddle, raised only after load tests.
+per drop-in, raised only after load tests.
 
 ## The library
 
@@ -105,15 +114,15 @@ person.
 
 ## Lazy's side
 
-- **`lazy-server` huddles module.** Tables for huddles and participants; one live huddle per
-  conversation; `POST /v1/conversations/{id}/huddle` checks the person can read the conversation
+- **`lazy-server` drop-ins module.** Tables for drop-ins and participants; one live drop-in per
+  conversation; `POST /v1/conversations/{id}/drop-in` checks the person can read the conversation
   and answers with the SFU's address and a short-lived join token; a webhook receiver for the
   SFU's signed participant events (the source of truth for who is in), reconciled through the
   admin API; removal through the admin API when someone loses access or is deactivated.
 - **Protocol.** Today an older client cannot ignore an event type it does not know, so step one
-  (its own client release, before huddles) adds an `Unknown` fallback to events. Huddles then
+  (its own client release, before drop-ins) adds an `Unknown` fallback to events. Drop-ins then
   bump `PROTOCOL_VERSION` once (14 to 15).
-- **Client.** Huddle state in `lazy-client-core` (Lazy's rules: which huddle, who, mine); the
+- **Client.** Drop-in state in `lazy-client-core` (Lazy's rules: which drop-in, who, mine); the
   runtime drives `rtc-client` and `rtc-audio` through effects; `lazy-ui` draws the dock and
   window, using `rtc-gpui` for frames. Media never runs on GPUI's foreground thread.
 - **Deployment.** The SFU is its own process and container (`rtc-sfu`), next to `lazy-server`
@@ -128,7 +137,7 @@ person.
 
 ## Milestones
 
-Each ends in something demonstrable; M3 is the first Lazy release with huddles.
+Each ends in something demonstrable; M3 is the first Lazy release with drop-ins.
 
 **M0 — Spike: audio through a str0m SFU (decision gates).** A minimal SFU and two headless
 clients in one process, then two real desktop clients on two machines: two-person audio with
@@ -147,19 +156,19 @@ reuse). Tests: protocol round trips, state machines, a multi-client room in one 
 device changes mid-call, automatic reconnect (ICE restart), ICE-TCP fallback, `rtc-turn` (or a
 decision to defer TURN), level meters and speaking detection, a 12-person synthetic load test.
 
-**M3 — Huddles in Lazy (audio).** Forward-compatible events (shipped first), the server module,
+**M3 — Drop-ins in Lazy (audio).** Forward-compatible events (shipped first), the server module,
 tokens, webhooks, removal; the dock, header button, sidebar presence, posts, devices, mute,
 reconnect, keyboard and screen-reader labels; the SFU on Coolify and the `DEPLOY.md` steps.
-First release with huddles.
+First release with drop-ins.
 
 **M4 — Screen sharing.** Capture (GPUI's `ScreenCaptureSource` on the desktop host, behind the
 library's capture trait), VP8/VP9 encode, video forwarding with bandwidth estimation,
-`rtc-gpui` drawing, the huddle window, sharing indicators, macOS screen-recording permission.
+`rtc-gpui` drawing, the drop-in window, sharing indicators, macOS screen-recording permission.
 
 **M5 — Camera video.** Camera capture adapters per OS, simulcast layers chosen per viewer,
 tiles, adaptive quality.
 
-**M6 — The rest of Lazy's experience.** DM ringing, the huddle thread, ringing someone in,
+**M6 — The rest of Lazy's experience.** DM ringing, the drop-in thread, ringing someone in,
 notification settings, the accessibility pass, soak tests, and the device and network matrix.
 
 This is substantially more work than using LiveKit, by the owner's choice, in exchange for a
@@ -171,7 +180,7 @@ codecs, networks) so they surface in M0 to M2, before Lazy's UI depends on them.
 - Library: unit tests on the sans-IO cores; in-process rooms with headless clients (tones sent
   and detected, loss and jitter injected); synthetic load at capacity; its own CI.
 - Lazy: server tests against a real SFU started by the test harness (as Postgres is): tokens,
-  webhook signatures, reconciliation, removal; client-core tests of huddle state; UI tests of
+  webhook signatures, reconciliation, removal; client-core tests of drop-in state; UI tests of
   the dock.
 - Manual matrix, recorded in `VERIFICATION.md`: Bluetooth headsets, laptop speakers (echo),
   unplugging devices, denying permissions, sleep and wake, restrictive networks (TCP only),

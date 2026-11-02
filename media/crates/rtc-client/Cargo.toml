@@ -1,0 +1,30 @@
+[package]
+name = "rtc-client"
+description = "The rtc media library's client: one connection to the SFU, sending a camera and microphone, receiving everyone else."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["devices"]
+# Real cameras, microphones and speakers (otherwise only test sources).
+devices = ["rtc-video/camera", "rtc-audio/devices"]
+
+[dependencies]
+rtc-proto.workspace = true
+rtc-video = { workspace = true, default-features = false, features = ["codec"] }
+rtc-audio = { workspace = true, default-features = false }
+str0m.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+rtc-sfu.workspace = true
+axum.workspace = true
+tracing-subscriber.workspace = true
