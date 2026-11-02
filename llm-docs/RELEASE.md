@@ -156,9 +156,9 @@ you work with."
 
 ## Known gaps
 
-- **Desktop notifications exist only on Linux.** On macOS and Windows the app runs, shows unread
-  counts and the window title badge, but sends no operating system notifications (the platform
-  notifier there is a stub). This matters for dogfooding on those systems.
+- **Desktop notifications exist on Linux and macOS, not Windows.** On macOS they come from the
+  installed app (D46) and are unverified on screen; on Windows the app shows unread counts and the
+  window title badge but sends no operating system notifications. This matters for dogfooding there.
 - Updating from inside Lazy (D28) exists from 0.6.0, the first release after 0.5.0, which has no
   updater and is replaced by hand once. Its tests pass in CI, but it has never updated a real
   install: that needs a release newer than 0.6.0 (`VERIFICATION.md`).

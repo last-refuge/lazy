@@ -12,7 +12,7 @@ use gpui::{
 use lazy_client_core::{
     ActionKind, ActionState, Change, ConnectionState, Input, QuickSwitcherTarget,
 };
-use lazy_domain::notification::NotifyLevel;
+use lazy_domain::notification::{NotifyLevel, PromptKind};
 use lazy_domain::{
     ChannelVisibility, ConversationId, ConversationKind, MessageId, Permalink, ReactionEmoji,
     UserId,
@@ -195,6 +195,9 @@ pub struct ShellView {
     drop_in: Entity<crate::drop_in_view::DropInView>,
     join_focus: FocusHandle,
     dismiss_notice_focus: FocusHandle,
+    /// The offer to turn notifications on: its two buttons.
+    prompt_turn_on_focus: FocusHandle,
+    prompt_dismiss_focus: FocusHandle,
     /// The Dismiss button of a command's private reply (D36).
     dismiss_reply_focus: FocusHandle,
     dismiss_favorite_focus: FocusHandle,
@@ -516,6 +519,8 @@ impl ShellView {
             drop_in,
             join_focus: cx.focus_handle().tab_stop(true),
             dismiss_notice_focus: cx.focus_handle().tab_stop(true),
+            prompt_turn_on_focus: cx.focus_handle().tab_stop(true),
+            prompt_dismiss_focus: cx.focus_handle().tab_stop(true),
             dismiss_reply_focus: cx.focus_handle().tab_stop(true),
             dismiss_favorite_focus: cx.focus_handle().tab_stop(true),
             details_focus: cx.focus_handle().tab_stop(true),
@@ -2043,7 +2048,9 @@ impl ShellView {
                 _ => None,
             }
         });
-        if connection.is_none() && notice.is_none() && favorite_error.is_none() {
+        let prompt = core.notification_prompt();
+        if connection.is_none() && notice.is_none() && favorite_error.is_none() && prompt.is_none()
+        {
             return None;
         }
         let colors = theme.colors;
@@ -2065,6 +2072,73 @@ impl ShellView {
                         colors.text_muted
                     })
                     .child(text),
+            );
+        }
+        if let Some(kind) = prompt {
+            let (text, action) = match kind {
+                PromptKind::Enable => (
+                    "Get notified about direct messages and mentions, even when Lazy is in the background.",
+                    "Turn on",
+                ),
+                PromptKind::EnableAgain => (
+                    "A message came in while notifications were off. Turn them on to see these as they happen.",
+                    "Turn on",
+                ),
+                PromptKind::OpenSettings => (
+                    "A message came in while notifications were off. You can allow them in System Settings.",
+                    "Open System Settings",
+                ),
+            };
+            stack = stack.child(
+                div()
+                    .debug_selector(|| "notification-prompt".into())
+                    .px_4()
+                    .py_1()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .text_size(theme.type_scale.small)
+                    .bg(colors.accent_surface)
+                    .text_color(colors.text)
+                    .child(div().flex_1().child(text))
+                    .child({
+                        let this = cx.entity().downgrade();
+                        form::button(
+                            theme,
+                            "notification-prompt-turn-on",
+                            action,
+                            ButtonKind::Primary,
+                            true,
+                            &self.prompt_turn_on_focus,
+                            move |_, cx| {
+                                this.update(cx, |shell, cx| {
+                                    shell.model.update(cx, |model, cx| {
+                                        model.dispatch(Input::TurnOnNotifications, cx)
+                                    });
+                                })
+                                .ok();
+                            },
+                        )
+                    })
+                    .child({
+                        let this = cx.entity().downgrade();
+                        form::button(
+                            theme,
+                            "notification-prompt-dismiss",
+                            "Not now",
+                            ButtonKind::Secondary,
+                            true,
+                            &self.prompt_dismiss_focus,
+                            move |_, cx| {
+                                this.update(cx, |shell, cx| {
+                                    shell.model.update(cx, |model, cx| {
+                                        model.dispatch(Input::DismissNotificationPrompt, cx)
+                                    });
+                                })
+                                .ok();
+                            },
+                        )
+                    }),
             );
         }
         if let Some(text) = notice {

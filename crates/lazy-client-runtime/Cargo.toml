@@ -35,3 +35,4 @@ drop-in-devices = ["rtc-client/devices"]
 [dev-dependencies]
 axum.workspace = true
 tempfile.workspace = true
+time.workspace = true

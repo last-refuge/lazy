@@ -22,7 +22,8 @@ use gpui::{
 use jiff::tz::TimeZone;
 use lazy_client_core::Input;
 use lazy_domain::notification::{
-    MAX_STATUS_CHARS, NotificationSettings, NotifyLevel, QuietHours, UserStatus,
+    MAX_STATUS_CHARS, NotificationPermission, NotificationSettings, NotifyLevel, QuietHours,
+    UserStatus,
 };
 use lazy_domain::{ReactionEmoji, Timestamp};
 
@@ -54,6 +55,7 @@ pub struct PreferencesDialog {
     thread_focus: FocusHandle,
     channel_mention_focus: FocusHandle,
     desktop_focus: FocusHandle,
+    permission_focus: FocusHandle,
     content_focus: FocusHandle,
     pause_focus: FocusHandle,
     resume_focus: FocusHandle,
@@ -165,6 +167,7 @@ impl PreferencesDialog {
             thread_focus: handle(),
             channel_mention_focus: handle(),
             desktop_focus: handle(),
+            permission_focus: handle(),
             content_focus: handle(),
             pause_focus: handle(),
             resume_focus: handle(),
@@ -586,6 +589,53 @@ impl PreferencesDialog {
         .into_any_element()
     }
 
+    /// What the system lets this app do, when it is not yet "allowed": say so, and offer the way
+    /// to change it. Nothing shows where the system asks for no permission or already allowed it.
+    fn permission_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (text, action) = match self.model.read(cx).core().notification_permission()? {
+            NotificationPermission::NotDetermined => (
+                "Lazy has not asked your Mac for permission to show notifications yet.",
+                "Turn on",
+            ),
+            NotificationPermission::Denied => (
+                "Notifications for Lazy are off in System Settings.",
+                "Open System Settings",
+            ),
+            NotificationPermission::Authorized | NotificationPermission::Unavailable => {
+                return None;
+            }
+        };
+        let this = cx.entity().downgrade();
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(div().flex_1().child(self.note(
+                    theme,
+                    "prefs-permission-note",
+                    text.to_owned(),
+                )))
+                .child(form::button(
+                    theme,
+                    "prefs-permission-action",
+                    action,
+                    ButtonKind::Secondary,
+                    true,
+                    &self.permission_focus,
+                    move |_, cx| {
+                        this.update(cx, |dialog, cx| {
+                            dialog.model.update(cx, |model, cx| {
+                                model.dispatch(Input::TurnOnNotifications, cx)
+                            });
+                        })
+                        .ok();
+                    },
+                ))
+                .into_any_element(),
+        )
+    }
+
     fn pause_section(
         &mut self,
         theme: &Theme,
@@ -924,7 +974,7 @@ impl PreferencesDialog {
             Some(3)
         } else if focused(&self.channel_mention_focus) {
             Some(4)
-        } else if focused(&self.desktop_focus) {
+        } else if focused(&self.desktop_focus) || focused(&self.permission_focus) {
             Some(5)
         } else if focused(&self.content_focus) {
             Some(6)
@@ -1024,14 +1074,21 @@ impl Render for PreferencesDialog {
                 |s, v| s.channel_mentions = v,
                 cx,
             ))
-            .child(self.switch(
-                "prefs-desktop",
-                "Show desktop notifications",
-                settings.desktop,
-                &self.desktop_focus,
-                |s, v| s.desktop = v,
-                cx,
-            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(self.switch(
+                        "prefs-desktop",
+                        "Show desktop notifications",
+                        settings.desktop,
+                        &self.desktop_focus,
+                        |s, v| s.desktop = v,
+                        cx,
+                    ))
+                    .children(self.permission_row(&theme, cx)),
+            )
             .child(self.switch(
                 "prefs-show-content",
                 "Show message text in notifications",

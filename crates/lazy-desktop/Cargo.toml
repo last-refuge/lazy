@@ -44,3 +44,12 @@ zbus = "5"
 # Windows hosts embed the version information (and the icon, once there is one) in the executable.
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
+
+# macOS: the system's own notification centre (UserNotifications), the dock badge, and the pieces
+# to bind them. These crates are already built for GPUI's macOS platform.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSDockTile", "NSResponder"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSDictionary", "NSString", "NSObject", "NSError", "NSValue"] }
+objc2-user-notifications = { version = "0.3", features = ["block2"] }

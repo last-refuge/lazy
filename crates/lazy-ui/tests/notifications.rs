@@ -1171,3 +1171,71 @@ fn the_inbox_keeps_the_keyboard_while_it_loads_and_after_try_again(cx: &mut Test
     cx.simulate_keystrokes("escape");
     assert!(!world.on_screen(cx, "inbox-view"), "and Escape still works");
 }
+
+// ---- Permission: the offer and Preferences ------------------------------------------------------------
+
+fn permission(
+    world: &World,
+    cx: &mut VisualTestContext,
+    permission: lazy_domain::notification::NotificationPermission,
+) {
+    world.dispatch(cx, Input::NotificationPermissionChanged(permission));
+    draw(cx);
+}
+
+#[gpui::test]
+fn a_device_that_was_never_asked_sees_the_offer_and_turning_on_raises_the_system_dialog(
+    cx: &mut TestAppContext,
+) {
+    use lazy_domain::notification::NotificationPermission::NotDetermined;
+    let (world, cx) = start(cx);
+    world.reach(cx);
+    assert!(!world.on_screen(cx, "notification-prompt"), "nothing yet");
+    permission(&world, cx, NotDetermined);
+    assert!(world.on_screen(cx, "notification-prompt"));
+    world.take_effects();
+    world.click(cx, "notification-prompt-turn-on");
+    assert!(
+        world
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::RequestNotificationPermission))
+    );
+    assert!(!world.on_screen(cx, "notification-prompt"), "answered");
+}
+
+#[gpui::test]
+fn not_now_closes_the_offer(cx: &mut TestAppContext) {
+    use lazy_domain::notification::NotificationPermission::NotDetermined;
+    let (world, cx) = start(cx);
+    world.reach(cx);
+    permission(&world, cx, NotDetermined);
+    world.click(cx, "notification-prompt-dismiss");
+    assert!(!world.on_screen(cx, "notification-prompt"));
+}
+
+#[gpui::test]
+fn preferences_say_when_the_system_has_notifications_off_and_open_its_settings(
+    cx: &mut TestAppContext,
+) {
+    use lazy_domain::notification::NotificationPermission::{Authorized, Denied};
+    let (world, cx) = start(cx);
+    world.reach(cx);
+    world.click(cx, "sidebar-preferences");
+    assert!(
+        !world.on_screen(cx, "prefs-permission-note"),
+        "no permission reported, nothing to say"
+    );
+    permission(&world, cx, Denied);
+    assert!(world.on_screen(cx, "prefs-permission-note"));
+    world.take_effects();
+    world.click(cx, "prefs-permission-action");
+    assert!(
+        world
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::OpenNotificationSettings))
+    );
+    permission(&world, cx, Authorized);
+    assert!(!world.on_screen(cx, "prefs-permission-note"));
+}

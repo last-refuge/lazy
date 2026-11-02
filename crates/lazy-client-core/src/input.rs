@@ -737,6 +737,14 @@ pub enum Input {
         conversation: ConversationId,
         message: MessageId,
     },
+    /// The platform reports what the operating system lets this device do about notifications:
+    /// at startup, when the window becomes active again, and after the system dialog is answered.
+    NotificationPermissionChanged(lazy_domain::notification::NotificationPermission),
+    /// Turn notifications on, from the offer or from Preferences: raises the system dialog, or
+    /// opens the system settings when it was already answered.
+    TurnOnNotifications,
+    /// "Not now" on the offer.
+    DismissNotificationPrompt,
     /// Open the thread inbox and load its first page.
     OpenInbox,
     /// Load the first page again, with or without only the threads that have unread replies.

@@ -666,6 +666,15 @@ pub enum Effect {
     },
     /// The attention count changed (the launcher badge, the window title). Platform only.
     SetBadge(u32),
+    /// Raise the system's dialog asking whether this app may show notifications. Platform only.
+    /// Ask the system what this app may do about notifications again (the person may have changed
+    /// it in the system settings). Platform only.
+    RefreshNotificationPermission,
+    RequestNotificationPermission,
+    /// Open the system settings where notifications for this app can be changed. Platform only.
+    OpenNotificationSettings,
+    /// Save what the person has been asked about notifications on this device.
+    PersistNotificationPrompts(lazy_domain::notification::PromptHistory),
     /// Ask a server (`GET /healthz`, a short timeout, no redirect to another host) which protocol
     /// it speaks. Answered by `ServerChecked`, echoing `generation`.
     CheckServer {

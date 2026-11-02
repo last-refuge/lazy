@@ -11,7 +11,7 @@ guide: please report it.
   `RELEASE.md`): a `.deb` or tarball for Linux, a `.dmg` for macOS, a Setup `.exe` for Windows. The
   files are not code-signed yet, so macOS and Windows ask you to confirm the first run (`RELEASE.md`
   says how). Linux needs a Vulkan driver and a Secret Service keyring (GNOME Keyring, KWallet,
-  KeePassXC) to keep your sign-in. Desktop notifications work on Linux only so far.
+  KeePassXC) to keep your sign-in. Desktop notifications work on Linux and on macOS (installed app; Lazy asks first), not yet on Windows.
 - **A server.** One person runs it, on a machine everyone can reach, with Docker Compose or Coolify
   (`DEPLOY.md`); it must be on HTTPS if it is reachable from the internet. They give you its address.
   Lazy's first screen asks for it (it is remembered).

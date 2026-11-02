@@ -253,6 +253,7 @@ impl Debug for crate::model::StartupState {
                 "recent_conversations",
                 &Count("conversations", self.recent_conversations.len()),
             )
+            .field("notification_prompts", &self.notification_prompts)
             .field("appearance", &self.appearance)
             .field("active_workspace", &self.active_workspace)
             .field("problems", &Count("texts", self.problems.len()))

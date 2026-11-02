@@ -697,6 +697,8 @@ A notification says: title `#name` for a channel, the people's names for a group
 
 The core withdraws what is seen: `ClearNotifications { conversation }` when the notified messages of a conversation are read (its read position passes them, whether here or on another device, or the person is looking at it at the bottom with the window active; a thread-only reply when its thread is read or open at the bottom), at most once for a set; `RetractNotification { message }` when a notified message is deleted; and everything of a conversation the person leaves. It does not re-post the remaining ones.
 
+**Permission (D46).** The platform tells the core what the operating system lets this device do (`Input::NotificationPermissionChanged`; nothing is reported where no permission exists). While it is `NotDetermined` or `Denied` no `Effect::Notify` is emitted; instead `should_prompt` may offer to fix it (`ClientCore::notification_prompt`), and the history of offers is saved with `Effect::PersistNotificationPrompts`. `Input::TurnOnNotifications` (from the offer or Preferences) emits `RequestNotificationPermission` while the system dialog can still be raised and `OpenNotificationSettings` after a refusal; `DismissNotificationPrompt` is "Not now". `RefreshNotificationPermission` is emitted whenever the window becomes active.
+
 ### The badge
 
 `SetBadge(count)` is emitted after any input that changes `attention_count()`, never otherwise (the first value, 0, is implicit), together with `Change::AttentionChanged`; sign-out announces 0. Muting a conversation takes it out of the count and dims nothing else: the unread and mention counts themselves never depend on a preference.

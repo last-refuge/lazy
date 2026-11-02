@@ -10,6 +10,8 @@
 //! and the launcher. A notification's click raises the window and opens the message.
 
 pub mod logging;
+#[cfg(target_os = "macos")]
+pub mod macos;
 pub mod notifier;
 pub mod updater;
 pub mod window_state;
@@ -24,6 +26,7 @@ use lazy_client_core::{Effect, Input};
 use lazy_client_runtime::Runtime;
 use lazy_client_runtime::async_channel::{Receiver, Sender, unbounded};
 use lazy_domain::MessageId;
+use lazy_domain::notification::NotificationPermission;
 use lazy_ui::app_model::{AppModel, EffectSink};
 
 use crate::notifier::{Activation, Notifier, Toast, badge_title, platform_notifier};
@@ -114,6 +117,9 @@ impl EffectSink for DesktopSink {
                     self.notifier.set_launcher_count(count);
                     self.badges.try_send(count).ok();
                 }
+                Effect::RefreshNotificationPermission => self.notifier.refresh_permission(),
+                Effect::RequestNotificationPermission => self.notifier.request_permission(),
+                Effect::OpenNotificationSettings => self.notifier.open_settings(),
                 other => rest.push(other),
             }
         }
@@ -170,15 +176,22 @@ pub struct Desktop {
     pub model: Entity<AppModel>,
     badges: Receiver<u32>,
     activations: Receiver<Activation>,
+    permissions: Receiver<NotificationPermission>,
 }
 
 /// Like [`start_model`], with desktop notifications and the attention count.
 pub fn start_desktop(runtime: Rc<Runtime>, inputs: Receiver<Input>, cx: &mut App) -> Desktop {
     let (badge_sender, badges) = unbounded();
     let (activation_sender, activations) = unbounded();
-    let notifier: Arc<dyn Notifier> = Arc::from(platform_notifier(move |activation| {
-        activation_sender.try_send(activation).ok();
-    }));
+    let (permission_sender, permissions) = unbounded();
+    let notifier: Arc<dyn Notifier> = Arc::from(platform_notifier(
+        move |activation| {
+            activation_sender.try_send(activation).ok();
+        },
+        move |permission| {
+            permission_sender.try_send(permission).ok();
+        },
+    ));
     let frames = runtime.frames();
     let sink = DesktopSink::new(Rc::new(RuntimeSink::new(runtime)), notifier, badge_sender);
     let model = cx.new(|_| {
@@ -191,6 +204,7 @@ pub fn start_desktop(runtime: Rc<Runtime>, inputs: Receiver<Input>, cx: &mut App
         model,
         badges,
         activations,
+        permissions,
     }
 }
 
@@ -204,6 +218,21 @@ impl Desktop {
                 let title = badge_title(count);
                 if window
                     .update(cx, |_, window, _| window.set_window_title(&title))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+        let permissions = self.permissions.clone();
+        let reported = self.model.downgrade();
+        cx.spawn(async move |cx| {
+            while let Ok(permission) = permissions.recv().await {
+                if reported
+                    .update(cx, |model, cx| {
+                        model.dispatch(Input::NotificationPermissionChanged(permission), cx)
+                    })
                     .is_err()
                 {
                     break;
@@ -396,6 +425,25 @@ mod tests {
         assert_eq!(forwarded.len(), 2);
         assert!(matches!(forwarded[0], Effect::CancelSearch));
         assert!(matches!(forwarded[1], Effect::PersistRecentSearches(_)));
+    }
+
+    #[test]
+    fn the_permission_effects_reach_the_platform_and_are_not_forwarded() {
+        let rig = rig();
+        rig.sink.execute(vec![
+            Effect::RefreshNotificationPermission,
+            Effect::RequestNotificationPermission,
+            Effect::OpenNotificationSettings,
+        ]);
+        assert_eq!(
+            rig.fake.calls(),
+            vec![
+                crate::notifier::Call::RefreshPermission,
+                crate::notifier::Call::RequestPermission,
+                crate::notifier::Call::OpenSettings,
+            ]
+        );
+        assert!(rig.forwarded.0.borrow().is_empty());
     }
 
     #[test]
