@@ -93,6 +93,10 @@ impl SettingsPage {
     }
 }
 
+/// The height of Settings' page area: what Notifications needs with quiet hours off (456 px when
+/// measured), and Password & security (458 px), so neither scrolls.
+const PAGE_HEIGHT: f32 = 460.0;
+
 /// Quiet hours when the person first turns them on.
 const DEFAULT_QUIET: (u16, u16) = (22 * 60, 7 * 60);
 
@@ -1250,10 +1254,12 @@ impl Render for PreferencesDialog {
         let content = div()
             .id("prefs-scroll")
             .debug_selector(|| "prefs-scroll".into())
-            // As tall as the window allows, so little needs scrolling in a big window.
-            .max_h(px(
-                (f32::from(window.viewport_size().height) - 200.0).clamp(240.0, 1000.0)
-            ))
+            // One height for every page, so the dialog does not jump as pages change: the
+            // Notifications page's own (the tallest but for its quiet hours), less in a short
+            // window. A taller page scrolls; a shorter one leaves room below.
+            .h(px(PAGE_HEIGHT.min(
+                (f32::from(window.viewport_size().height) - 200.0).max(240.0),
+            )))
             .flex_1()
             .min_w_0()
             .overflow_y_scroll()

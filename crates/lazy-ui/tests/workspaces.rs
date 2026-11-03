@@ -1377,3 +1377,29 @@ fn the_password_is_changed_from_settings_and_a_refusal_is_shown(cx: &mut TestApp
         "nothing of the passwords is left on screen"
     );
 }
+
+#[gpui::test]
+fn every_settings_page_has_the_same_height_so_the_dialog_does_not_jump(cx: &mut TestAppContext) {
+    let (world, cx) = start(cx);
+    cx.simulate_resize(gpui::size(gpui::px(1400.), gpui::px(1000.)));
+    world.reach(cx);
+    world.click(cx, "sidebar-preferences");
+    world.click(cx, "account-menu-profile");
+    let mut heights = Vec::new();
+    for page in [
+        "prefs-page-profile",
+        "prefs-page-notifications",
+        "prefs-page-status",
+        "prefs-page-appearance",
+        "prefs-page-security",
+    ] {
+        world.click(cx, page);
+        draw(cx);
+        let area = cx.debug_bounds("prefs-scroll").expect("the page area");
+        heights.push(area.size.height);
+    }
+    assert!(
+        heights.windows(2).all(|pair| pair[0] == pair[1]),
+        "{heights:?}"
+    );
+}
