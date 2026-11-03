@@ -1,5 +1,7 @@
-//! The preferences dialog: how and when to be notified, a status, the person's profile (name and
-//! picture), and how this device looks and moves.
+//! Settings: the person's profile (name, picture, username), how and when to be notified, a
+//! status, how this device looks and moves, and their password. One page at a time, chosen in the
+//! list on the left ([`SettingsPage`]); the account menu (the person's name at the bottom of the
+//! sidebar) opens it on the page they pick.
 //!
 //! Every change applies as the person makes it (the core takes it optimistically and the server
 //! confirms), so there is no Save for the notification settings; the status has its own Save and
@@ -7,7 +9,8 @@
 //!
 //! # Keyboard
 //!
-//! Tab and Shift+Tab walk the controls in reading order: the two default levels (Left and Right
+//! The open page's entry in the list has the keyboard first; Up and Down open the page above or
+//! below, and Tab goes on to the page's controls in reading order. On Notifications and Status: the two default levels (Left and Right
 //! choose), the four switches (Space toggles), Pause (a menu), Quiet hours and, when on, its two
 //! times and seven days, then the status text, its emoji button, Clear after (a menu), Save status,
 //! Clear status, Choose picture…, Remove picture, the display name, Save name, the theme and
@@ -30,6 +33,7 @@ use lazy_domain::{ReactionEmoji, Timestamp};
 use super::{any_composing, single_line_field};
 
 mod profile_section;
+mod security_section;
 use crate::app_model::AppModel;
 use crate::emoji_picker::{EmojiPicker, EmojiPickerEvent, PickerPrefs};
 use crate::form::{self, ButtonKind, Segment};
@@ -43,12 +47,70 @@ use crate::states;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::Theme;
 
+/// A page of Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsPage {
+    Profile,
+    Notifications,
+    Status,
+    Appearance,
+    Security,
+}
+
+impl SettingsPage {
+    /// In the order the list shows them.
+    pub const ALL: [SettingsPage; 5] = [
+        SettingsPage::Profile,
+        SettingsPage::Notifications,
+        SettingsPage::Status,
+        SettingsPage::Appearance,
+        SettingsPage::Security,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            SettingsPage::Profile => "Profile",
+            SettingsPage::Notifications => "Notifications",
+            SettingsPage::Status => "Status",
+            SettingsPage::Appearance => "Appearance",
+            SettingsPage::Security => "Password & security",
+        }
+    }
+
+    /// For test labels: `prefs-page-{id}`.
+    pub fn id(self) -> &'static str {
+        match self {
+            SettingsPage::Profile => "profile",
+            SettingsPage::Notifications => "notifications",
+            SettingsPage::Status => "status",
+            SettingsPage::Appearance => "appearance",
+            SettingsPage::Security => "security",
+        }
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|page| *page == self).unwrap_or(0)
+    }
+}
+
 /// Quiet hours when the person first turns them on.
 const DEFAULT_QUIET: (u16, u16) = (22 * 60, 7 * 60);
 
 pub struct PreferencesDialog {
     model: Entity<AppModel>,
     trap: ModalTrap,
+    page: SettingsPage,
+    /// The entries of the page list, in [`SettingsPage::ALL`] order.
+    page_focus: [FocusHandle; 5],
+    /// Password and security.
+    current_password: Entity<TextInput>,
+    new_password: Entity<TextInput>,
+    confirm_password: Entity<TextInput>,
+    change_password_focus: FocusHandle,
+    /// A change was asked for and its answer has not been seen.
+    password_sent: bool,
+    /// The last change went through.
+    password_changed: bool,
     zone: TimeZone,
     channel_level_focus: FocusHandle,
     direct_level_focus: FocusHandle,
@@ -95,7 +157,27 @@ pub struct PreferencesDialog {
 impl EventEmitter<DialogEvent> for PreferencesDialog {}
 
 impl PreferencesDialog {
-    pub fn new(model: Entity<AppModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        model: Entity<AppModel>,
+        page: SettingsPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let masked = |label: &'static str, cx: &mut Context<Self>| {
+            cx.new(|cx| {
+                TextInput::new(
+                    crate::text_input::TextInputOptions::new(label)
+                        .accessible_label(label)
+                        .single_line(true)
+                        .masked(true)
+                        .max_bytes(256),
+                    cx,
+                )
+            })
+        };
+        let current_password = masked("Current password", cx);
+        let new_password = masked("New password", cx);
+        let confirm_password = masked("Confirm new password", cx);
         let quiet_start = single_line_field("22:00", "Quiet hours start", 8, cx);
         let quiet_end = single_line_field("07:00", "Quiet hours end", 8, cx);
         let status_text = single_line_field("What's your status?", "Status", 400, cx);
@@ -151,16 +233,45 @@ impl PreferencesDialog {
                 _ => {}
             },
         ));
-        subscriptions.push(cx.observe(&model, |_, _, cx| cx.notify()));
+        for field in [&current_password, &new_password, &confirm_password] {
+            subscriptions.push(cx.subscribe_in(
+                field,
+                window,
+                |this, _input, event: &TextInputEvent, window, cx| match event {
+                    TextInputEvent::Changed => {
+                        this.password_changed = false;
+                        cx.notify();
+                    }
+                    TextInputEvent::Submit => this.change_password(cx),
+                    TextInputEvent::Tab { backwards } => this.trap.tab(*backwards, window, cx),
+                    _ => {}
+                },
+            ));
+        }
+        subscriptions.push(cx.observe(&model, |this, _, cx| {
+            this.password_outcome(cx);
+            cx.notify();
+        }));
         let trap = ModalTrap::new(cx);
         let first = cx.focus_handle().tab_stop(true);
         let handles: Vec<FocusHandle> = (0..16).map(|_| cx.focus_handle().tab_stop(true)).collect();
         let mut handles = handles.into_iter();
         let mut handle = move || handles.next().expect("a focus handle");
         let day_focus: [FocusHandle; 7] = std::array::from_fn(|_| cx.focus_handle().tab_stop(true));
+        let page_focus: [FocusHandle; 5] =
+            std::array::from_fn(|_| cx.focus_handle().tab_stop(true));
+        let initial = page_focus[page.index()].clone();
         let mut dialog = Self {
             model,
             trap,
+            page,
+            page_focus,
+            current_password,
+            new_password,
+            confirm_password,
+            change_password_focus: cx.focus_handle().tab_stop(true),
+            password_sent: false,
+            password_changed: false,
             zone: TimeZone::system(),
             channel_level_focus: first.clone(),
             direct_level_focus: handle(),
@@ -199,7 +310,7 @@ impl PreferencesDialog {
             scrolled_for: None,
             _subscriptions: subscriptions,
         };
-        dialog.trap.open(&first, window, cx);
+        dialog.trap.open(&initial, window, cx);
         dialog.load_status(cx);
         dialog.load_quiet_times(cx);
         dialog
@@ -468,8 +579,38 @@ impl PreferencesDialog {
 
     /// Escape: a menu or the picker is closed by its own handling; otherwise the dialog closes,
     /// unless an input method is composing in a text field.
+    /// Shows another page, keeping the keyboard on its entry in the list.
+    fn show_page(&mut self, page: SettingsPage, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page != page {
+            self.page = page;
+            self.pause_menu = None;
+            self.clear_menu = None;
+            self.picker = None;
+            self.scrolled_for = None;
+            self.scroll.set_offset(gpui::point(px(0.), px(0.)));
+        }
+        window.focus(&self.page_focus[page.index()], cx);
+        cx.notify();
+    }
+
+    /// The page open, for tests and the screens.
+    pub fn page(&self) -> SettingsPage {
+        self.page
+    }
+
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if any_composing(&[&self.quiet_start, &self.quiet_end, &self.status_text], cx) {
+        if any_composing(
+            &[
+                &self.quiet_start,
+                &self.quiet_end,
+                &self.status_text,
+                &self.display_name,
+                &self.current_password,
+                &self.new_password,
+                &self.confirm_password,
+            ],
+            cx,
+        ) {
             return;
         }
         if self.picker.take().is_some() {
@@ -482,6 +623,80 @@ impl PreferencesDialog {
     }
 
     // ----- Drawing -----
+
+    /// The pages, down the left: one tab stop each, Enter or Space to open, Up and Down to move.
+    fn page_list(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let colors = theme.colors;
+        let mut list = div()
+            .id("prefs-pages")
+            .debug_selector(|| "prefs-pages".into())
+            .role(Role::TabList)
+            .aria_label("Settings")
+            .flex_none()
+            .w(px(170.))
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .pt_2();
+        for page in SettingsPage::ALL {
+            let selected = page == self.page;
+            let index = page.index();
+            let name: gpui::SharedString = format!("prefs-page-{}", page.id()).into();
+            let selector = name.clone();
+            list = list.child(
+                div()
+                    .id(name)
+                    .debug_selector(move || selector.to_string())
+                    .role(Role::Tab)
+                    .aria_label(page.title())
+                    .aria_selected(selected)
+                    // Only the open page is in the Tab order (Up and Down move between pages), so
+                    // Tab goes from the list straight to the page's controls.
+                    .track_focus(&self.page_focus[index].clone().tab_stop(selected))
+                    .px_2()
+                    .py_1()
+                    .rounded(theme.radii.small)
+                    .border_1()
+                    .border_color(gpui::transparent_black())
+                    .focus_visible(move |style| style.border_color(colors.focus_ring))
+                    .cursor_pointer()
+                    .text_size(theme.type_scale.body)
+                    .when(selected, |row| {
+                        row.bg(colors.sidebar_selected)
+                            .text_color(colors.sidebar_selected_text)
+                            .font_weight(FontWeight::SEMIBOLD)
+                    })
+                    .when(!selected, |row| {
+                        row.text_color(colors.text_muted)
+                            .hover(move |style| style.bg(colors.surface_hover))
+                    })
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.show_page(page, window, cx)),
+                    )
+                    .on_key_down(cx.listener(
+                        move |this, event: &gpui::KeyDownEvent, window, cx| {
+                            let next = match event.keystroke.key.as_str() {
+                                "down" => {
+                                    Some(SettingsPage::ALL[(index + 1) % SettingsPage::ALL.len()])
+                                }
+                                "up" => Some(
+                                    SettingsPage::ALL[(index + SettingsPage::ALL.len() - 1)
+                                        % SettingsPage::ALL.len()],
+                                ),
+                                _ if crate::keyboard::is_activation(event) => Some(page),
+                                _ => None,
+                            };
+                            if let Some(next) = next {
+                                this.show_page(next, window, cx);
+                                cx.stop_propagation();
+                            }
+                        },
+                    ))
+                    .child(page.title()),
+            );
+        }
+        list.into_any_element()
+    }
 
     fn heading(&self, theme: &Theme, text: &'static str) -> AnyElement {
         div()
@@ -964,6 +1179,10 @@ const LAST_ROW: usize = usize::MAX;
 impl PreferencesDialog {
     /// The index, among the body's children, of the section holding the focus.
     fn focused_section(&self, window: &Window, cx: &gpui::App) -> Option<usize> {
+        // Only Notifications is long enough to scroll through.
+        if self.page != SettingsPage::Notifications {
+            return None;
+        }
         let focused = |handle: &FocusHandle| handle.is_focused(window);
         if focused(&self.channel_level_focus) {
             // The first stop: show the heading above it too.
@@ -1028,89 +1247,109 @@ impl Render for PreferencesDialog {
                 }
             }
         }
-        let body = div()
+        let content = div()
             .id("prefs-scroll")
             .debug_selector(|| "prefs-scroll".into())
             // As tall as the window allows, so little needs scrolling in a big window.
             .max_h(px(
                 (f32::from(window.viewport_size().height) - 200.0).clamp(240.0, 1000.0)
             ))
+            .flex_1()
+            .min_w_0()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .flex()
             .flex_col()
             .gap_3()
-            .pr_1()
-            .child(self.heading(&theme, "Notifications"))
-            .child(self.level_choice(
-                "prefs-channel-level",
-                "In channels, notify me about",
-                settings.channel_level,
-                &self.channel_level_focus,
-                true,
-                cx,
-            ))
-            .child(self.level_choice(
-                "prefs-direct-level",
-                "In direct messages and groups, notify me about",
-                settings.direct_level,
-                &self.direct_level_focus,
-                false,
-                cx,
-            ))
-            .child(self.switch(
-                "prefs-thread-replies",
-                "Notify me about replies in threads I follow",
-                settings.thread_replies,
-                &self.thread_focus,
-                |s, v| s.thread_replies = v,
-                cx,
-            ))
-            .child(self.switch(
-                "prefs-channel-mentions",
-                "Notify me when someone uses @channel",
-                settings.channel_mentions,
-                &self.channel_mention_focus,
-                |s, v| s.channel_mentions = v,
-                cx,
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(self.switch(
-                        "prefs-desktop",
-                        "Show desktop notifications",
-                        settings.desktop,
-                        &self.desktop_focus,
-                        |s, v| s.desktop = v,
-                        cx,
-                    ))
-                    .children(self.permission_row(&theme, cx)),
-            )
-            .child(self.switch(
-                "prefs-show-content",
-                "Show message text in notifications",
-                settings.show_content,
-                &self.content_focus,
-                |s, v| s.show_content = v,
-                cx,
-            ))
-            .child(self.pause_section(&theme, &settings, cx))
-            .child(self.quiet_section(&theme, &settings, window, cx))
-            .child(self.heading(&theme, "Status"))
-            // A little room under it, so the last button of the section is not cut off when the
-            // keyboard scrolls the section into view.
-            .child(div().pb_1().child(self.status_section(&theme, window, cx)))
-            .child(self.heading(&theme, "Profile"))
-            .child(div().pb_1().child(self.profile_section(&theme, window, cx)))
-            .child(self.heading(&theme, "Appearance"))
-            .child(self.appearance_section(&theme, cx));
+            .pr_1();
+        let content = match self.page {
+            SettingsPage::Notifications => content
+                .child(self.heading(&theme, "Notifications"))
+                .child(self.level_choice(
+                    "prefs-channel-level",
+                    "In channels, notify me about",
+                    settings.channel_level,
+                    &self.channel_level_focus,
+                    true,
+                    cx,
+                ))
+                .child(self.level_choice(
+                    "prefs-direct-level",
+                    "In direct messages and groups, notify me about",
+                    settings.direct_level,
+                    &self.direct_level_focus,
+                    false,
+                    cx,
+                ))
+                .child(self.switch(
+                    "prefs-thread-replies",
+                    "Notify me about replies in threads I follow",
+                    settings.thread_replies,
+                    &self.thread_focus,
+                    |s, v| s.thread_replies = v,
+                    cx,
+                ))
+                .child(self.switch(
+                    "prefs-channel-mentions",
+                    "Notify me when someone uses @channel",
+                    settings.channel_mentions,
+                    &self.channel_mention_focus,
+                    |s, v| s.channel_mentions = v,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(self.switch(
+                            "prefs-desktop",
+                            "Show desktop notifications",
+                            settings.desktop,
+                            &self.desktop_focus,
+                            |s, v| s.desktop = v,
+                            cx,
+                        ))
+                        .children(self.permission_row(&theme, cx)),
+                )
+                .child(self.switch(
+                    "prefs-show-content",
+                    "Show message text in notifications",
+                    settings.show_content,
+                    &self.content_focus,
+                    |s, v| s.show_content = v,
+                    cx,
+                ))
+                .child(self.pause_section(&theme, &settings, cx))
+                .child(self.quiet_section(&theme, &settings, window, cx)),
+            SettingsPage::Status => content
+                .child(self.heading(&theme, "Status"))
+                // A little room under it, so the last button is not cut off when the keyboard
+                // scrolls it into view.
+                .child(div().pb_1().child(self.status_section(&theme, window, cx))),
+            SettingsPage::Profile => content
+                .child(self.heading(&theme, "Profile"))
+                .child(div().pb_1().child(self.profile_section(&theme, window, cx))),
+            SettingsPage::Appearance => content
+                .child(self.heading(&theme, "Appearance"))
+                .child(self.appearance_section(&theme, cx)),
+            SettingsPage::Security => content
+                .child(self.heading(&theme, "Password & security"))
+                .child(
+                    div()
+                        .pb_1()
+                        .child(self.security_section(&theme, window, cx)),
+                ),
+        };
+        let body = div()
+            .flex()
+            .gap_4()
+            .child(self.page_list(&theme, cx))
+            .child(content);
         dialog_overlay(
             &theme,
-            "Preferences",
-            580.,
+            "Settings",
+            760.,
             &self.trap,
             body.into_any_element(),
             "Close",

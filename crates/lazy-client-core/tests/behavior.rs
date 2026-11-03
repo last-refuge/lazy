@@ -122,6 +122,19 @@ fn sign_in_validates_before_asking_the_server() {
 }
 
 #[test]
+fn a_username_written_as_a_mention_or_with_spaces_still_signs_in() {
+    let mut driver = Driver::new();
+    driver.send(Input::Started(StartupState::default()));
+    let out = driver.send(Input::SignIn {
+        username: " @Zoe ".into(),
+        password: "correct horse".into(),
+    });
+    assert!(
+        matches!(&out.effects[..], [Effect::Login(request)] if request.username.as_str() == "zoe")
+    );
+}
+
+#[test]
 fn registration_checks_name_and_password() {
     let mut driver = Driver::new();
     driver.send(Input::Started(StartupState::default()));

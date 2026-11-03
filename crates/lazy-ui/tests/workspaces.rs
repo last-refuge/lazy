@@ -583,6 +583,8 @@ fn ctrl_and_a_number_does_nothing_over_a_dialog(cx: &mut TestAppContext) {
     let (world, cx) = start(cx);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-profile");
     assert!(world.on_screen(cx, "prefs-scroll"));
     cx.simulate_keystrokes("ctrl-2");
     assert_eq!(
@@ -876,6 +878,8 @@ fn the_display_name_field_holds_the_current_name_and_saves_only_a_change(cx: &mu
     world.reach(cx);
     world.take_effects();
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-profile");
     let shell = world.shell(cx);
     let dialog = shell
         .read_with(cx, |shell, _| shell.preferences_dialog())
@@ -923,6 +927,8 @@ fn a_blank_display_name_is_refused_on_the_spot_without_a_request(cx: &mut TestAp
     world.reach(cx);
     world.take_effects();
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-profile");
     world.click_field(cx, "prefs-display-name");
     cx.simulate_keystrokes("ctrl-a backspace");
     cx.simulate_keystrokes("enter");
@@ -939,6 +945,8 @@ fn choosing_a_picture_sends_it_and_removing_one_asks_to_remove_it(cx: &mut TestA
     world.reach(cx);
     world.take_effects();
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-profile");
     let shell = world.shell(cx);
     let dialog = shell
         .read_with(cx, |shell, _| shell.preferences_dialog())
@@ -991,6 +999,8 @@ fn removing_a_picture_that_exists_asks_the_server(cx: &mut TestAppContext) {
     world.reach(cx);
     world.take_effects();
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-profile");
     world.click(cx, "prefs-remove-picture");
     assert!(
         world
@@ -1009,6 +1019,8 @@ fn choosing_a_theme_applies_it_at_once_and_is_saved(cx: &mut TestAppContext) {
     world.reach(cx);
     world.take_effects();
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-appearance");
     assert_eq!(cx.update(|_, cx| Theme::get(cx).mode), ThemeMode::Light);
     draw(cx);
     world.click(cx, "prefs-theme-dark");
@@ -1077,15 +1089,15 @@ fn reduced_motion_is_applied_to_gpui_at_once(cx: &mut TestAppContext) {
     let (world, cx) = start(cx);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-appearance");
     assert!(
         !cx.update(|_, cx| cx.reduce_motion()),
         "motion is on by default"
     );
-    // The keyboard walks down to the motion choice (the last control but Close), which scrolls
-    // it into view; Right turns reduced motion on.
-    cx.simulate_keystrokes(
-        "tab tab tab tab tab tab tab tab tab tab tab tab tab tab tab tab tab tab",
-    );
+    // The keyboard starts on Appearance in the page list; Tab goes to the theme, then to the
+    // motion choice; Right turns reduced motion on.
+    cx.simulate_keystrokes("tab tab");
     cx.simulate_keystrokes("right");
     assert_eq!(
         world.core(cx, |core| core.appearance().motion),
@@ -1237,5 +1249,131 @@ fn a_person_without_a_picture_keeps_their_initial_and_nothing_is_asked(cx: &mut 
     assert!(
         cx.debug_bounds("author-avatar-0").is_some(),
         "the circle is there"
+    );
+}
+
+// ----- The account menu and Settings' pages -----
+
+#[gpui::test]
+fn the_name_opens_an_account_menu_whose_entries_open_settings_on_their_page(
+    cx: &mut TestAppContext,
+) {
+    let (world, cx) = start(cx);
+    world.reach(cx);
+    world.click(cx, "sidebar-preferences");
+    // Who the person is, then the pages, then Sign out.
+    for entry in [
+        "account-menu-me",
+        "account-menu-profile",
+        "account-menu-notifications",
+        "account-menu-status",
+        "account-menu-appearance",
+        "account-menu-security",
+        "account-menu-sign-out",
+    ] {
+        assert!(world.on_screen(cx, entry), "{entry}");
+    }
+    world.click(cx, "account-menu-security");
+    let shell = world.shell(cx);
+    let page = |cx: &mut VisualTestContext| {
+        shell
+            .read_with(cx, |shell, _| shell.preferences_dialog())
+            .expect("settings")
+            .read_with(cx, |dialog, _| dialog.page())
+    };
+    assert_eq!(page(cx), lazy_ui::dialogs::SettingsPage::Security);
+    assert!(world.on_screen(cx, "prefs-change-password"));
+    assert!(
+        !world.on_screen(cx, "prefs-channel-level"),
+        "one page at a time"
+    );
+    // The list: a click, or Up and Down from the open page's entry.
+    world.click(cx, "prefs-page-profile");
+    assert_eq!(page(cx), lazy_ui::dialogs::SettingsPage::Profile);
+    assert!(
+        world.on_screen(cx, "prefs-username"),
+        "the username is shown"
+    );
+    cx.simulate_keystrokes("down");
+    assert_eq!(page(cx), lazy_ui::dialogs::SettingsPage::Notifications);
+    cx.simulate_keystrokes("up up");
+    assert_eq!(
+        page(cx),
+        lazy_ui::dialogs::SettingsPage::Security,
+        "Up from the first wraps to the last"
+    );
+}
+
+#[gpui::test]
+fn the_password_is_changed_from_settings_and_a_refusal_is_shown(cx: &mut TestAppContext) {
+    let (world, cx) = start(cx);
+    world.reach(cx);
+    world.take_effects();
+    world.click(cx, "sidebar-preferences");
+    world.click(cx, "account-menu-security");
+    let fill = |cx: &mut VisualTestContext, current: &str, new: &str, confirm: &str| {
+        for (selector, text) in [
+            ("prefs-current-password", current),
+            ("prefs-new-password", new),
+            ("prefs-confirm-password", confirm),
+        ] {
+            world.click_field(cx, selector);
+            cx.simulate_keystrokes("ctrl-a backspace");
+            cx.simulate_input(text);
+        }
+    };
+    // Checked on the spot: a confirmation that differs sends nothing.
+    fill(cx, "old password", "a new password", "another password");
+    world.click(cx, "prefs-change-password");
+    assert!(world.take_effects().is_empty());
+    assert!(world.on_screen(cx, "prefs-password-failed"));
+    // Right: sent once, and Enter in a field does the same as the button.
+    fill(cx, "old password", "a new password", "a new password");
+    cx.simulate_keystrokes("enter");
+    let sent: Vec<(String, String)> = world
+        .take_effects()
+        .into_iter()
+        .filter_map(|effect| match effect {
+            Effect::ChangePassword { request } => Some((
+                request.current_password.expose().to_owned(),
+                request.new_password.expose().to_owned(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [("old password".to_owned(), "a new password".to_owned())]
+    );
+    // A wrong current password is said plainly.
+    world.dispatch(
+        cx,
+        Input::ActionResult {
+            kind: ActionKind::ChangePassword,
+            result: Err(RequestError::Rejected(ApiError::new(
+                ErrorCode::InvalidCredentials,
+                "your current password is not right",
+            ))),
+        },
+    );
+    assert!(world.on_screen(cx, "prefs-password-failed"));
+    // It goes through: the fields empty and a line says so.
+    world.click(cx, "prefs-change-password");
+    world.dispatch(
+        cx,
+        Input::ActionResult {
+            kind: ActionKind::ChangePassword,
+            result: Ok(ActionOutcome::Done),
+        },
+    );
+    assert!(world.on_screen(cx, "prefs-password-changed"));
+    assert!(!world.on_screen(cx, "prefs-password-failed"));
+    let shell = world.shell(cx);
+    let dialog = shell
+        .read_with(cx, |shell, _| shell.preferences_dialog())
+        .expect("settings");
+    assert!(
+        dialog.read_with(cx, |dialog, cx| dialog.password_fields_empty(cx)),
+        "nothing of the passwords is left on screen"
     );
 }

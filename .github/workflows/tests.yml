@@ -1,0 +1,51 @@
+name: tests
+
+# The test suites, on their own. Manual only, and run only when the owner explicitly asks:
+# the Actions tab (tests, Run workflow) or `gh workflow run tests`. Never part of the ci pass.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgres://lazy:lazy@localhost:5432/lazy
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: lazy
+          POSTGRES_PASSWORD: lazy
+          POSTGRES_DB: lazy
+          # As the local test database (scripts/dev-db.sh): a test that gives the server a made-up
+          # password to prove it is never logged must still be able to connect.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U lazy"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GPUI system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libvulkan-dev mesa-vulkan-drivers libfontconfig-dev libssl-dev libdbus-1-dev \
+            pkg-config cmake clang libclang-dev
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      # Every test in its own process, in parallel (.config/nextest.toml caps the Postgres ones);
+      # every test runs even after one fails, so a run lists all the failures.
+      - run: cargo nextest run --workspace --no-fail-fast
+      # The media library is its own workspace (llm-docs/DROP_INS.md).
+      - run: cargo test --workspace --no-fail-fast --manifest-path media/Cargo.toml

@@ -900,6 +900,20 @@ impl Inner {
                     inner.emit(Input::ActionResult { kind, result }).await;
                 });
             }
+            Effect::ChangePassword { request } => {
+                let inner = self.clone();
+                self.spawn(async move {
+                    // One attempt: after a change that went through, the same request would be
+                    // refused (its current password is the old one).
+                    let result = inner
+                        .api
+                        .put_unit(paths::ME_PASSWORD_ROUTE, &request)
+                        .await
+                        .map(|()| ActionOutcome::Done);
+                    let kind = ActionKind::ChangePassword;
+                    inner.emit(Input::ActionResult { kind, result }).await;
+                });
+            }
             Effect::SetAvatar { source } => self.set_avatar(source),
             Effect::RemoveAvatar => {
                 let inner = self.clone();

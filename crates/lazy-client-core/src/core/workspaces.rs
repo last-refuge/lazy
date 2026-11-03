@@ -143,6 +143,7 @@ impl ClientCore {
                 ActionKind::CreateWorkspace
                 | ActionKind::AcceptInvitation
                 | ActionKind::UpdateProfile
+                | ActionKind::ChangePassword
                 | ActionKind::SetAvatar => None,
                 _ => self.action_scope.get(kind).copied(),
             },
@@ -326,6 +327,11 @@ impl ClientCore {
             Input::CreateWorkspace { name } => self.create_workspace(&name, out),
             Input::AcceptInvitation { code } => self.accept_invitation(&code, out),
             Input::UpdateProfile { display_name } => self.update_profile(display_name, out),
+            Input::ChangePassword {
+                current,
+                new,
+                confirm,
+            } => self.change_password(current, new, confirm, out),
             Input::SetAvatar { source } => self.set_avatar(source, out),
             Input::RemoveAvatar => self.remove_avatar(out),
             Input::LoadAvatar(user) => self.load_avatar(user, out),
@@ -584,6 +590,34 @@ impl ClientCore {
         out.effects.push(Effect::UpdateProfile {
             request: UpdateProfileRequest {
                 display_name: Some(display_name),
+            },
+        });
+    }
+
+    fn change_password(&mut self, current: String, new: String, confirm: String, out: &mut Output) {
+        let kind = ActionKind::ChangePassword;
+        if !self.session_ready() || self.action(kind) == &ActionState::InFlight {
+            return;
+        }
+        let problem = if current.is_empty() {
+            Some("Enter your current password.".to_owned())
+        } else if let Some(problem) = super::password_problem(&new) {
+            Some(problem.replacen("Password", "The new password", 1))
+        } else if new != confirm {
+            Some("The new password and its confirmation are different.".to_owned())
+        } else if new == current {
+            Some("The new password is the same as the current one.".to_owned())
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            return self.fail_action(kind, problem, out);
+        }
+        self.set_action(kind, ActionState::InFlight, out);
+        out.effects.push(Effect::ChangePassword {
+            request: lazy_protocol::ChangePasswordRequest {
+                current_password: lazy_protocol::Password::new(current),
+                new_password: lazy_protocol::Password::new(new),
             },
         });
     }
@@ -885,6 +919,13 @@ impl ClientCore {
             (ActionKind::UpdateProfile | ActionKind::SetAvatar, ActionOutcome::Profile(user)) => {
                 self.profile_changed_by_me(user, out)
             }
+            (ActionKind::ChangePassword, _) => self.set_notice(
+                Some(
+                    "Your password was changed. Your other devices and browsers were signed out."
+                        .to_owned(),
+                ),
+                out,
+            ),
             _ => return false,
         }
         true

@@ -306,3 +306,66 @@ async fn seeding_is_idempotent_and_safe_under_concurrency(pool: PgPool) {
             .is_none()
     );
 }
+
+/// `PUT /v1/me/password` as `token`.
+async fn change_password(app: &App, token: &str, current: &str, new: &str) -> reqwest::Response {
+    app.http
+        .put(app.url(lazy_protocol::api::paths::ME_PASSWORD_ROUTE))
+        .bearer_auth(token)
+        .json(&lazy_protocol::ChangePasswordRequest {
+            current_password: lazy_protocol::Password::new(current),
+            new_password: lazy_protocol::Password::new(new),
+        })
+        .send()
+        .await
+        .unwrap()
+}
+
+#[sqlx::test]
+async fn changing_the_password_needs_the_current_one_and_signs_out_other_devices(pool: PgPool) {
+    let app = App::start(pool).await;
+    let here = app.register("ada").await;
+    // Another device, signed in with the same account.
+    let there: lazy_protocol::SessionResponse =
+        app.try_login("ada", PASSWORD).await.json().await.unwrap();
+    let there = there.token.expose().to_owned();
+
+    // The current password must be right; nothing changes otherwise.
+    let (status, error) =
+        api_error(change_password(&app, &here.token, "not it at all", "a new password").await)
+            .await;
+    assert_error(status, &error, ErrorCode::InvalidCredentials);
+    // The new one follows the same rules as at registration.
+    let (status, error) =
+        api_error(change_password(&app, &here.token, PASSWORD, "short").await).await;
+    assert_error(status, &error, ErrorCode::InvalidRequest);
+    assert_eq!(
+        app.bootstrap(&there).await.status(),
+        200,
+        "nothing was ended"
+    );
+
+    let response = change_password(&app, &here.token, PASSWORD, "a brand new password").await;
+    assert_eq!(response.status(), 204);
+    // This session goes on; the other device is signed out.
+    assert_eq!(app.bootstrap(&here.token).await.status(), 200);
+    let (status, error) = api_error(app.bootstrap(&there).await).await;
+    assert_error(status, &error, ErrorCode::Unauthenticated);
+    // The old password no longer signs in; the new one does.
+    let (status, error) = api_error(app.try_login("ada", PASSWORD).await).await;
+    assert_error(status, &error, ErrorCode::InvalidCredentials);
+    assert_eq!(
+        app.try_login("ada", "a brand new password").await.status(),
+        200
+    );
+    // Without a session, nothing.
+    let response = app
+        .http
+        .put(app.url(lazy_protocol::api::paths::ME_PASSWORD_ROUTE))
+        .json(&serde_json::json!({"current_password": "x", "new_password": "y"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    app.server.shutdown().await.unwrap();
+}

@@ -29,6 +29,7 @@ const ALLOWED_FIELDS: &[&str] = &[
     "expired",
     "removed",
     "swept",
+    "sessions_ended",
     "orphans",
     "stale_uploads",
     "status",

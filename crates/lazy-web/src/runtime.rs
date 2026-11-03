@@ -664,6 +664,20 @@ impl Runtime {
                     result,
                 }
             }),
+            Effect::ChangePassword { request } => self.spawn(async move {
+                // One attempt, as from the desktop runtime.
+                let answer = api::send(
+                    "PUT",
+                    paths::ME_PASSWORD_ROUTE,
+                    api::Body::Json(serde_json::to_string(&request).unwrap_or_default()),
+                    api::TIMEOUT,
+                )
+                .await;
+                Input::ActionResult {
+                    kind: ActionKind::ChangePassword,
+                    result: api::decode_unit(answer).map(|()| ActionOutcome::Done),
+                }
+            }),
             // ----- Files -----
             Effect::StageFile {
                 attachment,

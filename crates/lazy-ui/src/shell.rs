@@ -28,7 +28,7 @@ use crate::dialogs::{
     DeleteMessageDialog, DetailsDialog, DetailsRequest, DiagnosticsDialog, GroupsDialog,
     IntegrationsDialog, InvitationsDialog, PeopleDialog, PeopleMode, PreferencesDialog,
     ProfileDialog, ProfileRequest, QuickSwitcherChoice, QuickSwitcherDialog, QuickSwitcherRun,
-    ShortcutsDialog, UpdatesDialog, WorkspaceSettingsDialog,
+    SettingsPage, ShortcutsDialog, UpdatesDialog, WorkspaceSettingsDialog,
 };
 use crate::emoji_font;
 use crate::emoji_picker::{EmojiPicker, EmojiPickerEvent, PickerPrefs};
@@ -102,8 +102,10 @@ pub enum ShellDialog {
     Groups,
     /// Manage the workspace's custom emoji (admins and owners).
     CustomEmoji,
-    /// Notification settings and status.
+    /// Settings, on Notifications.
     Preferences,
+    /// Settings, on a page.
+    Settings(SettingsPage),
     Details(ConversationId),
     /// Add people to a channel.
     AddPeople(ConversationId),
@@ -350,7 +352,9 @@ impl ShellView {
                     SidebarEvent::Saved => CommandId::Saved,
                     SidebarEvent::People => CommandId::People,
                     SidebarEvent::QuickSwitcher => CommandId::QuickSwitcher,
-                    SidebarEvent::Preferences => CommandId::Preferences,
+                    SidebarEvent::Settings(page) => {
+                        return this.open_settings(*page, window, cx);
+                    }
                     SidebarEvent::Menu => return this.open_command_menu(window, cx),
                     SidebarEvent::SignOut => CommandId::SignOut,
                 };
@@ -1454,8 +1458,18 @@ impl ShellView {
     // ----- Notification preferences -----
 
     fn open_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(SettingsPage::Notifications, window, cx);
+    }
+
+    /// Opens Settings on `page` (the account menu's entries).
+    pub fn open_settings(
+        &mut self,
+        page: SettingsPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let model = self.model.clone();
-        let dialog = cx.new(|cx| PreferencesDialog::new(model, window, cx));
+        let dialog = cx.new(|cx| PreferencesDialog::new(model, page, window, cx));
         self.show(dialog, Vec::new(), window, cx);
     }
 
@@ -1755,6 +1769,7 @@ impl ShellView {
             ShellDialog::Groups => self.open_groups(window, cx),
             ShellDialog::CustomEmoji => self.open_custom_emoji(window, cx),
             ShellDialog::Preferences => self.open_preferences(window, cx),
+            ShellDialog::Settings(page) => self.open_settings(page, window, cx),
             ShellDialog::Details(id) => self.open_details(id, window, cx),
             ShellDialog::AddPeople(id) => {
                 self.open_people(PeopleMode::AddToChannel(id), window, cx)

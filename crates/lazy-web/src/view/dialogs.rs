@@ -12,11 +12,75 @@ use super::html::{count, data, esc, push};
 use super::icons::icon;
 use super::time::{Clock, day_label, time_of_day};
 use super::timeline::{emoji_html, emoji_wire};
-use super::{Dialog, avatar};
+use super::{AccountPage, Dialog, avatar};
+
+/// The account dialog's frame: its two pages, and the open page's form (drawn once, so typing is
+/// never disturbed; what changes goes in `#dlg-status`).
+fn account_shell(core: &ClientCore, page: AccountPage) -> String {
+    let tab = |this: AccountPage, label: &str| {
+        format!(
+            "<button type=\"button\" role=\"tab\" aria-selected=\"{0}\" class=\"tab{1}\" data-action=\"account\" data-page=\"{2}\">{3}</button>",
+            this == page,
+            if this == page { " on" } else { "" },
+            this.id(),
+            esc(label)
+        )
+    };
+    let (name, username) = core
+        .me()
+        .map(|me| {
+            (
+                me.display_name.as_str().to_owned(),
+                me.username.as_str().to_owned(),
+            )
+        })
+        .unwrap_or_default();
+    let mut out = format!(
+        "<div class=\"tabs\" role=\"tablist\">{}{}</div>",
+        tab(AccountPage::Profile, "Profile"),
+        tab(AccountPage::Security, "Password & security")
+    );
+    match page {
+        AccountPage::Profile => push!(
+            out,
+            "<form id=\"profile-form\" class=\"stack\"><label>Display name<input name=\"display_name\" value=\"{}\" required maxlength=\"80\" autocomplete=\"name\"></label><div><div class=\"field-label\">Username</div><div class=\"field-value\" id=\"my-username\">{}</div><div class=\"field-hint\">You sign in with this and your password, in the Lazy app and here. People mention you as @{}.</div></div><div id=\"dlg-status\" class=\"form-status\" role=\"status\"></div><div class=\"dlg-buttons\"><button type=\"submit\" class=\"primary\">Save name</button></div><p class=\"field-hint\">To change your picture, use the Lazy app.</p></form>",
+            esc(&name),
+            esc(&username),
+            esc(&username)
+        ),
+        AccountPage::Security => push!(
+            out,
+            "<form id=\"password-form\" class=\"stack\" autocomplete=\"on\"><div><div class=\"field-label\">Signed in as</div><div class=\"field-value\">@{}</div></div><input type=\"text\" name=\"username\" value=\"{}\" autocomplete=\"username\" hidden><label>Current password<input name=\"current\" type=\"password\" autocomplete=\"current-password\" required></label><label>New password<input name=\"new\" type=\"password\" autocomplete=\"new-password\" required minlength=\"8\"></label><label>Confirm new password<input name=\"confirm\" type=\"password\" autocomplete=\"new-password\" required minlength=\"8\"></label><p class=\"field-hint\">At least 8 characters. Changing it signs you out of Lazy on your other devices and browsers; this one stays signed in.</p><div id=\"dlg-status\" class=\"form-status\" role=\"status\"></div><div class=\"dlg-buttons\"><button type=\"submit\" class=\"primary\">Change password</button></div></form>",
+            esc(&username),
+            esc(&username)
+        ),
+    }
+    out
+}
+
+/// What the account dialog's open page says under its form.
+pub(crate) fn account_status(
+    core: &ClientCore,
+    page: AccountPage,
+    password_changed: bool,
+) -> String {
+    match page {
+        AccountPage::Profile => action_status(core, ActionKind::UpdateProfile),
+        AccountPage::Security => match core.action(ActionKind::ChangePassword) {
+            ActionState::Idle if password_changed => "<span class=\"ok\">Your password was changed. Your other devices and browsers were signed out.</span>".to_owned(),
+            _ => action_status(core, ActionKind::ChangePassword),
+        },
+    }
+}
 
 /// The dialog's frame and fields.
-pub(crate) fn shell(dialog: &Dialog) -> String {
+pub(crate) fn shell(core: &ClientCore, dialog: &Dialog) -> String {
+    let account;
     let (title, fields) = match dialog {
+        Dialog::Account(page) => {
+            account = account_shell(core, *page);
+            ("Your account", account.as_str())
+        }
         Dialog::Browse => (
             "Channels",
             "<div class=\"dlg-row\"><input id=\"browse-q\" type=\"search\" placeholder=\"Search channels\" autocomplete=\"off\" aria-label=\"Search channels\"><button type=\"button\" class=\"primary\" data-action=\"create-channel\">Create channel</button></div>",
@@ -55,6 +119,7 @@ pub(crate) fn body(core: &ClientCore, clock: &dyn Clock, dialog: &Dialog) -> Str
         Dialog::NewMessage { picked } => people(core, picked),
         Dialog::Search => search(core, clock),
         Dialog::Switcher { query, highlighted } => switcher(core, query, *highlighted),
+        Dialog::Account(_) => String::new(),
     }
 }
 

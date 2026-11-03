@@ -138,14 +138,19 @@ impl PreferencesDialog {
     ) -> AnyElement {
         let colors = theme.colors;
         let this = cx.entity().downgrade();
-        let (me, name_state, avatar_state) = {
+        let (me, name_state, avatar_state, server) = {
             let core = self.model.read(cx).core();
             (
                 core.me().cloned(),
                 core.action(ActionKind::UpdateProfile).clone(),
                 core.action(ActionKind::SetAvatar).clone(),
+                core.server().url.clone(),
             )
         };
+        let username = me
+            .as_ref()
+            .map(|me| me.username.as_str().to_owned())
+            .unwrap_or_default();
         let seed = me.as_ref().map_or(0, |me| me.id.as_uuid().as_u128());
         let shown_name = me
             .as_ref()
@@ -297,6 +302,36 @@ impl PreferencesDialog {
                         ),
                         _ => None,
                     }),
+            )
+            // What the person signs in with, which nothing else in the app shows (D47: the web
+            // client asks for it).
+            .child(
+                div()
+                    .debug_selector(|| "prefs-username".into())
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .text_size(theme.type_scale.small)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.text_muted)
+                            .child("Username"),
+                    )
+                    .child(
+                        div()
+                            .id("prefs-username-value")
+                            .debug_selector(|| "prefs-username-value".into())
+                            .text_size(theme.type_scale.body)
+                            .text_color(colors.text)
+                            .child(username.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_size(theme.type_scale.small)
+                            .text_color(colors.text_faint)
+                            .child(states::username_note(&server, &username)),
+                    ),
             )
             .into_any_element()
     }

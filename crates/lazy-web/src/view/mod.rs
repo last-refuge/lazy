@@ -38,6 +38,32 @@ pub(crate) enum Dialog {
         query: String,
         highlighted: usize,
     },
+    /// The person's own account: their profile, or their password.
+    Account(AccountPage),
+}
+
+/// A page of the account dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AccountPage {
+    Profile,
+    Security,
+}
+
+impl AccountPage {
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            AccountPage::Profile => "profile",
+            AccountPage::Security => "security",
+        }
+    }
+
+    pub(crate) fn parse(id: &str) -> Option<AccountPage> {
+        match id {
+            "profile" => Some(AccountPage::Profile),
+            "security" => Some(AccountPage::Security),
+            _ => None,
+        }
+    }
 }
 
 impl Dialog {
@@ -49,6 +75,8 @@ impl Dialog {
             Dialog::NewMessage { .. } => "new-message",
             Dialog::Search => "search",
             Dialog::Switcher { .. } => "switcher",
+            Dialog::Account(AccountPage::Profile) => "account-profile",
+            Dialog::Account(AccountPage::Security) => "account-security",
         }
     }
 }
@@ -73,6 +101,8 @@ pub(crate) enum Menu {
     Workspace,
     /// The open conversation's menu.
     Conversation(ConversationId),
+    /// The person's own menu: who they are, their profile and password, signing out.
+    Account,
 }
 
 /// Suggestions open in a composer.
@@ -98,6 +128,10 @@ pub(crate) struct Ui {
     pub registering: bool,
     /// The sidebar is open over the conversation (narrow screens).
     pub sidebar_open: bool,
+    /// A password change was sent and its answer has not been seen.
+    pub password_sent: bool,
+    /// The last password change went through.
+    pub password_changed: bool,
 }
 
 /// The window title, with the count of what needs attention.

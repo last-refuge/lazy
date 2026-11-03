@@ -629,3 +629,29 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
   - a long session (reconnects after sleep, many hours);
   - large workspaces (hundreds of channels, long histories);
   - notifications actually shown by a desktop browser.
+
+## The account menu and changing a password (D48)
+
+- *Measured (2026-11-03, on this Linux machine):*
+  - `lazy-server` `auth.rs` `changing_the_password_needs_the_current_one_and_signs_out_other_devices`:
+    - a wrong current password is `invalid_credentials`, a short new one is `invalid_request`, and neither ends anything;
+    - the change keeps the session that asked and signs out another;
+    - the old password stops signing in and the new one works;
+    - no session gets `401`.
+  - `lazy-client-core`:
+    - `a_new_password_is_checked_before_it_is_sent_and_the_outcome_is_worded`: a missing current password, a short new one, a mismatched confirmation, and an unchanged password are all refused before sending; a wrong current password and success are worded; the input's `Debug` holds none of the passwords;
+    - `a_username_written_as_a_mention_or_with_spaces_still_signs_in`.
+  - `lazy-ui`:
+    - the account menu shows the person and every page, and each entry opens Settings on its page;
+    - the list's click, Down, and Up (which wraps) work, and the username is on Profile;
+    - the password page checks on the spot, sends once (Enter in a field as well as the button), shows a refusal, and on success empties its fields and says so;
+    - the dialog audit walks every Settings page (focus trap, Escape, Tab order);
+    - the 20 older tests that opened Preferences by clicking the name now go through the menu and pass;
+    - the three keyboard tests now start from the page list.
+  - The offscreen screens were read: the account menu (`3i-01`), the password page in light and dark with a refusal (`3i-02`, `3i-03`), and the Profile page with the username (`3g-10`). The selected page was hard to see in dark mode, so it now uses the sidebar's selection colour.
+  - The browser test (`scripts/test-web.sh`) passed 21 of 21 steps. The new ones:
+    - Ada's name opens a menu with `@ada`, and Profile shows her username;
+    - a wrong current password is refused;
+    - the change goes through, the fields empty, and Ada's other browser session is signed out;
+    - only the new password signs in afterwards.
+- *Not checked:* a person changing their password on the deployed server; how a screen reader announces the page list.

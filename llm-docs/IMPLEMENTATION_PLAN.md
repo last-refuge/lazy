@@ -561,6 +561,7 @@ Goal: Lazy in a browser for people who cannot install the app, served by the ser
 - [X] `crates/lazy-web`: the shared core in WebAssembly, a runtime on `fetch`, WebSocket, and `localStorage`, and screens drawn as escaped HTML
 - [X] Everyday messaging in a real browser: sign in, conversations, sending with Markdown, mentions, and emoji, editing, deleting, reactions, threads, files and pictures, direct and group conversations, channels (browse, join, create, leave, topic, rename), search, Jump to, unread counts, presence, notifications offer, sign-out
 - [X] Build: `scripts/build-web.sh`, and the Docker image builds and serves it
+- [X] The account menu (D48): the username shown, Settings a page at a time, and changing a password (server, core, app, and web)
 - [ ] Deployed behind HTTPS (Coolify) and used by a person
 - [ ] Firefox and Safari, a phone, and a screen reader
 

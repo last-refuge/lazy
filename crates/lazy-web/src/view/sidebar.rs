@@ -65,9 +65,11 @@ pub(crate) fn sidebar(core: &ClientCore, ui: &Ui) -> String {
     if let Some(me) = core.me() {
         push!(
             out,
-            "<div class=\"sb-me\">{}<span class=\"me-name\">{}</span><button type=\"button\" class=\"link\" data-action=\"sign-out\">Sign out</button></div>",
+            "<div class=\"sb-me\"><button type=\"button\" class=\"me\" data-action=\"account-menu\" aria-haspopup=\"menu\" aria-expanded=\"{}\" title=\"Your profile, password, and signing out\">{}<span class=\"me-name\">{}</span><span class=\"caret\">{}</span></button><button type=\"button\" class=\"link\" data-action=\"sign-out\">Sign out</button></div>",
+            ui.menu == Some(Menu::Account),
             avatar(core, me.id, "small"),
-            esc(me.display_name.as_str())
+            esc(me.display_name.as_str()),
+            icon("caret")
         );
     }
     out
@@ -183,6 +185,25 @@ pub(crate) fn workspace_menu(core: &ClientCore) -> String {
     out
 }
 
+/// The person's own menu: who they are (name and username), then their profile and password,
+/// then signing out.
+pub(crate) fn account_menu(core: &ClientCore) -> String {
+    let mut out = String::from("<div class=\"menu\" role=\"menu\">");
+    if let Some(me) = core.me() {
+        push!(
+            out,
+            "<div class=\"menu-who\">{}<span><span class=\"menu-name\">{}</span><span class=\"muted\">@{}</span></span></div><hr>",
+            avatar(core, me.id, "small"),
+            esc(me.display_name.as_str()),
+            esc(me.username.as_str())
+        );
+    }
+    out.push_str("<button type=\"button\" role=\"menuitem\" data-action=\"account\" data-page=\"profile\"><span>Profile…</span><span class=\"muted\">Name and username</span></button>");
+    out.push_str("<button type=\"button\" role=\"menuitem\" data-action=\"account\" data-page=\"security\"><span>Password &amp; security…</span><span class=\"muted\">Change your password</span></button>");
+    out.push_str("<hr><button type=\"button\" role=\"menuitem\" data-action=\"sign-out\">Sign out</button></div>");
+    out
+}
+
 /// The open conversation's menu.
 pub(crate) fn conversation_menu(core: &ClientCore, id: ConversationId) -> String {
     let mut out = String::from("<div class=\"menu\" role=\"menu\">");
@@ -237,5 +258,16 @@ mod tests {
         assert!(html.contains(">Bo</span>"), "{html}");
         assert!(html.contains("Ada Lovelace"));
         assert!(html.contains("data-action=\"sign-out\""));
+        assert!(
+            html.contains("data-action=\"account-menu\""),
+            "the name opens a menu"
+        );
+        let menu = account_menu(&w.core);
+        assert!(
+            menu.contains(&format!("@{}", w.me.username.as_str())),
+            "{menu}"
+        );
+        assert!(menu.contains("data-page=\"profile\""));
+        assert!(menu.contains("data-page=\"security\""));
     }
 }

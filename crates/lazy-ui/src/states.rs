@@ -519,6 +519,40 @@ pub const SERVER_UNREACHABLE: &str = "Can't reach this server.";
 pub const SERVER_NEEDS_NEWER: &str = "This server needs a newer Lazy.";
 pub const SERVER_NEEDS_OLDER: &str = "This server needs an older Lazy.";
 pub const SERVER_WAIT_SIGN_IN: &str = "Wait until sign-in has finished.";
+/// Under the username in Preferences: what it is for, and where else it works (D47).
+pub fn username_note(server: &str, username: &str) -> String {
+    let address = server
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    format!(
+        "You sign in with this and your password, here and in a browser at {address}. People mention you as @{username}."
+    )
+}
+
+#[cfg(test)]
+#[test]
+fn the_username_note_names_the_address_without_its_scheme() {
+    assert_eq!(
+        username_note("https://chat.example.com", "ada"),
+        "You sign in with this and your password, here and in a browser at chat.example.com. People mention you as @ada."
+    );
+}
+
+/// Under the password fields in Settings.
+pub const PASSWORD_CHANGE_NOTE: &str = "At least 8 characters. Changing it signs you out of Lazy on your other devices and browsers; this one stays signed in.";
+
+/// After a password change went through.
+pub const PASSWORD_CHANGED: &str =
+    "Your password was changed. Your other devices and browsers were signed out.";
+
+/// Who the person is signed in as, and where: "@ada on chat.example.com".
+pub fn signed_in_as(username: &str, server: &str) -> String {
+    let address = server
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    format!("@{username} on {address}")
+}
+
 pub const SERVER_SIGN_OUT_FIRST: &str = "Sign out to choose another server.";
 pub const SERVER_REMOVES_SESSION: &str =
     "Moving to another server removes this server's saved sign-in from this device.";

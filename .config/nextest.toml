@@ -1,0 +1,15 @@
+# cargo-nextest: every test in its own process, run in parallel across all test binaries
+# (`cargo test` runs the binaries one after another). See scripts/test.sh.
+
+[test-groups]
+# Tests that create databases on the test Postgres (:54330, 300 connections). Each holds a pool,
+# so only so many run at once.
+postgres = { max-threads = 16 }
+
+[[profile.default.overrides]]
+filter = "package(lazy-server) | package(lazy-e2e)"
+test-group = "postgres"
+
+[profile.default]
+# A test that hangs is reported, then stopped, instead of holding the run forever.
+slow-timeout = { period = "60s", terminate-after = 5 }

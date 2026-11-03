@@ -407,6 +407,8 @@ fn ctrl_k_inside_the_switcher_closes_it_and_the_sidebar_hint_opens_it(cx: &mut T
 fn ctrl_k_does_nothing_over_another_dialog(cx: &mut TestAppContext) {
     let (world, cx) = start_member(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-notifications");
     assert!(world.on_screen(cx, "dialog-card"));
     cx.simulate_keystrokes("ctrl-k");
     assert!(
