@@ -4,7 +4,7 @@ The desktop client ships as installers for Linux, macOS, and Windows, built by a
 by hand (like CI, it never runs on a push): **Actions, release, Run workflow**, or
 
 ```sh
-gh workflow run release -f version=0.12.0 -f publish=true
+gh workflow run release -f version=0.12.1 -f publish=true
 ```
 
 `version` is stamped into the apps (Help, Diagnostics shows it) and into the file names;
@@ -87,6 +87,11 @@ under Lazy's name and icon, after a banner that explains them and only then rais
 permission dialog. The protocol is still 14 and there is no migration; presence needs a server
 from this release (older servers send none, and the dots simply do not appear), and older clients
 skip the presence frames.
+
+Release 0.12.1 (2026-11-02) fixes emoji on Windows: the bell, the paperclip and emoji buttons, and
+the emoji picker drew nothing, because GPUI's Windows renderer cannot draw the bundled emoji font's
+bitmap glyphs. Windows now draws emoji with its own Segoe UI Emoji. Client only: the protocol is
+still 14, there is no migration, and no server needs redeploying.
 
 ## What you get
 
