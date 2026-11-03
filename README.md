@@ -26,6 +26,7 @@ Lazy has two parts, and you set each up once:
 | --- | --- | --- |
 | **The server** | Runs on a machine your team can reach, with a Postgres database behind it. | One person |
 | **The desktop app** | Windows, macOS, and Linux. Pointed at the server with an address and an invitation code. | Everyone |
+| **Lazy in a browser** | Served by the server: open its address and sign in, for anyone who cannot install the app. | Nobody: it comes with the server |
 
 ```mermaid
 flowchart LR
@@ -116,6 +117,10 @@ The code works for up to 25 people until Nov 6 3:45 PM.
 
 A code lasts from an hour to 30 days and can be used once or many times. It is shown only once, so copy it then. Capitals, small letters, spaces, and dashes all work when someone types it.
 
+### Lazy in a browser
+
+Anyone who cannot install the app (a work computer that does not allow it, a borrowed one) can open the server's address in a browser, such as `https://chat.example.com`, and sign in with their Lazy username and password. Someone with an invitation code can create their account there too. The browser version has channels, direct and group conversations, threads, reactions, mentions, files and pictures, search, **Jump to** (Ctrl+K), and notifications while the page is open. Drop-ins, workspace administration, integrations, and changing your profile need the app. Signing out deletes everything the browser kept. It works in current Chrome, Edge, Firefox, and Safari.
+
 ### Updates
 
 Lazy looks for a newer release every 30 minutes while it runs, and a bar across the top of the window says when there is one. **Update now** downloads it (checked against the release's `SHA256SUMS`) while you keep working, and **Restart to update** installs it. **Menu, Help, Check for updates…** asks right away and has the switch for the automatic checks. A portable copy or one built from source opens the release page instead. Release 0.5.0 has no updater, so if you have it, install 0.6.0 by hand, once.
@@ -200,6 +205,13 @@ env -u LAZY_SERVER_URL LAZY_PROFILE_DIR=.dev/profiles/newcomer cargo run -p lazy
 
 Enter `http://127.0.0.1:8080` and the setup code. Profiles live in `.dev/profiles/<name>`: delete one to start fresh. `scripts/dev-db.sh reset` wipes the dev database.
 
+To try the browser version locally, build it once (it needs the WebAssembly target and the `wasm-bindgen` CLI; the top of the script says how to get them), then start the server and open http://127.0.0.1:8080:
+
+```sh
+rustup target add wasm32-unknown-unknown
+scripts/build-web.sh             # into target/web, which scripts/run-server.sh then serves
+```
+
 ### Build the programs
 
 ```sh
@@ -236,6 +248,7 @@ scripts/check-core-deps.sh        # the shared crates must not depend on the UI,
 scripts/test.sh                   # runs the workspace tests on a separate Postgres (port 54330),
                                   #   so a server you are running by hand is never disturbed
 cargo run -p lazy-ui --example screens -- .dev/screens   # render the real views offscreen to PNGs
+scripts/build-web.sh && scripts/test-web.sh           # the web client, and its test in a real browser
 ```
 
 The GitHub workflows (`ci`, `release`, `server`, `screens`) run only when you start them: **Actions, the workflow, Run workflow**, or `gh workflow run ci`.

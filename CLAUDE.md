@@ -11,6 +11,8 @@ cargo clippy --workspace --all-targets
 scripts/check-core-deps.sh                   # shared crates must not depend on UI, async runtime, HTTP, or SQL crates
 scripts/run-server.sh                        # server on 127.0.0.1:8080 using the dev Postgres (:54329)
 scripts/run-client.sh alice                  # desktop client with its own disposable profile
+scripts/build-web.sh                         # the web client (D47) into target/web; run-server.sh then serves it at /web/
+scripts/test-web.sh                          # the web client's browser test (Playwright, test Postgres; see the script)
 ```
 
 ## Rules

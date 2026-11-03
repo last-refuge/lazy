@@ -25,8 +25,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run the server.
-    Serve(ServeArgs),
+    /// Run the server. (Boxed: its options are many times the size of the other commands'.)
+    Serve(Box<ServeArgs>),
     /// Apply database migrations and exit.
     Migrate(DatabaseArgs),
     /// Run only the job worker (integration deliveries and other background work), for a process
@@ -142,6 +142,10 @@ struct ServeArgs {
     /// a disk that survives restarts, and back it up with the database.
     #[arg(long, env = "LAZY_ATTACHMENTS_DIR", default_value = "attachments")]
     attachments_dir: std::path::PathBuf,
+    /// The built web client (`scripts/build-web.sh`) to serve under `/web` (D47). Unset or empty
+    /// serves none.
+    #[arg(long, env = "LAZY_WEB_DIR")]
+    web_dir: Option<std::path::PathBuf>,
     /// The largest attachment, in bytes.
     #[arg(long, env = "LAZY_MAX_ATTACHMENT_BYTES", default_value_t = lazy_domain::attachment::MAX_ATTACHMENT_BYTES)]
     max_attachment_bytes: u64,
@@ -189,7 +193,7 @@ async fn main() -> ExitCode {
     lazy_server::logging::init(cli.log_format);
 
     let result = match cli.command {
-        Command::Serve(args) => serve(args).await,
+        Command::Serve(args) => serve(*args).await,
         Command::Migrate(args) => migrate(args).await,
         Command::Worker(args) => worker(args).await,
         Command::RewrapCredentials(args) => rewrap(args).await,
@@ -248,6 +252,7 @@ async fn serve(args: ServeArgs) -> Result<(), lazy_server::AppError> {
     config.event_retention_days = args.event_retention_days;
     config.public_url = public_url(args.public_url, args.default_public_url);
     config.attachments_dir = args.attachments_dir;
+    config.web_dir = args.web_dir.filter(|dir| !dir.as_os_str().is_empty());
     config.max_attachment_bytes = args.max_attachment_bytes;
     config.credential_keys = args.keys.keys()?;
     config.run_jobs = args.run_jobs;
@@ -376,7 +381,7 @@ mod tests {
         ];
         argv.extend_from_slice(extra);
         match Cli::try_parse_from(argv).expect("valid arguments").command {
-            Command::Serve(args) => args,
+            Command::Serve(args) => *args,
             Command::Migrate(_)
             | Command::Healthcheck(_)
             | Command::Worker(_)

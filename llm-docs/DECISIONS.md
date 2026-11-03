@@ -936,3 +936,28 @@ Goal: an installed Lazy shows notifications under its own name and icon, asks th
 - The history (count, time) is local to the device (`notification-prompts.json`, versioned, kept at sign-out, a file this build cannot read means "never asked").
 
 **Not yet:** Windows (no implementation; it logs a warning); provisional (quiet) authorization; notification actions (reply, mark read); a "Test notification" button; the dock badge for macOS 11 and 12 uses the dock tile, not the newer badge count.
+
+## D47. The web client
+
+Goal: someone who cannot install the app (a locked-down work computer, a borrowed one) uses Lazy in a browser with their normal account, for everything ordinary: reading and writing in channels and direct conversations, threads, reactions, files, search. Drop-ins, administration, integrations, and profile pictures stay in the app.
+
+**The same client, in the browser.** `crates/lazy-web` is Rust compiled to WebAssembly. It runs `lazy-client-core`, the state machine the desktop client runs (the reason that crate stays free of a UI, Tokio, and HTTP), so sending, the journal of unsent messages, reconciling an unknown outcome, read state, unread counts, mentions, and Markdown are the desktop's own code, not a copy in JavaScript. Around it:
+- `runtime.rs` carries out the core's effects with the browser's `fetch`, a WebSocket per workspace (`realtime.rs`, the desktop's reconnect rules), and `localStorage` (`store.rs`: the journal, drafts, and preferences, each in a versioned envelope, all deleted at sign-out). It makes the same requests with the same retry rules as `lazy-client-runtime`, because the core depends on them.
+- `view/` draws the screens as HTML text from the core's state; everything from a person or the server is escaped. These are pure functions, tested natively with `cargo test -p lazy-web`.
+- `app.rs` puts them on the page: regions are replaced only when their markup changes, lists by row key, and the fields a person types in are never redrawn.
+- The page is a static `index.html`, a stylesheet with the desktop theme's colours (light and dark by the system), a loader, and the module `wasm-bindgen` makes (`scripts/build-web.sh`: about 3 MB, 0.9 MB compressed). Icons are inline SVG, not symbols from fonts, which depend on what the system has.
+
+**Served by the server.** `lazy-server` serves the built directory (`LAZY_WEB_DIR`; the Docker image builds it and sets it) under `/web/`, with `/` and `/web` sent there. The files carry a content security policy that allows only the server's own scripts (and WebAssembly), styles, images, and connections, and no framing. Without the directory the server serves no page and nothing else changes. The server's attachments, avatars, and emoji were already served with `sandbox` and `nosniff`, which matters now that a page of the app shares their origin.
+
+**Sessions in a cookie.** A browser cannot put a token in a WebSocket's or an image's request, so the web client signs in at `POST /v1/web/login` (and registers at `/v1/web/register`), which sets the ordinary session token in a cookie: `HttpOnly` (no script can read it), `SameSite=Strict`, `Path=/`, `Secure` behind HTTPS (by `X-Forwarded-Proto`), for the session's 30 days. The body carries the user and never the token. `POST /v1/web/logout` revokes the session and clears the cookie. Every authenticated route accepts the cookie when there is no `Authorization` header, with checks against requests forged by other sites (`web.rs`):
+- a request that changes something must carry `x-lazy-web: 1`, which a page on another site cannot add without a CORS preflight the server never approves;
+- a request that says where it comes from (`Origin`) must come from the server's own host (`Host` or `X-Forwarded-Host`);
+- a WebSocket upgrade must carry an `Origin`, and it must be the server's;
+- sign-in and registration need the header too, so another site cannot sign a browser into an account of its choosing.
+Bearer tokens (the desktop client, bots) are untouched. The protocol stays at 14: the routes and `WebSessionResponse` are additions.
+
+**Expired sessions.** The page cannot read its cookie, so `localStorage` records only that there is a session to try; the bootstrap's answer decides. A browser's WebSocket does not show why a handshake failed, so a connection that never opened is followed by a request that needs a session (`GET /v1/operations/{random}`); `401` means the session ended.
+
+**What the web client does not do.** Drop-ins (a live drop-in is shown, with "join from the Lazy app"); workspace administration, invitations, integrations, apps, webhooks, custom emoji management, and user groups; profile pictures and display names (shown, not changed); creating workspaces; the thread inbox and saved messages; notification settings beyond the browser's permission. Files are read into memory when attached, so a page reloaded before a message is sent loses its files (the core reports them missing); message text survives in the journal. There is no offline cache: the messages are loaded from the server each time.
+
+**Notifications** use the browser's `Notification` API, with the core's offer (D46): the banner's **Turn on** asks the browser, inside the click as browsers require. They show while the page is open; there is no push when it is closed.

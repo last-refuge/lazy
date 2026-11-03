@@ -64,6 +64,8 @@ pub struct Integrations {
     pub previews: Option<crate::link_previews::Fetcher>,
     /// The call server drop-ins run on; `None` when drop-ins are off.
     pub drop_ins: Option<crate::drop_ins::DropInOptions>,
+    /// The built web client served under `/web` (D47); `None` serves none.
+    pub web_dir: Option<std::path::PathBuf>,
 }
 
 /// The kinds of job this server knows how to run. Integrations add theirs here.
@@ -166,6 +168,7 @@ pub async fn run(
         credential_keys: config.credential_keys,
         jobs: config.run_jobs.then(crate::jobs::WorkerOptions::default),
         drop_ins: config.drop_ins,
+        web_dir: config.web_dir,
         ..IntegrationOptions::default()
     };
     let attachments = AttachmentOptions {
@@ -307,6 +310,7 @@ pub async fn serve_all(
             http: crate::github::http_client(),
             previews: crate::link_previews::Fetcher::new(integrations.previews),
             drop_ins: integrations.drop_ins,
+            web_dir: integrations.web_dir,
         }),
         attachments: Arc::clone(&attachments),
         search,

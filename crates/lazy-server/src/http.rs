@@ -88,6 +88,9 @@ pub fn router(state: AppState) -> Router {
         .route(paths::REGISTER, post(register))
         .route(paths::LOGIN, post(login))
         .route(paths::LOGOUT, post(logout))
+        .route(paths::WEB_LOGIN, post(crate::web::login))
+        .route(paths::WEB_REGISTER, post(crate::web::register))
+        .route(paths::WEB_LOGOUT, post(crate::web::logout))
         .route(paths::BOOTSTRAP, get(bootstrap_snapshot))
         .route(paths::REALTIME, get(realtime_upgrade))
         .route(paths::MESSAGES_ROUTE, get(history).post(send_message))
@@ -223,7 +226,9 @@ pub fn router(state: AppState) -> Router {
             StatusCode::REQUEST_TIMEOUT,
             REQUEST_TIMEOUT,
         ));
+    let web = crate::web::files(state.integrations.web_dir.clone());
     api.merge(files)
+        .merge(web)
         // Outermost: every request is logged by its matched route pattern (never its path, which
         // can hold a webhook secret), given an id, and a panic in a handler becomes a logged 500.
         .layer(axum::middleware::from_fn(logging::log_requests))
@@ -1667,25 +1672,34 @@ async fn realtime_upgrade(
         })
 }
 
-/// The authenticated caller, from `Authorization: Bearer <token>`.
+/// The authenticated caller, from `Authorization: Bearer <token>`, or else from the web client's
+/// session cookie, which must also pass [`crate::web::check_cookie_request`] (D47).
 pub struct Auth(pub Principal);
 
 impl FromRequestParts<AppState> for Auth {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, AppError> {
-        let header = parts
-            .headers
-            .get(AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .ok_or_else(AppError::unauthenticated)?;
-        let (scheme, token) = header
-            .split_once(' ')
-            .ok_or_else(AppError::unauthenticated)?;
-        if !scheme.eq_ignore_ascii_case("bearer") {
-            return Err(AppError::unauthenticated());
-        }
-        let principal = accounts::authenticate(&state.pool, token.trim()).await?;
+        let token = match parts.headers.get(AUTHORIZATION) {
+            Some(header) => {
+                let header = header.to_str().map_err(|_| AppError::unauthenticated())?;
+                let (scheme, token) = header
+                    .split_once(' ')
+                    .ok_or_else(AppError::unauthenticated)?;
+                if !scheme.eq_ignore_ascii_case("bearer") {
+                    return Err(AppError::unauthenticated());
+                }
+                token.trim().to_owned()
+            }
+            None => {
+                let token = crate::web::session_cookie(&parts.headers)
+                    .ok_or_else(AppError::unauthenticated)?
+                    .to_owned();
+                crate::web::check_cookie_request(parts)?;
+                token
+            }
+        };
+        let principal = accounts::authenticate(&state.pool, &token).await?;
         // For the request line: who made the request (their id, nothing else).
         if let Some(info) = parts.extensions.get::<logging::RequestInfo>() {
             info.note_user(principal.user_id);

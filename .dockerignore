@@ -5,6 +5,15 @@
 !crates/lazy-domain
 !crates/lazy-protocol
 !crates/lazy-server
+# The web client (D47): the shared client core, the crate, its build script, and the icon and fonts
+# it shares with the desktop app (only those three families; not the emoji font).
+!crates/lazy-client-core
+!crates/lazy-web
+!scripts/build-web.sh
+!branding/icons/favicon.svg
+!crates/lazy-ui/assets/fonts/dm-sans
+!crates/lazy-ui/assets/fonts/nunito
+!crates/lazy-ui/assets/fonts/lilex
 # The server signs drop-in join tokens with the media library's token format (rtc-proto).
 !media/Cargo.toml
 !media/crates/rtc-proto

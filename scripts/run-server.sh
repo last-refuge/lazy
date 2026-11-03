@@ -7,5 +7,9 @@ export DATABASE_URL="$("$ROOT/scripts/dev-db.sh" start)"
 export RUST_LOG="${RUST_LOG:-lazy_server=info,tower_http=warn}"
 # Attachment files live next to the dev database data, outside the source tree's tracked files.
 export LAZY_ATTACHMENTS_DIR="${LAZY_ATTACHMENTS_DIR:-$ROOT/.dev/attachments}"
+# The web client (D47), when it has been built with scripts/build-web.sh.
+if [[ -z "${LAZY_WEB_DIR:-}" && -f "$ROOT/target/web/index.html" ]]; then
+  export LAZY_WEB_DIR="$ROOT/target/web"
+fi
 cd "$ROOT"
 exec cargo run -p lazy-server --profile fast -- serve "$@"

@@ -249,6 +249,8 @@ pub struct Config {
     pub run_jobs: bool,
     /// The call server drop-ins run on; `None` turns drop-ins off.
     pub drop_ins: Option<crate::drop_ins::DropInOptions>,
+    /// The built web client (D47) to serve under `/web`; `None` serves none.
+    pub web_dir: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Config {
@@ -279,6 +281,7 @@ impl std::fmt::Debug for Config {
             .field("credential_keys", &self.credential_keys)
             .field("run_jobs", &self.run_jobs)
             .field("drop_ins", &self.drop_ins)
+            .field("web_dir", &self.web_dir)
             .finish()
     }
 }
@@ -304,6 +307,7 @@ impl Config {
             credential_keys: crate::credentials::CredentialKeys::none(),
             run_jobs: true,
             drop_ins: None,
+            web_dir: None,
         }
     }
 }
@@ -375,6 +379,9 @@ pub struct IntegrationOptions {
     /// [`crate::presence::GRACE`]. (Not about integrations; kept here so that adding it does not
     /// change a struct other crates construct.)
     pub presence_grace: Option<Duration>,
+    /// The built web client (D47) to serve under `/web`; `None` serves none. (Not about
+    /// integrations; kept here so that adding it does not change a struct other crates construct.)
+    pub web_dir: Option<PathBuf>,
 }
 
 /// Where the bytes of attachments live.

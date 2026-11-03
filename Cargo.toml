@@ -79,6 +79,15 @@ opt-level = 3
 inherits = "release"
 strip = true
 
+# The web client's WebAssembly (scripts/build-web.sh): small, because every browser downloads it.
+[profile.web]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
 # What the run scripts build: release-grade dependencies (GPUI, the codecs) compiled once, and the
 # workspace crates incremental and lightly optimized so an edit rebuilds in seconds, not a minute.
 [profile.fast]

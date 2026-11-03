@@ -49,6 +49,7 @@ pub mod receipts;
 pub mod search;
 pub mod slack_compat;
 pub mod threads;
+pub mod web;
 pub mod webhooks;
 pub mod workspaces;
 
