@@ -70,6 +70,15 @@ tempfile = "3"
 # bug reports: the log and Diagnostics carry what a report needs, and the binary is half the size.)
 # The codecs are C (OpenH264) and C transpiled to Rust (Opus): unoptimized, they cannot keep up
 # with a call, so they are optimized even in debug builds.
+# Dev and test builds: dependencies optimized and without debug info, the workspace's own crates
+# lightly optimized with debug info. Unoptimized, every test that opens a window spent seconds in
+# GPUI, font, and image code before doing anything (the UI tests' median was 5.1 s; it is 0.3 s
+# like this), while an edit rebuilds about as fast (15 s against 12 s for a UI test change).
+[profile.dev]
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
 [profile.dev.package.openh264-sys2]
 opt-level = 3
 [profile.dev.package.unsafe-libopus]
