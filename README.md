@@ -121,6 +121,10 @@ A code lasts from an hour to 30 days and can be used once or many times. It is s
 
 Anyone who cannot install the app (a work computer that does not allow it, a borrowed one) can open the server's address in a browser, such as `https://chat.example.com`, and sign in with their Lazy username and password. Someone with an invitation code can create their account there too. The browser version has channels, direct and group conversations, threads, reactions, mentions, files and pictures, search, **Jump to** (Ctrl+K), and notifications while the page is open. Drop-ins, workspace administration, integrations, and changing your profile need the app. Signing out deletes everything the browser kept. It works in current Chrome, Edge, Firefox, and Safari.
 
+### Your account
+
+Click your name at the bottom of the sidebar, in the app or in a browser: the menu shows your username (what you sign in with) and opens **Profile**, **Notifications**, **Status**, **Appearance**, and **Password & security**, where you change your password. Changing it signs you out of Lazy on your other devices and browsers.
+
 ### Updates
 
 Lazy looks for a newer release every 30 minutes while it runs, and a bar across the top of the window says when there is one. **Update now** downloads it (checked against the release's `SHA256SUMS`) while you keep working, and **Restart to update** installs it. **Menu, Help, Check for updates…** asks right away and has the switch for the automatic checks. A portable copy or one built from source opens the release page instead. Release 0.5.0 has no updater, so if you have it, install 0.6.0 by hand, once.

@@ -445,6 +445,8 @@ fn a_shortcut_does_nothing_over_another_dialog(cx: &mut TestAppContext) {
     let (world, cx) = start(cx, WorkspaceRole::Owner);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-notifications");
     assert!(world.on_screen(cx, "prefs-scroll"));
     let before = world.selected(cx);
     for keys in [
@@ -889,6 +891,8 @@ fn the_sidebars_buttons_ask_the_registry_so_a_dialog_blocks_them_like_a_shortcut
     world.reach(cx);
     // Run directly with a dialog up, as a stray click or a menu would.
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-notifications");
     world.run(cx, CommandId::Threads);
     world.run(cx, CommandId::People);
     assert!(world.core(cx, |core| core.inbox().is_none() && !core.people().open));

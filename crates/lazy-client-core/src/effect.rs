@@ -591,6 +591,12 @@ pub enum Effect {
     UpdateProfile {
         request: lazy_protocol::UpdateProfileRequest,
     },
+    /// `PUT /v1/me/password`, once (a repeat after a change that went through would be refused,
+    /// the current password being the old one). Answered by `ActionResult { kind: ChangePassword }`
+    /// carrying `ActionOutcome::Done`.
+    ChangePassword {
+        request: lazy_protocol::ChangePasswordRequest,
+    },
     /// Read the picture (checking its size against `MAX_AVATAR_UPLOAD_BYTES` before reading it
     /// all) and `PUT /v1/me/avatar`. Answered by `ActionResult { kind: SetAvatar }` carrying
     /// `ActionOutcome::Profile`.

@@ -428,6 +428,15 @@ impl ClientCore {
                 ActionKind::CreateWorkspace
                 | ActionKind::AcceptInvitation
                 | ActionKind::SetAvatar => super::workspaces::workspace_error(kind, error),
+                ActionKind::ChangePassword => match error {
+                    RequestError::Rejected(api) if api.code == ErrorCode::InvalidCredentials => {
+                        "Your current password isn't right.".to_owned()
+                    }
+                    RequestError::Unknown(_) => "Couldn't tell whether the password was changed. \
+                        If your current password stops working, sign in with the new one."
+                        .to_owned(),
+                    _ => readable_error(error),
+                },
                 _ => readable_error(error),
             };
             self.fail_action(kind, text, out);
@@ -1089,6 +1098,7 @@ impl ClientCore {
                 ActionKind::CreateWorkspace
                 | ActionKind::AcceptInvitation
                 | ActionKind::UpdateProfile
+                | ActionKind::ChangePassword
                 | ActionKind::SetAvatar,
                 outcome,
             ) => {

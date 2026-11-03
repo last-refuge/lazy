@@ -896,6 +896,8 @@ impl fmt::Debug for Input {
                 .debug_struct("UpdateProfile")
                 .field("display_name", &OptText(display_name))
                 .finish(),
+            // Passwords are never shown, not even their length.
+            Input::ChangePassword { .. } => f.write_str("ChangePassword { .. }"),
             Input::SetAvatar { source } => f
                 .debug_struct("SetAvatar")
                 .field("source", &Source(source))

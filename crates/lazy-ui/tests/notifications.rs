@@ -468,10 +468,13 @@ fn everyone_has_preferences_and_the_level_control_works_from_the_keyboard(cx: &m
     let (world, cx) = start(cx);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-notifications");
     assert!(world.on_screen(cx, "prefs-channel-level"));
     assert_eq!(world.settings(cx).channel_level, NotifyLevel::Mentions);
-    // The first control has the keyboard: Right moves to Nothing, Left twice to All.
-    cx.simulate_keystrokes("right");
+    // The page's name in the list has the keyboard; Tab goes to its first control, where Right
+    // moves to Nothing and Left twice to All.
+    cx.simulate_keystrokes("tab right");
     assert_eq!(world.settings(cx).channel_level, NotifyLevel::Nothing);
     cx.simulate_keystrokes("left left");
     assert_eq!(world.settings(cx).channel_level, NotifyLevel::All);
@@ -492,6 +495,8 @@ fn each_switch_changes_one_setting(cx: &mut TestAppContext) {
     let (world, cx) = start(cx);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-notifications");
     let before = world.settings(cx);
     world.click(cx, "prefs-desktop");
     assert!(!world.settings(cx).desktop);
@@ -526,6 +531,8 @@ fn quiet_hours_turn_on_with_the_systems_offset_and_check_what_is_typed(cx: &mut 
     let (world, cx) = start(cx);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-notifications");
     assert!(world.settings(cx).quiet_hours.is_none());
     assert!(
         !world.on_screen(cx, "prefs-quiet-start"),
@@ -573,6 +580,8 @@ fn quiet_days_toggle_but_the_last_one_cannot_be_turned_off(cx: &mut TestAppConte
     let (world, cx) = start(cx);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-notifications");
     world.click(cx, "prefs-quiet");
     world.click(cx, "prefs-day-6");
     assert_eq!(
@@ -612,6 +621,8 @@ fn pausing_for_an_hour_shows_in_the_dialog_and_beside_the_name_and_resume_ends_i
     world.reach(cx);
     assert!(!world.on_screen(cx, "sidebar-paused"));
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-notifications");
     world.click(cx, "prefs-pause");
     for item in 0..5 {
         let selector = Box::leak(format!("pause-menu-pause-{item}").into_boxed_str());
@@ -647,6 +658,8 @@ fn until_i_turn_it_back_on_is_a_long_pause_that_resume_ends(cx: &mut TestAppCont
     let (world, cx) = start(cx);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-notifications");
     world.click(cx, "prefs-pause");
     cx.simulate_keystrokes("down down down down enter");
     let until = world.settings(cx).dnd_until.expect("paused");
@@ -672,6 +685,8 @@ fn a_status_is_checked_counted_saved_and_cleared(cx: &mut TestAppContext) {
     let (world, cx) = start(cx);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-status");
     world.click(cx, "prefs-status-text");
     cx.simulate_input("In a meeting");
     assert!(world.on_screen(cx, "prefs-status-count"));
@@ -725,6 +740,8 @@ fn clear_after_ends_a_status_at_the_chosen_moment(cx: &mut TestAppContext) {
     let (world, cx) = start(cx);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-status");
     world.click(cx, "prefs-status-text");
     cx.simulate_input("Out for lunch");
     world.click(cx, "prefs-clear-after");
@@ -992,34 +1009,19 @@ fn the_keyboard_scrolls_a_short_preferences_dialog_to_the_control_it_reaches(
     let (world, cx) = start(cx);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
-    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(520.)));
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-notifications");
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(420.)));
     draw(cx);
     let viewport = cx.debug_bounds("prefs-scroll").expect("the body");
-    let save = cx
-        .debug_bounds("prefs-status-save")
-        .expect("the save button");
+    let quiet = cx.debug_bounds("prefs-quiet").expect("quiet hours");
     assert!(
-        save.bottom() > viewport.bottom(),
-        "in a short window Save status starts below the fold"
+        quiet.bottom() > viewport.bottom(),
+        "in a short window Quiet hours starts below the fold"
     );
-    // After each run of Tabs the control that has the keyboard is wholly in view: Pause is the
-    // sixth stop after the first, Quiet hours the seventh, then emoji, text, Clear after, Save,
-    // Clear, and the Profile and Appearance sections under them.
-    for (tabs, selector) in [
-        (6, "prefs-pause"),
-        (1, "prefs-quiet"),
-        (1, "prefs-status-emoji"),
-        (1, "prefs-status-text"),
-        (1, "prefs-clear-after"),
-        (1, "prefs-status-save"),
-        (1, "prefs-status-clear"),
-        (1, "prefs-choose-picture"),
-        (1, "prefs-remove-picture"),
-        (1, "prefs-display-name"),
-        (1, "prefs-save-name"),
-        (1, "prefs-theme"),
-        (1, "prefs-motion"),
-    ] {
+    // After each run of Tabs the control that has the keyboard is wholly in view: from the page
+    // list, Pause is the seventh stop and Quiet hours the eighth.
+    for (tabs, selector) in [(7, "prefs-pause"), (1, "prefs-quiet")] {
         for _ in 0..tabs {
             cx.simulate_keystrokes("tab");
         }
@@ -1222,6 +1224,8 @@ fn preferences_say_when_the_system_has_notifications_off_and_open_its_settings(
     let (world, cx) = start(cx);
     world.reach(cx);
     world.click(cx, "sidebar-preferences");
+    // The name opens the account menu; Settings opens on the page chosen there.
+    world.click(cx, "account-menu-notifications");
     assert!(
         !world.on_screen(cx, "prefs-permission-note"),
         "no permission reported, nothing to say"

@@ -640,6 +640,10 @@ impl fmt::Debug for Effect {
                 .debug_struct("UpdateProfile")
                 .field("request", &Named("UpdateProfileRequest"))
                 .finish(),
+            Effect::ChangePassword { request: _ } => f
+                .debug_struct("ChangePassword")
+                .field("request", &Named("ChangePasswordRequest"))
+                .finish(),
             Effect::SetAvatar { source } => f
                 .debug_struct("SetAvatar")
                 .field("source", &Source(source))

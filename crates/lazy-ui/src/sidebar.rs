@@ -56,8 +56,8 @@ pub enum SidebarEvent {
     People,
     /// Open the quick switcher (the same as Ctrl+K).
     QuickSwitcher,
-    /// Open the preferences dialog (the person's own row at the bottom).
-    Preferences,
+    /// Open Settings on a page (from the account menu: the person's own row at the bottom).
+    Settings(crate::dialogs::SettingsPage),
 }
 
 /// Unread counts above this show as `99+`.
@@ -118,10 +118,13 @@ pub struct SidebarView {
     threads_focus: FocusHandle,
     saved_focus: FocusHandle,
     people_focus: FocusHandle,
-    /// The person's own row at the bottom, which opens Preferences.
+    /// The person's own row at the bottom, which opens the account menu.
     prefs_focus: FocusHandle,
     menu: Option<Entity<Menu>>,
     _menu_subscription: Option<Subscription>,
+    /// The account menu: who the person is, the pages of Settings, and Sign out.
+    account_menu: Option<Entity<Menu>>,
+    _account_subscription: Option<Subscription>,
 }
 
 impl EventEmitter<SidebarEvent> for SidebarView {}
@@ -151,7 +154,59 @@ impl SidebarView {
             prefs_focus: cx.focus_handle().tab_stop(true),
             menu: None,
             _menu_subscription: None,
+            account_menu: None,
+            _account_subscription: None,
         }
+    }
+
+    /// Opens the account menu over the person's own row: their name and username, then the pages
+    /// of Settings, then Sign out.
+    pub fn open_account_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::dialogs::SettingsPage;
+        if self.account_menu.take().is_some() {
+            cx.notify();
+            return;
+        }
+        let (name, username) = {
+            let core = self.model.read(cx).core();
+            core.me()
+                .map(|me| (me.display_name.to_string(), me.username.as_str().to_owned()))
+                .unwrap_or_default()
+        };
+        let mut items = vec![
+            MenuItem::new("me", name)
+                .detail(format!("@{username}"))
+                .enabled(false),
+        ];
+        for page in SettingsPage::ALL {
+            let label = format!("{}…", page.title());
+            let item = MenuItem::new(page.id(), label);
+            items.push(match page {
+                SettingsPage::Profile => item.detail("Name, picture, and username"),
+                SettingsPage::Security => item.detail("Change your password"),
+                _ => item,
+            });
+        }
+        items.push(MenuItem::new("sign-out", "Sign out"));
+        let menu = cx.new(|cx| Menu::new("account-menu", items, cx));
+        self._account_subscription =
+            Some(cx.subscribe(&menu, |this, _menu, event: &MenuEvent, cx| {
+                if let MenuEvent::Select(id) = event {
+                    if id.as_ref() == "sign-out" {
+                        cx.emit(SidebarEvent::SignOut);
+                    } else if let Some(page) = SettingsPage::ALL
+                        .into_iter()
+                        .find(|page| page.id() == id.as_ref())
+                    {
+                        cx.emit(SidebarEvent::Settings(page));
+                    }
+                }
+                this.account_menu = None;
+                cx.notify();
+            }));
+        menu.update(cx, |menu, cx| menu.open(window, cx));
+        self.account_menu = Some(menu);
+        cx.notify();
     }
 
     /// The focus handle of the Threads entry, for a view to return to.
@@ -961,10 +1016,11 @@ impl Render for SidebarView {
                     .child(list),
             )
             .child(
-                // The person's own row. Their picture and name open Preferences; everything else
-                // (workspace settings, invitations, user groups, custom emoji, sign out) is in the
-                // Menu at the top, so the only other thing here is Sign out.
+                // The person's own row. Their picture and name open the account menu (their
+                // username, the pages of Settings, Sign out); the workspace's things are in the
+                // Menu at the top. Sign out is here too, in plain sight.
                 div()
+                    .relative()
                     .flex_none()
                     .px_3()
                     .py_2()
@@ -978,7 +1034,7 @@ impl Render for SidebarView {
                             .id("sidebar-preferences")
                             .debug_selector(|| "sidebar-preferences".into())
                             .role(Role::Button)
-                            .aria_label("Preferences")
+                            .aria_label("Your account")
                             .track_focus(&self.prefs_focus)
                             .flex_1()
                             .min_w_0()
@@ -990,16 +1046,20 @@ impl Render for SidebarView {
                             .border_1()
                             .border_color(transparent_black())
                             .focus_visible(move |style| style.border_color(colors.focus_ring))
-                            .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                                 if keyboard::is_activation(event) {
-                                    cx.emit(SidebarEvent::Preferences);
+                                    this.open_account_menu(window, cx);
                                     cx.stop_propagation();
                                 }
                             }))
                             .cursor_pointer()
                             .rounded(theme.radii.small)
                             .hover(move |style| style.bg(colors.sidebar_hover))
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Preferences)))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.open_account_menu(window, cx)
+                                }),
+                            )
                             .child(
                                 crate::avatar::Avatar::new(me_seed, me_name.clone(), 28.)
                                     .text_size(theme.type_scale.body)
@@ -1073,7 +1133,11 @@ impl Render for SidebarView {
                             })
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::SignOut)))
                             .child("Sign out"),
-                    ),
+                    )
+                    .children(self.account_menu.clone().map(|menu| {
+                        gpui::deferred(div().absolute().bottom(px(48.)).left(px(8.)).child(menu))
+                            .with_priority(2)
+                    })),
             )
     }
 }

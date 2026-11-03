@@ -11,7 +11,7 @@ let failed = 0;
 const browser = await chromium.launch({ channel: process.env.LAZY_WEB_BROWSER ?? "chromium" });
 const logs = [];
 const answers = [];
-async function person(name, password = "correct horse battery") {
+async function person(name, password = "correct horse battery", signsIn = true) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await context.grantPermissions(["notifications"], { origin: base });
   const page = await context.newPage();
@@ -24,7 +24,7 @@ async function person(name, password = "correct horse battery") {
   await page.fill("input[name=username]", name);
   await page.fill("input[name=password]", password);
   await page.click("#signin-submit");
-  if (password === "correct horse battery") {
+  if (signsIn) {
     await page.waitForSelector("#sidebar .conv.active", { timeout: 15000 });
   }
   return page;
@@ -190,6 +190,32 @@ await step("Unread: Bob's message to #general shows in Ada's sidebar", async () 
   await ada.locator(".row.mentioned", { hasText: "are you there" }).waitFor({ timeout: 8000 });
   await ada.locator("#sidebar .conv.unread", { hasText: "general" }).waitFor({ state: "detached", timeout: 8000 });
 });
+await step("Account: the name opens a menu with the username, profile, and password", async () => {
+  // A second browser where Ada is signed in too: changing the password signs it out.
+  const elsewhere = await person("ada");
+  await ada.click("[data-action=account-menu]");
+  await ada.locator("#popover .menu-who", { hasText: "@ada" }).waitFor({ timeout: 5000 });
+  await ada.screenshot({ path: `${shots}/22-account-menu.png` });
+  await ada.click("#popover [data-action=account][data-page=profile]");
+  await ada.locator("#my-username", { hasText: "ada" }).waitFor({ timeout: 5000 });
+  await ada.screenshot({ path: `${shots}/23-account-profile.png` });
+  await ada.click(".dialog [data-action=account][data-page=security]");
+  await ada.fill("#password-form input[name=current]", "not my password");
+  await ada.fill("#password-form input[name=new]", "a brand new password");
+  await ada.fill("#password-form input[name=confirm]", "a brand new password");
+  await ada.click("#password-form button[type=submit]");
+  await ada.locator("#dlg-status .error", { hasText: "current password" }).waitFor({ timeout: 8000 });
+  await ada.fill("#password-form input[name=current]", "correct horse battery");
+  await ada.click("#password-form button[type=submit]");
+  await ada.locator("#dlg-status .ok").waitFor({ timeout: 8000 });
+  await ada.screenshot({ path: `${shots}/24-password-changed.png` });
+  if (await ada.inputValue("#password-form input[name=new]")) throw new Error("the fields kept the password");
+  await ada.click(".dialog [data-action=close-dialog]");
+  // The other browser is signed out; this one goes on.
+  await elsewhere.waitForSelector("#signin-form", { timeout: 20000 });
+  await elsewhere.context().close();
+  await ada.locator("#sidebar .conv.active").waitFor();
+});
 await step("Reload keeps Ada signed in", async () => {
   await ada.reload();
   await ada.waitForSelector("#sidebar .conv.active", { timeout: 15000 });
@@ -205,8 +231,13 @@ await step("Ada signs out: back to sign-in, nothing kept", async () => {
   await ada.reload();
   await ada.waitForSelector("#signin-form", { timeout: 8000 });
 });
+await step("Only the new password signs in now", async () => {
+  const fresh = await person("ada", "a brand new password");
+  await fresh.context().close();
+});
 await step("A wrong password says so", async () => {
-  const stranger = await person("ada", "not the password");
+  // The old password, now wrong.
+  const stranger = await person("ada", "correct horse battery", false);
   await stranger.locator("#signin-status .error").waitFor({ timeout: 8000 });
   await stranger.screenshot({ path: `${shots}/19-wrong-password.png` });
   await stranger.context().close();

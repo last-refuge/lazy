@@ -8452,7 +8452,11 @@ fn main() {
                     .unwrap(),
                 );
                 reach_chat(cx, model, cast, rec, true);
-                open_dialog(cx, win, ShellDialog::Preferences);
+                open_dialog(
+                    cx,
+                    win,
+                    ShellDialog::Settings(lazy_ui::dialogs::SettingsPage::Status),
+                );
             },
         },
         Scene {
@@ -8462,7 +8466,11 @@ fn main() {
             appearance: WindowAppearance::Dark,
             build: &|model, cast, cx, rec, win| {
                 reach_chat(cx, model, cast, rec, true);
-                open_dialog(cx, win, ShellDialog::Preferences);
+                open_dialog(
+                    cx,
+                    win,
+                    ShellDialog::Settings(lazy_ui::dialogs::SettingsPage::Status),
+                );
                 // To the status field, then more than a status can hold, then Save.
                 press(cx, win, "tab tab tab tab tab tab tab tab tab");
                 type_text(cx, win, &"x".repeat(101));
@@ -10010,7 +10018,11 @@ fn main() {
             appearance: WindowAppearance::Light,
             build: &|model, cast, cx, rec, win| {
                 reach_chat(cx, model, cast, rec, true);
-                open_dialog(cx, win, ShellDialog::Preferences);
+                open_dialog(
+                    cx,
+                    win,
+                    ShellDialog::Settings(lazy_ui::dialogs::SettingsPage::Profile),
+                );
             },
         },
         Scene {
@@ -10021,7 +10033,11 @@ fn main() {
             build: &|model, cast, cx, rec, win| {
                 cast.avatars.borrow_mut().push("alice");
                 reach_chat(cx, model, cast, rec, true);
-                open_dialog(cx, win, ShellDialog::Preferences);
+                open_dialog(
+                    cx,
+                    win,
+                    ShellDialog::Settings(lazy_ui::dialogs::SettingsPage::Profile),
+                );
             },
         },
         Scene {
@@ -10031,7 +10047,11 @@ fn main() {
             appearance: WindowAppearance::Light,
             build: &|model, cast, cx, rec, win| {
                 reach_chat(cx, model, cast, rec, true);
-                open_dialog(cx, win, ShellDialog::Preferences);
+                open_dialog(
+                    cx,
+                    win,
+                    ShellDialog::Settings(lazy_ui::dialogs::SettingsPage::Profile),
+                );
                 dispatch(
                     cx,
                     model,
@@ -10064,7 +10084,11 @@ fn main() {
             build: &|model, cast, cx, rec, win| {
                 cast.avatars.borrow_mut().push("alice");
                 reach_chat(cx, model, cast, rec, true);
-                open_dialog(cx, win, ShellDialog::Preferences);
+                open_dialog(
+                    cx,
+                    win,
+                    ShellDialog::Settings(lazy_ui::dialogs::SettingsPage::Profile),
+                );
                 dispatch(
                     cx,
                     model,
@@ -10082,7 +10106,11 @@ fn main() {
             appearance: WindowAppearance::Light,
             build: &|model, cast, cx, rec, win| {
                 reach_chat(cx, model, cast, rec, true);
-                open_dialog(cx, win, ShellDialog::Preferences);
+                open_dialog(
+                    cx,
+                    win,
+                    ShellDialog::Settings(lazy_ui::dialogs::SettingsPage::Appearance),
+                );
                 dispatch(
                     cx,
                     model,
@@ -10106,11 +10134,83 @@ fn main() {
             build: &|model, cast, cx, rec, win| {
                 cast.avatars.borrow_mut().push("alice");
                 reach_chat(cx, model, cast, rec, true);
-                open_dialog(cx, win, ShellDialog::Preferences);
+                open_dialog(
+                    cx,
+                    win,
+                    ShellDialog::Settings(lazy_ui::dialogs::SettingsPage::Profile),
+                );
                 // Down to the Profile section with the keyboard.
                 for _ in 0..16 {
                     press(cx, win, "tab");
                 }
+            },
+        },
+        Scene {
+            name: "3i-01-account-menu-light",
+            width: 1000.0,
+            height: 720.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                draw(cx, win);
+                win.update(cx, |root, window, app| {
+                    let shell = root.shell().expect("the shell").clone();
+                    let sidebar = shell.read(app).sidebar().clone();
+                    sidebar.update(app, |sidebar, cx| sidebar.open_account_menu(window, cx));
+                })
+                .expect("open the account menu");
+                draw(cx, win);
+            },
+        },
+        Scene {
+            name: "3i-02-settings-security-light",
+            width: 1000.0,
+            height: 900.0,
+            appearance: WindowAppearance::Light,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                open_dialog(
+                    cx,
+                    win,
+                    ShellDialog::Settings(lazy_ui::dialogs::SettingsPage::Security),
+                );
+            },
+        },
+        Scene {
+            name: "3i-03-settings-password-refused-dark",
+            width: 1000.0,
+            height: 900.0,
+            appearance: WindowAppearance::Dark,
+            build: &|model, cast, cx, rec, win| {
+                reach_chat(cx, model, cast, rec, true);
+                open_dialog(
+                    cx,
+                    win,
+                    ShellDialog::Settings(lazy_ui::dialogs::SettingsPage::Security),
+                );
+                dispatch(
+                    cx,
+                    model,
+                    Input::ChangePassword {
+                        current: "old password".into(),
+                        new: "a new password".into(),
+                        confirm: "a new password".into(),
+                    },
+                );
+                dispatch(
+                    cx,
+                    model,
+                    Input::ActionResult {
+                        kind: lazy_client_core::ActionKind::ChangePassword,
+                        result: Err(lazy_client_core::RequestError::Rejected(
+                            lazy_protocol::ApiError::new(
+                                lazy_protocol::ErrorCode::InvalidCredentials,
+                                "your current password is not right",
+                            ),
+                        )),
+                    },
+                );
+                draw(cx, win);
             },
         },
         Scene {

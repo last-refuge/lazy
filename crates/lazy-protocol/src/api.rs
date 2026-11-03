@@ -74,6 +74,9 @@ pub mod paths {
     pub const ME_ROUTE: &str = "/v1/me";
     /// `PUT` sets the caller's avatar from the image in the request body, `DELETE` removes it.
     pub const ME_AVATAR_ROUTE: &str = "/v1/me/avatar";
+    /// `PUT` changes the caller's password ([`crate::ChangePasswordRequest`]); answered `204`. The
+    /// caller's other sessions are signed out; the one that asked stays.
+    pub const ME_PASSWORD_ROUTE: &str = "/v1/me/password";
     /// `GET` a person's avatar as a PNG, for anyone who shares a workspace with them.
     pub const USER_AVATAR_ROUTE: &str = "/v1/users/{user_id}/avatar";
     /// `POST` joins the workspace an invitation code belongs to.
@@ -2171,6 +2174,15 @@ pub struct AcceptInvitationRequest {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateProfileRequest {
     pub display_name: Option<DisplayName>,
+}
+
+/// `PUT /v1/me/password`: a new password, with the current one to show it is the person. A wrong
+/// current password is `invalid_credentials`; a new one outside the length rules is
+/// `invalid_request`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: Password,
+    pub new_password: Password,
 }
 
 /// Response of `PATCH /v1/me`, `PUT /v1/me/avatar`, and `DELETE /v1/me/avatar`: the caller as

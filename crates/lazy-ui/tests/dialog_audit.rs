@@ -29,6 +29,7 @@ use lazy_protocol::{
     User, Workspace, WorkspaceBootstrap,
 };
 use lazy_ui::app_model::{AppModel, EffectSink};
+use lazy_ui::dialogs::SettingsPage;
 use lazy_ui::modal::{modal_has_focus, open_modal_count};
 use lazy_ui::root_view::RootView;
 use lazy_ui::shell::{PickerPurpose, ShellDialog, ShellView};
@@ -270,6 +271,13 @@ fn name_of(dialog: &ShellDialog) -> &'static str {
         ShellDialog::Groups => "user groups",
         ShellDialog::CustomEmoji => "custom emoji",
         ShellDialog::Preferences => "preferences",
+        ShellDialog::Settings(page) => match page {
+            SettingsPage::Profile => "settings: profile",
+            SettingsPage::Notifications => "settings: notifications",
+            SettingsPage::Status => "settings: status",
+            SettingsPage::Appearance => "settings: appearance",
+            SettingsPage::Security => "settings: password",
+        },
         ShellDialog::Details(_) => "details",
         ShellDialog::AddPeople(_) => "add people",
         ShellDialog::QuickSwitcher => "quick switcher",
@@ -293,6 +301,10 @@ fn every_dialog(world: &World) -> Vec<ShellDialog> {
         ShellDialog::Groups,
         ShellDialog::CustomEmoji,
         ShellDialog::Preferences,
+        ShellDialog::Settings(SettingsPage::Profile),
+        ShellDialog::Settings(SettingsPage::Status),
+        ShellDialog::Settings(SettingsPage::Appearance),
+        ShellDialog::Settings(SettingsPage::Security),
         ShellDialog::Details(world.general),
         ShellDialog::AddPeople(world.general),
         ShellDialog::QuickSwitcher,
@@ -346,7 +358,10 @@ const DIALOG_FILES: &[(&str, &str)] = &[
         "people",
         "ShellDialog::NewMessage and ShellDialog::AddPeople",
     ),
-    ("preferences", "ShellDialog::Preferences"),
+    (
+        "preferences",
+        "ShellDialog::Preferences and ShellDialog::Settings, a page at a time",
+    ),
     ("profile", "ShellDialog::Profile"),
     ("quick_switcher", "ShellDialog::QuickSwitcher"),
     ("shortcuts", "ShellDialog::Shortcuts"),

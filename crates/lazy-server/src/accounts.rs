@@ -329,6 +329,50 @@ pub async fn login(state: &AppState, request: LoginRequest) -> Result<SessionRes
     Ok(SessionResponse { token, user })
 }
 
+/// Changes the caller's password after checking the current one, and signs out every other
+/// session of theirs (another device, a browser left signed in), so a password changed because it
+/// leaked ends what the leak opened. The session that asked stays signed in.
+pub async fn change_password(
+    state: &AppState,
+    principal: Principal,
+    request: lazy_protocol::ChangePasswordRequest,
+) -> Result<(), AppError> {
+    crypto::check_password_policy(&request.new_password)?;
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1 AND NOT is_bot")
+            .bind(principal.user_id.as_uuid())
+            .fetch_optional(&state.pool)
+            .await?;
+    let verified = state
+        .passwords
+        .verify(&request.current_password, stored.as_deref())
+        .await?;
+    if !verified {
+        return Err(AppError::new(
+            ErrorCode::InvalidCredentials,
+            "your current password is not right",
+        ));
+    }
+    let hash = state.passwords.hash(&request.new_password).await?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")
+        .bind(principal.user_id.as_uuid())
+        .bind(&hash)
+        .execute(&mut *tx)
+        .await?;
+    let ended = sqlx::query(
+        "UPDATE sessions SET revoked = true WHERE user_id = $1 AND id <> $2 AND NOT revoked",
+    )
+    .bind(principal.user_id.as_uuid())
+    .bind(principal.session_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    tx.commit().await?;
+    tracing::info!(user_id = %principal.user_id, sessions_ended = ended, "password changed");
+    Ok(())
+}
+
 /// Resolves a bearer token to its session. Unknown, expired, and revoked tokens are the same
 /// failure.
 pub async fn authenticate(pool: &PgPool, token: &str) -> Result<Principal, AppError> {

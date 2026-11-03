@@ -921,6 +921,92 @@ fn a_new_name_is_checked_sent_and_then_everywhere() {
 }
 
 #[test]
+fn a_new_password_is_checked_before_it_is_sent_and_the_outcome_is_worded() {
+    let mut fx = start();
+    let change = |fx: &mut Fx, current: &str, new: &str, confirm: &str| {
+        fx.driver.send(Input::ChangePassword {
+            current: current.into(),
+            new: new.into(),
+            confirm: confirm.into(),
+        })
+    };
+    let refused = |fx: &Fx| match fx.driver.core.action(ActionKind::ChangePassword) {
+        ActionState::Failed(text) => text.clone(),
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    let sends = |out: &lazy_client_core::Output| {
+        out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::ChangePassword { .. }))
+    };
+    for (current, new, confirm, why) in [
+        ("", "a new password", "a new password", "current"),
+        ("old password", "short", "short", "at least 8"),
+        (
+            "old password",
+            "a new password",
+            "a new pasword",
+            "different",
+        ),
+        ("same password", "same password", "same password", "same"),
+    ] {
+        let out = change(&mut fx, current, new, confirm);
+        assert!(!sends(&out), "{why}");
+        assert!(refused(&fx).contains(why), "{why}: {}", refused(&fx));
+    }
+    let out = change(&mut fx, "old password", "a new password", "a new password");
+    assert!(out.effects.iter().any(|e| matches!(
+        e,
+        Effect::ChangePassword { request }
+            if request.current_password.expose() == "old password"
+                && request.new_password.expose() == "a new password"
+    )));
+    assert_eq!(
+        fx.driver.core.action(ActionKind::ChangePassword),
+        &ActionState::InFlight
+    );
+    // A wrong current password is said plainly.
+    fx.driver.send(Input::ActionResult {
+        kind: ActionKind::ChangePassword,
+        result: Err(RequestError::Rejected(lazy_protocol::ApiError::new(
+            lazy_protocol::ErrorCode::InvalidCredentials,
+            "your current password is not right",
+        ))),
+    });
+    assert_eq!(refused(&fx), "Your current password isn't right.");
+    // Success leaves a notice, and the action idle.
+    change(&mut fx, "old password", "a new password", "a new password");
+    fx.driver.send(Input::ActionResult {
+        kind: ActionKind::ChangePassword,
+        result: Ok(ActionOutcome::Done),
+    });
+    assert_eq!(
+        fx.driver.core.action(ActionKind::ChangePassword),
+        &ActionState::Idle
+    );
+    assert!(
+        fx.driver
+            .core
+            .notice()
+            .unwrap()
+            .contains("password was changed")
+    );
+    // Nothing of a password is in the input's description.
+    let shown = format!(
+        "{:?}",
+        Input::ChangePassword {
+            current: "hunter22hunter".into(),
+            new: "swordfish-swordfish".into(),
+            confirm: "swordfish-swordfish".into(),
+        }
+    );
+    assert!(
+        !shown.contains("hunter") && !shown.contains("swordfish"),
+        "{shown}"
+    );
+}
+
+#[test]
 fn someone_else_changing_their_name_reaches_every_workspace_they_share_with_the_person() {
     let me = user("jules");
     let shared = user("sam");

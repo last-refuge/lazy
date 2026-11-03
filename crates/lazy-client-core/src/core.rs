@@ -1106,6 +1106,7 @@ impl ClientCore {
             | Input::CreateWorkspace { .. }
             | Input::AcceptInvitation { .. }
             | Input::UpdateProfile { .. }
+            | Input::ChangePassword { .. }
             | Input::SetAvatar { .. }
             | Input::RemoveAvatar
             | Input::LoadAvatar(_)
@@ -1211,6 +1212,9 @@ impl ClientCore {
             return self.reject_sign_in(SERVER_UNSETTLED.into(), out);
         }
         self.admin.set_registering(false);
+        // Written as people see it in a mention (`@ada`) or with a stray space: still the name.
+        let username = username.trim();
+        let username = username.strip_prefix('@').unwrap_or(username);
         let username = match Username::parse(username) {
             Ok(username) => username,
             Err(_) if username.trim().is_empty() => {
@@ -2972,7 +2976,7 @@ pub(crate) fn parse_composer(
     MessageDocument::from_markdown_with(&lazy_domain::emoji::replace_shortcodes(text), directory)
 }
 
-fn password_problem(password: &str) -> Option<String> {
+pub(crate) fn password_problem(password: &str) -> Option<String> {
     if password.len() < MIN_PASSWORD_BYTES {
         Some(format!(
             "Password must be at least {MIN_PASSWORD_BYTES} characters."

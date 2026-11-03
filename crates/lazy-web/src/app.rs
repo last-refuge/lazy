@@ -237,6 +237,40 @@ impl App {
 
     /// Follow-ups that need the inputs to have settled.
     fn after_inputs(self: &Rc<Self>) {
+        // A password change that was answered: a refusal is shown by the action; one that went
+        // through empties the fields and says so.
+        if self.ui.borrow().password_sent {
+            let state = self
+                .core
+                .borrow()
+                .action(lazy_client_core::ActionKind::ChangePassword)
+                .clone();
+            match state {
+                lazy_client_core::ActionState::InFlight => {}
+                lazy_client_core::ActionState::Failed(_) => {
+                    self.ui.borrow_mut().password_sent = false;
+                }
+                lazy_client_core::ActionState::Idle => {
+                    {
+                        let mut ui = self.ui.borrow_mut();
+                        ui.password_sent = false;
+                        ui.password_changed = true;
+                    }
+                    if let Ok(fields) =
+                        document().query_selector_all("#password-form input[type=password]")
+                    {
+                        for index in 0..fields.length() {
+                            if let Some(field) = fields
+                                .item(index)
+                                .and_then(|node| node.dyn_into::<HtmlInputElement>().ok())
+                            {
+                                field.set_value("");
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if let Some(id) = self.open_when_joined.get() {
             let joined = self.core.borrow().conversation(id).is_some();
             if joined {
@@ -636,7 +670,7 @@ impl App {
             if let Some(overlay) = by_id("overlay") {
                 match &ui.dialog {
                     Some(dialog) => {
-                        overlay.set_inner_html(&view::dialogs::shell(dialog));
+                        overlay.set_inner_html(&view::dialogs::shell(&core, dialog));
                         if let Some(field) = overlay
                             .query_selector(".dialog input")
                             .ok()
@@ -652,6 +686,12 @@ impl App {
         }
         if let Some(dialog) = &ui.dialog {
             self.patch("dlg-body", view::dialogs::body(&core, &self.clock, dialog));
+            if let Dialog::Account(page) = dialog {
+                self.patch(
+                    "dlg-status",
+                    view::dialogs::account_status(&core, *page, ui.password_changed),
+                );
+            }
             if let Dialog::CreateChannel = dialog {
                 self.patch(
                     "dlg-status",
@@ -685,6 +725,7 @@ impl App {
         } else {
             let menu_html = match ui.menu {
                 Some(Menu::Workspace) => Some(view::sidebar::workspace_menu(&core)),
+                Some(Menu::Account) => Some(view::sidebar::account_menu(&core)),
                 Some(Menu::Conversation(id)) => Some(view::sidebar::conversation_menu(&core, id)),
                 None => None,
             };
@@ -701,12 +742,20 @@ impl App {
                                 Some(Menu::Workspace) => {
                                     document().query_selector(".sb-head .ws").ok().flatten()
                                 }
+                                Some(Menu::Account) => {
+                                    document().query_selector(".sb-me .me").ok().flatten()
+                                }
                                 _ => document()
                                     .query_selector("[data-action=\"conversation-menu\"]")
                                     .ok()
                                     .flatten(),
                             };
-                            place_popover(popover, anchor.as_ref(), 240, 200);
+                            let height = if ui.menu == Some(Menu::Account) {
+                                270
+                            } else {
+                                200
+                            };
+                            place_popover(popover, anchor.as_ref(), 260, height);
                             self.page
                                 .borrow_mut()
                                 .regions
@@ -873,6 +922,19 @@ impl App {
             Some(Dialog::CreateChannel) => self.dispatch(Input::DismissAction(
                 lazy_client_core::ActionKind::CreateChannel,
             )),
+            Some(Dialog::Account(_)) => {
+                {
+                    let mut ui = self.ui.borrow_mut();
+                    ui.password_sent = false;
+                    ui.password_changed = false;
+                }
+                self.dispatch(Input::DismissAction(
+                    lazy_client_core::ActionKind::ChangePassword,
+                ));
+                self.dispatch(Input::DismissAction(
+                    lazy_client_core::ActionKind::UpdateProfile,
+                ));
+            }
             _ => self.request_frame(),
         }
     }
@@ -1341,6 +1403,18 @@ impl App {
                     self.request_frame();
                 }
             }
+            "account-menu" => {
+                let open = self.ui.borrow().menu == Some(Menu::Account);
+                self.ui.borrow_mut().picker = None;
+                self.ui.borrow_mut().menu = (!open).then_some(Menu::Account);
+                self.request_frame();
+            }
+            "account" => {
+                if let Some(page) = view::AccountPage::parse(&attr("page")) {
+                    self.ui.borrow_mut().menu = None;
+                    self.open_dialog(Dialog::Account(page));
+                }
+            }
             "workspace-menu" => {
                 let open = self.ui.borrow().menu == Some(Menu::Workspace);
                 self.ui.borrow_mut().picker = None;
@@ -1573,6 +1647,21 @@ impl App {
                     },
                     topic: value("topic"),
                     description: String::new(),
+                });
+            }
+            "profile-form" => self.dispatch(Input::UpdateProfile {
+                display_name: Some(value("display_name")),
+            }),
+            "password-form" => {
+                {
+                    let mut ui = self.ui.borrow_mut();
+                    ui.password_sent = true;
+                    ui.password_changed = false;
+                }
+                self.dispatch(Input::ChangePassword {
+                    current: value("current"),
+                    new: value("new"),
+                    confirm: value("confirm"),
                 });
             }
             "search-form" => {
@@ -1972,6 +2061,7 @@ fn listen() {
                         name.as_str(),
                         "workspace-menu"
                             | "conversation-menu"
+                            | "account-menu"
                             | "react"
                             | "composer-emoji"
                             | "thread-emoji"

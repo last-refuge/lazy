@@ -498,6 +498,8 @@ pub enum ActionKind {
     AcceptInvitation,
     /// Changing the person's display name.
     UpdateProfile,
+    /// Changing the person's password.
+    ChangePassword,
     /// Setting or removing the person's avatar.
     SetAvatar,
 }

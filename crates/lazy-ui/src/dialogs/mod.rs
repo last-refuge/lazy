@@ -43,7 +43,7 @@ pub use integrations::{IntegrationsEvent, IntegrationsSection};
 pub use invitations::InvitationsDialog;
 pub(crate) use invitations::shown_code;
 pub use people::{PeopleDialog, PeopleMode};
-pub use preferences::PreferencesDialog;
+pub use preferences::{PreferencesDialog, SettingsPage};
 pub use profile::{ProfileDialog, ProfileRequest};
 pub use quick_switcher::{
     QuickSwitcherChoice, QuickSwitcherDialog, QuickSwitcherRun,

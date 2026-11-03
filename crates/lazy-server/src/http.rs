@@ -177,6 +177,7 @@ pub fn router(state: AppState) -> Router {
             patch(update_workspace).put(create_workspace),
         )
         .route(paths::ME_ROUTE, patch(update_profile))
+        .route(paths::ME_PASSWORD_ROUTE, put(change_password))
         .route(paths::ACCEPT_INVITATION_ROUTE, post(accept_invitation))
         .route(paths::PERSON_ROLE_ROUTE, put(put_person_role))
         .route(paths::PERSON_DEACTIVATED_ROUTE, put(put_person_deactivated))
@@ -1220,6 +1221,15 @@ async fn update_profile(
 ) -> Result<Json<ProfileResponse>, AppError> {
     let user = profile::update_profile(&state.pool, principal.user_id, request).await?;
     Ok(Json(ProfileResponse { user }))
+}
+
+async fn change_password(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    ApiJson(request): ApiJson<lazy_protocol::ChangePasswordRequest>,
+) -> Result<StatusCode, AppError> {
+    accounts::change_password(&state, principal, request).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn upload_avatar(

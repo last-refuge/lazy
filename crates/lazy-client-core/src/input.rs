@@ -876,6 +876,15 @@ pub enum Input {
     UpdateProfile {
         display_name: Option<String>,
     },
+    /// Change the person's password. `confirm` must repeat `new`, which must follow the same
+    /// length rules as at registration; refused on the spot otherwise. Progress and failure are
+    /// `action(ActionKind::ChangePassword)`; success leaves a notice. The server signs out the
+    /// person's other sessions.
+    ChangePassword {
+        current: String,
+        new: String,
+        confirm: String,
+    },
     /// Set the person's avatar from a picture (a path or pasted bytes; the runtime reads it, off
     /// the core's thread). Progress and failure are `action(ActionKind::SetAvatar)`.
     SetAvatar {
