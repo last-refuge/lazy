@@ -91,6 +91,22 @@ fn uuid_hex() -> String {
         .to_string()
 }
 
+thread_local! {
+    /// The executor of every client this test started. A client runs only while the test drives
+    /// it, so a wait on one client runs the others' pending work too: as two apps would run side
+    /// by side, Alice's message goes out while the test waits for Bob to see it.
+    static CLIENTS: std::cell::RefCell<Vec<gpui::BackgroundExecutor>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Runs every client's pending work.
+fn run_every_client() {
+    let executors = CLIENTS.with(|clients| clients.borrow().clone());
+    for executor in executors {
+        executor.run_until_parked();
+    }
+}
+
 /// One client: a headless window running the real views, the model, and the real runtime.
 struct GuiClient {
     name: &'static str,
@@ -109,6 +125,7 @@ impl GuiClient {
         );
         // The runtime reports from other threads, so the executor may wait for them.
         cx.allow_parking();
+        CLIENTS.with(|clients| clients.borrow_mut().push(cx.background_executor.clone()));
 
         let mut config = RuntimeConfig::new(server_url);
         config.profile_dir = Some(profile.to_owned());
@@ -189,6 +206,7 @@ impl GuiClient {
     ) {
         let deadline = Instant::now() + DEADLINE;
         loop {
+            run_every_client();
             self.settle();
             if self.read(|core| condition(core)) {
                 return;
@@ -291,6 +309,15 @@ fn two_gui_clients_exchange_messages_through_a_real_server() {
     // Alice writes with the keyboard and presses Enter; Bob sees it arrive.
     alice.type_text("Hello Bob, welcome to Lazy!");
     alice.key("enter");
+    // Alice's message goes once her own window has run on: it is journaled first, and the send
+    // follows when her window takes the answer (each client runs only while the test drives it).
+    alice.wait_until("her message to be sent", |core| {
+        core.selected_conversation().is_some_and(|c| {
+            rows_of(core, c).iter().any(|i| {
+                i.document.plain_text() == "Hello Bob, welcome to Lazy!" && i.is_confirmed()
+            })
+        })
+    });
     bob.wait_until("Alice's message", |core| {
         core.selected_conversation().is_some_and(|c| {
             rows_of(core, c)
@@ -538,6 +565,15 @@ fn two_gui_clients_hold_a_thread_through_the_real_views() {
 
     alice.type_text("shall we ship on friday");
     alice.key("enter");
+    // Alice's message goes once her own window has run on: it is journaled first, and the send
+    // follows when her window takes the answer (each client runs only while the test drives it).
+    alice.wait_until("her message to be sent", |core| {
+        core.selected_conversation().is_some_and(|c| {
+            rows_of(core, c)
+                .iter()
+                .any(|i| i.document.plain_text() == "shall we ship on friday" && i.is_confirmed())
+        })
+    });
     bob.wait_until("Alice's message", |core| {
         core.selected_conversation().is_some_and(|c| {
             rows_of(core, c)

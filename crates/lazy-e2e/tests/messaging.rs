@@ -394,12 +394,25 @@ async fn older_history_pages_in_order_while_new_messages_arrive(pool: PgPool) {
         bob.wait_for_text(&label(newer)).await;
         bob.act(Input::LoadOlder { conversation });
     }
-    while bob.read(|core| {
-        matches!(
-            core.history_status(conversation),
-            HistoryStatus::Ready { has_more: true }
-        )
-    }) {
+    loop {
+        // A page asked for above may still be on its way: whether there is more is known only
+        // once it has arrived.
+        bob.wait_until("the history to settle", move |core| {
+            !matches!(
+                core.history_status(conversation),
+                HistoryStatus::Loading | HistoryStatus::NotLoaded
+            )
+        })
+        .await;
+        let more = bob.read(|core| {
+            matches!(
+                core.history_status(conversation),
+                HistoryStatus::Ready { has_more: true }
+            )
+        });
+        if !more {
+            break;
+        }
         let before = bob.read(|core| core.timeline(conversation).len());
         bob.act(Input::LoadOlder { conversation });
         bob.wait_until("another page", move |core| {

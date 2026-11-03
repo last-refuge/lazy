@@ -42,6 +42,13 @@ use tempfile::TempDir;
 
 // ----- Stub server -----
 
+/// How many bytes a slow upload reads per delay.
+const SLOW_BLOCK: usize = 64 * 1024;
+
+/// A file too large to sit whole in the connection's buffers before a test hangs up on its upload,
+/// so the server is still reading when the client goes.
+const LARGER_THAN_THE_BUFFERS: usize = 24 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug)]
 enum UploadBehavior {
     /// Read the whole body and answer with the attachment.
@@ -52,7 +59,8 @@ enum UploadBehavior {
     ServerErrorAfterBody,
     /// Read this many bytes, then fail with a server error.
     ServerErrorAfter(usize),
-    /// Read the body slowly: this long after each chunk.
+    /// Read the body slowly: this long for every 64 KiB read. Paced by bytes, not by chunks: how
+    /// big a chunk arrives depends on the build (an optimized client hands over far larger ones).
     Slow(Duration),
 }
 
@@ -281,7 +289,10 @@ async fn upload(
         record.received += chunk.len();
         s.uploads.lock().unwrap()[index].received = record.received;
         match behavior {
-            UploadBehavior::Slow(delay) => tokio::time::sleep(delay).await,
+            UploadBehavior::Slow(delay) => {
+                let blocks = chunk.len().div_ceil(SLOW_BLOCK).max(1);
+                tokio::time::sleep(delay * u32::try_from(blocks).unwrap_or(u32::MAX)).await;
+            }
             UploadBehavior::ServerErrorAfter(limit) if record.received >= limit => break,
             _ => {}
         }
@@ -1249,7 +1260,7 @@ fn cancelling_stops_the_transfer_and_no_result_is_reported() {
     let server = Server::start();
     let mut client = Client::logged_in(&server);
     let id = AttachmentId::generate();
-    client.stage_bytes(id, sample(2 * 1024 * 1024));
+    client.stage_bytes(id, sample(LARGER_THAN_THE_BUFFERS));
     server
         .stub
         .upload_plan
@@ -1262,7 +1273,7 @@ fn cancelling_stops_the_transfer_and_no_result_is_reported() {
         generation: 1,
         name: "big.bin".into(),
         media_type: "application/octet-stream".into(),
-        size: 2 * 1024 * 1024,
+        size: LARGER_THAN_THE_BUFFERS as u64,
     }]);
     wait_until("the upload to start", || {
         server.uploads().first().is_some_and(|u| u.received > 0)
@@ -1272,7 +1283,7 @@ fn cancelling_stops_the_transfer_and_no_result_is_reported() {
     wait_until("the server to see the hang-up", || {
         server.uploads()[0].aborted
     });
-    assert!(server.uploads()[0].received < 2 * 1024 * 1024);
+    assert!(server.uploads()[0].received < LARGER_THAN_THE_BUFFERS);
 }
 
 #[test]
@@ -1726,7 +1737,7 @@ fn signing_out_deletes_the_outbox_and_the_image_cache_and_stops_transfers() {
     let server = Server::start();
     let mut client = Client::logged_in(&server);
     let id = AttachmentId::generate();
-    client.stage_bytes(id, sample(2 * 1024 * 1024));
+    client.stage_bytes(id, sample(LARGER_THAN_THE_BUFFERS));
     let thumb = AttachmentId::generate();
     server
         .stub
@@ -1748,7 +1759,7 @@ fn signing_out_deletes_the_outbox_and_the_image_cache_and_stops_transfers() {
         generation: 1,
         name: "a.bin".into(),
         media_type: "application/octet-stream".into(),
-        size: 2 * 1024 * 1024,
+        size: LARGER_THAN_THE_BUFFERS as u64,
     }]);
     wait_until("the upload to start", || {
         server.uploads().first().is_some_and(|u| u.received > 0)
