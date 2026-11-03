@@ -130,6 +130,7 @@ All of these are also command-line options (`lazy-server serve --help`).
 | `LAZY_CREDENTIALS_OLD_KEYS` | none | previous keys, comma-separated, during a rotation |
 | `LAZY_RUN_JOBS` | `true` | run the job worker in the server; set `false` if `lazy-server worker` runs it in a container of its own |
 | `LAZY_ATTACHMENTS_DIR` | `/data/attachments` in the image | where uploads are kept (a volume) |
+| `LAZY_WEB_DIR` | `/usr/share/lazy/web` in the image | the built web client, served under `/web/` (see The web client); unset or empty serves none |
 | `LAZY_MAX_ATTACHMENT_BYTES` | 25 MiB | largest upload; the proxy must allow it too |
 | `LAZY_EVENT_RETENTION_DAYS` | 30 | days of event history kept (the newest 1,000 per workspace always stay); 0 keeps all |
 | `LAZY_RTC_URL`, `LAZY_RTC_SECRET` | none | the call server's signaling address (`wss://…`) and the secret shared with it (32+ characters); both or neither; without them drop-ins are off (see Drop-ins). The same secret checks the call server's room reports (`POST /v1/rtc/report`) |
@@ -157,6 +158,24 @@ All of these are also command-line options (`lazy-server serve --help`).
 - **One server process only.** The behavior of several server processes against one database is
   not verified; do not scale `lazy` beyond one replica.
 - **Rate limiting** is the proxy's job on a public server.
+
+## The web client
+
+The image includes Lazy in a browser (D47): open the server's address (`https://chat.example.com`,
+which goes to `/web/`) and sign in with a Lazy username and password. It covers channels, direct
+and group conversations, threads, reactions, files, search, and notifications while the page is
+open; drop-ins, administration, and integrations stay in the app. Nothing to configure: the image
+builds it and sets `LAZY_WEB_DIR`. On a server built from source, run `scripts/build-web.sh` and point
+`LAZY_WEB_DIR` at `target/web` (`scripts/run-server.sh` does that when it exists).
+
+- **HTTPS.** Serve the server over HTTPS (Coolify's proxy does). The web client's session is a
+  cookie marked `Secure` when the proxy says the browser used HTTPS (`X-Forwarded-Proto: https`),
+  `HttpOnly`, and `SameSite=Strict`.
+- **The proxy must pass `Host`** (or set `X-Forwarded-Host`) unchanged: the server checks that a
+  browser's request comes from its own address, and refuses the realtime connection otherwise.
+  Coolify's Traefik does both.
+- **The first build of the image takes a few minutes longer** (the WebAssembly tools are compiled
+  once and kept in a cached layer).
 
 ## Drop-ins
 

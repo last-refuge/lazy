@@ -574,3 +574,58 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
   - how emoji look on a real Windows machine;
   - emoji newer than the installed Segoe UI Emoji, which may draw as an empty box;
   - flags, which Segoe UI Emoji draws as two letters.
+
+## The web client (D47)
+
+- *Measured (2026-11-03, on this Linux machine):*
+  - `lazy-server/tests/web.rs` (7 tests, real server and test Postgres):
+    - signing in on the web sets an `HttpOnly`, `SameSite=Strict`, 30-day cookie with no token in the body;
+    - the cookie authenticates reads, while a change needs the `x-lazy-web` header and is refused from another origin;
+    - web sign-in is refused without the header or from another origin, and a wrong password gets the ordinary error and no cookie;
+    - the cookie is `Secure` behind `X-Forwarded-Proto: https`;
+    - signing out revokes the session and clears the cookie;
+    - the realtime socket takes the cookie only with this server's `Origin`, and then subscribes and catches up;
+    - `/web/` is served with the content security policy, `nosniff`, and `no-cache`, `/` and `/web` redirect there, a path outside the directory is 404, and without a directory nothing is served.
+  - `lazy-server` `web.rs` unit tests (5): cookie parsing, origin matching (ports, case, look-alike hosts, `X-Forwarded-Host`), the checks per method, the WebSocket's origin, `Secure`.
+  - `lazy-web` unit tests, natively (20):
+    - escaping, including attributes;
+    - documents to HTML, with links only for `http`, `https`, and `mailto`;
+    - rows grouped by author and divided by day, with edit and delete offered only on one's own messages;
+    - the sidebar, the header, the sign-in form (registration offered unless the server is closed), and a failed sign-in;
+    - search snippets with marked matches;
+    - the emoji picker, and the word at the caret for suggestions (UTF-16 positions);
+    - stored envelopes (newer and damaged told apart) and a journal entry through one;
+    - request failures classified as rejected or unknown, query strings, and times and days.
+  - The browser test (`scripts/test-web.sh`, `crates/lazy-web/tests/browser/flow.mjs`): two people in Playwright's Chromium 156 (new headless mode) against a real server built from this tree, on a fresh database in the test Postgres. All 19 steps passed, with no page errors:
+    - Ada's message reaches Bob live; Bob's reaction from the picker reaches Ada;
+    - a thread reply shows as "1 reply" to Bob; an edit shows as "(edited)"; a deleted message disappears for Bob;
+    - Bob opens a direct conversation, and Ada sees it in the sidebar with Bob's online dot;
+    - an image and a text file upload, Bob sees the thumbnail load and the file's link;
+    - Ada creates `#plans`, and Bob finds and joins it from the directory; Bob changes its topic from the channel menu and Ada sees it;
+    - search finds a message and opens it; Ctrl+K jumps to a channel;
+    - `@bo` and `:tad` complete to `@bob` and 🎉, and the mention highlights the row for Bob;
+    - an unread count and a mention badge appear in the sidebar and clear on reading;
+    - a reload stays signed in;
+    - signing out returns to the sign-in form with no `lazy.` keys left in `localStorage` and no session cookie;
+    - a wrong password shows an error;
+    - a too-short username shows the server's refusal, and an account is then created in the browser;
+    - the notification offer appears only without permission, and **Turn on** asks the browser;
+    - at 390 px wide, the sidebar slides over the conversation.
+  - Docker: not built here (no access to Docker). Instead, the same files the image copies were put in a scratch directory, and its steps ran there: the workspace loads with its five crates, and `scripts/build-web.sh` builds the bundle with the image's paths. That run found and fixed two problems:
+    - the build script assumed `target/` (it now honours `CARGO_TARGET_DIR`);
+    - copying all of `crates/` would have brought a `crates/lazy-ui` holding only fonts, which stops the workspace from loading (cargo refuses a member with no manifest). The fonts are now copied outside it.
+  - Size: 3.0 MB of WebAssembly, 0.9 MB compressed (served precompressed).
+- *Found and fixed while testing in the browser:*
+  - a borrow of the core held across an input (an `if let` keeps its scrutinee's borrow for the whole block), which stopped the page when sending;
+  - the file chooser's click re-entering the click listener;
+  - duplicate row keys in the thread pane;
+  - the layout stopping short of the window (an overlay was a grid row);
+  - icons drawn from font symbols that this machine (and some others) does not have, which are now SVG;
+  - the core not offering notifications because it was never told the time (the runtime now sends a clock tick, as the desktop's does).
+- *Not checked by anyone:*
+  - the real Docker build, and a deployment behind HTTPS on Coolify;
+  - Firefox, Safari, Edge, and a real phone;
+  - a screen reader, keyboard-only use beyond the composer and Ctrl+K, and IME composition;
+  - a long session (reconnects after sleep, many hours);
+  - large workspaces (hundreds of channels, long histories);
+  - notifications actually shown by a desktop browser.

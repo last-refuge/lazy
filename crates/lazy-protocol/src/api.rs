@@ -31,6 +31,23 @@ pub mod paths {
     pub const REGISTER: &str = "/v1/auth/register";
     pub const LOGIN: &str = "/v1/auth/login";
     pub const LOGOUT: &str = "/v1/auth/logout";
+    /// The web client's sign-in (D47): `POST` a [`crate::LoginRequest`]; the session goes in an
+    /// `HttpOnly` cookie ([`WEB_SESSION_COOKIE`]) and the answer is a [`crate::WebSessionResponse`],
+    /// which carries no token.
+    pub const WEB_LOGIN: &str = "/v1/web/login";
+    /// The web client's registration (D47): `POST` a [`crate::RegisterRequest`]; answered like
+    /// [`WEB_LOGIN`].
+    pub const WEB_REGISTER: &str = "/v1/web/register";
+    /// The web client's sign-out (D47): `POST`; revokes the cookie's session and clears it.
+    pub const WEB_LOGOUT: &str = "/v1/web/logout";
+    /// The cookie that carries a web client's session token (D47).
+    pub const WEB_SESSION_COOKIE: &str = "lazy_session";
+    /// Every request the web client makes carries this header (value `1`). A request authenticated
+    /// by the cookie that changes something is refused without it, which a page on another site
+    /// cannot add (D47).
+    pub const WEB_REQUEST_HEADER: &str = "x-lazy-web";
+    /// Where the server serves the web client (D47).
+    pub const WEB_APP: &str = "/web";
     pub const BOOTSTRAP: &str = "/v1/bootstrap";
     /// WebSocket upgrade. Authenticate with the `Authorization: Bearer` header.
     pub const REALTIME: &str = "/v1/realtime";
@@ -1049,6 +1066,13 @@ pub struct LoginRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionResponse {
     pub token: SessionToken,
+    pub user: User,
+}
+
+/// Response of the web client's sign-in and registration (D47): who signed in. The session token
+/// is in the `HttpOnly` cookie, never in the body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebSessionResponse {
     pub user: User,
 }
 

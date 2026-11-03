@@ -552,6 +552,20 @@ Goal: native iOS and Android clients on the shared core. Estimate the calendar a
 
 ---
 
+## [ ] Web client (D47)
+
+Goal: Lazy in a browser for people who cannot install the app, served by the server, signed in with a normal account, covering everyday messaging; drop-ins and administration stay in the app.
+
+- [X] Server: sign-in, registration, and sign-out that keep the session in an `HttpOnly`, `SameSite=Strict` cookie; every authenticated route accepts it, with the cross-site checks (header, `Origin`, the WebSocket's origin)
+- [X] Server: the built client served under `/web/` with a strict content security policy, precompressed, from `LAZY_WEB_DIR`
+- [X] `crates/lazy-web`: the shared core in WebAssembly, a runtime on `fetch`, WebSocket, and `localStorage`, and screens drawn as escaped HTML
+- [X] Everyday messaging in a real browser: sign in, conversations, sending with Markdown, mentions, and emoji, editing, deleting, reactions, threads, files and pictures, direct and group conversations, channels (browse, join, create, leave, topic, rename), search, Jump to, unread counts, presence, notifications offer, sign-out
+- [X] Build: `scripts/build-web.sh`, and the Docker image builds and serves it
+- [ ] Deployed behind HTTPS (Coolify) and used by a person
+- [ ] Firefox and Safari, a phone, and a screen reader
+
+---
+
 ## Open decisions
 
 Resolve each by the task that needs it and record the answer in `llm-docs/`.
