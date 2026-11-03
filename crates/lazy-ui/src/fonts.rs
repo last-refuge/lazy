@@ -45,9 +45,12 @@ pub fn heading<E: Styled>(element: E) -> E {
         .font_weight(FontWeight::BOLD)
 }
 
-/// Whether the bundled emoji font (the last of [`FILES`]) is registered. CoreText cannot load it,
-/// so macOS draws emoji with Apple Color Emoji through system fallback.
-pub const BUNDLED_EMOJI: bool = !cfg!(target_os = "macos");
+/// Whether the bundled emoji font (the last of [`FILES`]) is registered: on Linux only. CoreText
+/// cannot load it, so macOS draws emoji with Apple Color Emoji through system fallback. Windows
+/// loads it but cannot draw it: GPUI's DirectWrite renderer draws only COLR color glyphs, and this
+/// font's glyphs are PNG bitmaps (CBDT), so every emoji came out blank. Windows draws them with its
+/// own Segoe UI Emoji, a COLR font (see [`crate::emoji_font::face`]).
+pub const BUNDLED_EMOJI: bool = cfg!(not(any(target_os = "macos", target_os = "windows")));
 
 /// Registers the bundled fonts with the text system. A failure is logged and the app falls back
 /// to system fonts.

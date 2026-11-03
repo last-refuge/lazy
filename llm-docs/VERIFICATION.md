@@ -562,3 +562,15 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
   - two people on the deployed server;
   - many simultaneous connections;
   - how the dot reads to a screen reader (the row's label does not say online yet).
+
+## Emoji on Windows
+
+- *Observed (2026-11-02, by the owner, 0.12.0 on Windows):* the bell, the paperclip and emoji buttons, and every emoji in the picker drew as nothing.
+- *Cause, from the pinned GPUI source:* the bundled Noto Color Emoji's glyphs are PNG bitmaps (CBDT). GPUI's DirectWrite renderer (`gpui_windows/src/direct_write.rs`) counts them as color glyphs but rasterizes only COLR layers, so each one drew blank.
+- *Change:* the bundled emoji font is now registered on Linux only (`fonts::BUNDLED_EMOJI`), and Windows draws emoji with its own Segoe UI Emoji, a COLR font, by name (`emoji_font::face`).
+- *Measured:* on Linux only: `lazy-ui` emoji unit and shaping tests pass and clippy is clean. Linux behaviour is unchanged.
+- *Not checked:*
+  - the Windows build itself (it compiles only in the `release` workflow);
+  - how emoji look on a real Windows machine;
+  - emoji newer than the installed Segoe UI Emoji, which may draw as an empty box;
+  - flags, which Segoe UI Emoji draws as two letters.
