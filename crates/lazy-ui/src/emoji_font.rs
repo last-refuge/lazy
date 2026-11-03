@@ -54,13 +54,18 @@ pub fn drawable_tone(emoji: &'static Emoji, tone: SkinTone) -> &'static Emoji {
 /// The variation selector that asks for emoji presentation.
 const EMOJI_PRESENTATION: char = '\u{fe0f}';
 
-/// The face emoji are drawn with.
-///
-/// Without the bundled font ([`crate::fonts::BUNDLED_EMOJI`]) this is the text face and the
-/// system's fallback draws the emoji.
+/// The system's color emoji font on Windows, a COLR font GPUI's DirectWrite renderer can draw.
+/// DirectWrite loads a family by name without the `m` GPUI's other text systems insist on.
+pub const WINDOWS_FAMILY: &str = "Segoe UI Emoji";
+
+/// The face emoji are drawn with: the bundled font where it is registered
+/// ([`crate::fonts::BUNDLED_EMOJI`]), Segoe UI Emoji on Windows, and elsewhere (macOS) the text
+/// face, so the system's fallback draws the emoji.
 pub fn face() -> Font {
     if crate::fonts::BUNDLED_EMOJI {
         font(FAMILY)
+    } else if cfg!(target_os = "windows") {
+        font(WINDOWS_FAMILY)
     } else {
         font(TEXT_FAMILY)
     }
