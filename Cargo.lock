@@ -3941,7 +3941,7 @@ dependencies = [
 
 [[package]]
 name = "lazy-client-core"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "lazy-domain",
  "lazy-protocol",
@@ -3957,7 +3957,7 @@ dependencies = [
 
 [[package]]
 name = "lazy-client-runtime"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "async-channel",
  "axum",
@@ -3987,7 +3987,7 @@ dependencies = [
 
 [[package]]
 name = "lazy-desktop"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "block2 0.6.2",
  "directories",
@@ -4011,7 +4011,7 @@ dependencies = [
 
 [[package]]
 name = "lazy-domain"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "emojis",
  "proptest",
@@ -4024,7 +4024,7 @@ dependencies = [
 
 [[package]]
 name = "lazy-e2e"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "axum",
  "gpui",
@@ -4053,7 +4053,7 @@ dependencies = [
 
 [[package]]
 name = "lazy-protocol"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "lazy-domain",
  "serde",
@@ -4062,7 +4062,7 @@ dependencies = [
 
 [[package]]
 name = "lazy-server"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "argon2",
  "aws-lc-rs",
@@ -4100,7 +4100,7 @@ dependencies = [
 
 [[package]]
 name = "lazy-ui"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "gpui",
  "gpui_platform",
@@ -4121,7 +4121,7 @@ dependencies = [
 
 [[package]]
 name = "lazy-web"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "console_error_panic_hook",
  "futures-channel",
