@@ -35,7 +35,13 @@ const finds = (what, test, seconds) => until(what, test, seconds).then(() => tru
 
 // ----- Native screens, from the system's view of them -----
 function nodes() {
-  adb("shell", "uiautomator", "dump", "/sdcard/u.xml");
+  adb("shell", "rm", "-f", "/sdcard/u.xml");
+  try {
+    adb("shell", "uiautomator", "dump", "/sdcard/u.xml");
+  } catch (error) {
+    // Some images kill uiautomator (status 137) right after it has written the file.
+    if (!String(error.stdout).includes("dumped to")) throw error;
+  }
   return [...adb("shell", "cat", "/sdcard/u.xml").matchAll(/<node [^>]*>/g)].map((m) => {
     const get = (name) => m[0].match(new RegExp(`${name}="([^"]*)"`))?.[1] ?? "";
     const b = get("bounds").match(/\d+/g)?.map(Number) ?? [0, 0, 0, 0];
@@ -135,7 +141,7 @@ await until("the sign-in form", () => page.shows("input[name=username]"), 180);
 check("the server's page loads", true);
 check("the page knows it is in the app", (await page.run("navigator.userAgent")).includes("LazyShell/1"));
 check("sign-in offers Change server", await page.shows("[data-action=change-server]"));
-const web = nodes().find((n) => n.cls === "android.webkit.WebView");
+const web = await until("the web view on screen", () => nodes().find((n) => n.cls === "android.webkit.WebView"));
 const top = web.top;
 check("the page starts below the status bar", top > 0, `at ${top}px`);
 await page.fill("input[name=username]", "ada");
