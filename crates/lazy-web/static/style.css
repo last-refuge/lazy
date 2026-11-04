@@ -442,6 +442,14 @@ mark { background: var(--highlight); color: inherit; border-radius: 3px; padding
   .msg { padding-left: 12px; padding-right: 12px; }
   .msg-actions { right: 12px; }
 }
+/* A picture opened in a phone app's shell. */
+.lightbox {
+  position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
+  background: rgb(0 0 0 / .92); padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.lightbox-save { position: absolute; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); text-decoration: none; }
+
 /* Touchscreens: controls a finger can hit. A field under 16px makes iOS zoom the page when it is
    focused. */
 @media (hover: none) {

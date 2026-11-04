@@ -157,6 +157,16 @@ pub(crate) fn start() {
     *app.runtime.borrow_mut() = Some(runtime);
     APP.with(|slot| *slot.borrow_mut() = Some(app.clone()));
     listen();
+    if let Some(window) = web_sys::window() {
+        let shell = window
+            .navigator()
+            .user_agent()
+            .is_ok_and(|agent| agent.contains("LazyShell/"));
+        view::html::set_in_shell(shell);
+        let back = Closure::<dyn Fn() -> bool>::new(go_back);
+        let _ = js_sys::Reflect::set(&window, &JsValue::from_str("lazyBack"), back.as_ref());
+        back.forget();
+    }
     // The core has no clock: it is told the time now and every half minute, as the desktop
     // runtime does (and before each batch of realtime frames, `realtime.rs`).
     app.dispatch(Input::Clock(lazy_domain::Timestamp::now()));
@@ -1456,6 +1466,12 @@ impl App {
                     self.dispatch(Input::SwitchWorkspace(id));
                 }
             }
+            // The shell takes this address and shows its server screen (D49).
+            "change-server" => {
+                if let Some(window) = web_sys::window() {
+                    let _ = window.location().set_href("lazy-shell://change-server");
+                }
+            }
             "sign-out" => {
                 self.ui.borrow_mut().menu = None;
                 self.dispatch(Input::SignOut);
@@ -2056,6 +2072,9 @@ fn listen() {
                 .as_ref()
                 .and_then(|t| t.closest("#popover").ok().flatten())
                 .is_some();
+            if shell_picture_click(target.as_ref(), &event) {
+                return;
+            }
             if let Some(element) = action {
                 let name = element.get_attribute("data-action").unwrap_or_default();
                 let keeps_popover = in_popover
@@ -2209,11 +2228,17 @@ fn listen() {
                 Box::new(|_: Event| report_window_active()),
             );
         }
+        // Width only: on Android a keyboard opening changes the height, and it opens when a field
+        // in the popover (the emoji picker's search) is tapped.
+        let width = Cell::new(window.inner_width().ok().and_then(|w| w.as_f64()));
         on(
             window.as_ref(),
             "resize",
-            Box::new(|_: Event| {
-                if let Some(app) = app() {
+            Box::new(move |_: Event| {
+                let now = web_sys::window().and_then(|w| w.inner_width().ok()?.as_f64());
+                if width.replace(now) != now
+                    && let Some(app) = app()
+                {
                     app.close_popover();
                 }
             }),
@@ -2230,6 +2255,94 @@ fn listen() {
         }
         fit_viewport();
     }
+}
+
+/// In a shell a picture opens over the page: following its link would replace the page with the
+/// picture, with nothing to go back with on iOS. A tap on the picture puts it away.
+fn shell_picture_click(target: Option<&Element>, event: &Event) -> bool {
+    if !view::html::in_shell() {
+        return false;
+    }
+    let Some(target) = target else { return false };
+    if target.closest(".lightbox-save").ok().flatten().is_some() {
+        return false;
+    }
+    if close_picture() {
+        event.prevent_default();
+        return true;
+    }
+    let Some(href) = target
+        .closest("a.image")
+        .ok()
+        .flatten()
+        .and_then(|link| link.get_attribute("href"))
+    else {
+        return false;
+    };
+    event.prevent_default();
+    let document = document();
+    let (Ok(cover), Ok(picture), Ok(save), Some(body)) = (
+        document.create_element("div"),
+        document.create_element("img"),
+        document.create_element("a"),
+        document.body(),
+    ) else {
+        return true;
+    };
+    cover.set_id("lightbox");
+    cover.set_class_name("lightbox");
+    let _ = picture.set_attribute("src", &href);
+    let _ = picture.set_attribute("alt", "");
+    save.set_class_name("lightbox-save primary");
+    let _ = save.set_attribute("href", &href);
+    let _ = save.set_attribute("download", "");
+    save.set_text_content(Some("Save"));
+    let _ = cover.append_child(&picture);
+    let _ = cover.append_child(&save);
+    let _ = body.append_child(&cover);
+    true
+}
+
+/// Puts away the open picture; whether there was one.
+fn close_picture() -> bool {
+    match by_id("lightbox") {
+        Some(cover) => {
+            cover.remove();
+            true
+        }
+        None => false,
+    }
+}
+
+/// What the Android shell's back button calls: closes the topmost thing open, and answers whether
+/// there was one (if not, the shell leaves the app).
+fn go_back() -> bool {
+    let Some(app) = app() else { return false };
+    if close_picture() {
+        return true;
+    }
+    if app.ui.borrow().picker.is_some() || app.ui.borrow().menu.is_some() {
+        app.close_popover();
+        return true;
+    }
+    if app.ui.borrow().dialog.is_some() {
+        app.close_dialog();
+        return true;
+    }
+    if app.ui.borrow().editing.is_some() {
+        app.stop_editing();
+        return true;
+    }
+    if app.ui.borrow().sidebar_open {
+        app.ui.borrow_mut().sidebar_open = false;
+        app.request_frame();
+        return true;
+    }
+    if app.core.borrow().open_thread().is_some() {
+        app.dispatch(Input::CloseThread);
+        return true;
+    }
+    false
 }
 
 /// Keeps the page the size of what can be seen. A phone's keyboard covers the page without
@@ -2272,6 +2385,14 @@ fn fit_viewport() {
     let _ = style.set_property("--viewport-height", &height);
     for scroller in following {
         scroller.set_scroll_top(scroller.scroll_height());
+    }
+    // An open popover moves up out of the keyboard's way.
+    if let Some(popover) = by_id("popover").and_then(|e| e.dyn_into::<HtmlElement>().ok()) {
+        let rect = popover.get_bounding_client_rect();
+        if rect.height() > 0.0 && rect.bottom() > viewport.height() - 8.0 {
+            let top = (viewport.height() - rect.height() - 8.0).max(8.0);
+            let _ = popover.style().set_property("top", &format!("{top}px"));
+        }
     }
 }
 

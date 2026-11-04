@@ -674,3 +674,15 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
   - `scripts/test-web.sh` as a whole, including `flow.mjs` with these changes and running `phone.mjs` after it;
   - VoiceOver and TalkBack: a tap on a message may not be reachable with a screen reader;
   - a native shell of any kind, which is not built.
+
+## The phone apps (D49)
+
+- *Measured (2026-11-04, this Linux machine):*
+  - The Android debug APK builds (2.5 MB; `./gradlew assembleDebug`).
+  - On an Android 14 test-image emulator without hardware acceleration, through real taps: first run asks for the server, a bad address is refused, and a good one loads the web view below the status bar.
+  - On Android 14 and 15 test-image emulators without acceleration, the web view's process traps (SIGTRAP) on every page, including plain HTML with no script, so nothing past loading could run here. The app's crash handling was seen working: after repeated crashes it stopped and showed the no-connection screen.
+  - `phone.mjs` in Chromium with the shell's user agent: back closes a menu, the sidebar, a thread, and a picture in turn and answers false with nothing open; a picture opens over the page and loads; Change server is offered only in a shell; a popover stays open and moves up when only the height changes, and closes when the width does.
+  - `cargo test -p lazy-web`, `cargo clippy -p lazy-web` for both targets, and `cargo fmt --all --check` passed.
+  - The Swift files pass a syntax check with the Linux toolchain (`swiftc -frontend -parse`), and the iOS plist, project file, and icon catalog parse. A syntax check finds no type errors or wrong iOS calls.
+- *Not run yet:* the iOS code has never been compiled, since it needs a Mac and the iOS SDK. The Android end-to-end test (`mobile/android/test/e2e.mjs`) has never got past loading the page. Both are in `gh workflow run mobile`.
+- *Not checked:* any real phone; downloads; the file chooser beyond Chromium; VoiceOver and TalkBack; long sessions and memory.

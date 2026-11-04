@@ -6,7 +6,7 @@
 use lazy_client_core::{ClientCore, SessionPhase};
 use lazy_protocol::ServerRegistration;
 
-use super::html::{esc, push};
+use super::html::{esc, in_shell, push};
 
 /// The sign-in form, or the registration form.
 pub(crate) fn form(core: &ClientCore, registering: bool) -> String {
@@ -46,9 +46,14 @@ pub(crate) fn form(core: &ClientCore, registering: bool) -> String {
             out.push_str("<p class=\"switch\">New here? <button type=\"button\" class=\"link\" data-action=\"show-register\">Create an account</button></p>");
         }
     }
-    out.push_str(
-        "<p class=\"fine\">Lazy in your browser. For drop-ins, use the Lazy app.</p></div></div>",
-    );
+    if in_shell() {
+        out.push_str("<p class=\"switch\"><button type=\"button\" class=\"link\" data-action=\"change-server\">Change server</button></p>");
+        out.push_str("<p class=\"fine\">For drop-ins, use Lazy on a computer.</p></div></div>");
+    } else {
+        out.push_str(
+            "<p class=\"fine\">Lazy in your browser. For drop-ins, use the Lazy app.</p></div></div>",
+        );
+    }
     out
 }
 
@@ -70,6 +75,19 @@ pub(crate) fn status(core: &ClientCore) -> (String, bool) {
 mod tests {
     use super::*;
     use lazy_client_core::{Input, StartupState};
+
+    #[test]
+    fn only_a_phone_app_offers_to_change_server() {
+        let mut core = ClientCore::new();
+        core.handle(Input::Started(StartupState::default()));
+        assert!(!form(&core, false).contains("change-server"));
+        assert!(form(&core, false).contains("in your browser"));
+        crate::view::html::set_in_shell(true);
+        let html = form(&core, false);
+        crate::view::html::set_in_shell(false);
+        assert!(html.contains("data-action=\"change-server\""));
+        assert!(!html.contains("in your browser"));
+    }
 
     #[test]
     fn the_form_offers_registration_unless_the_server_is_closed() {

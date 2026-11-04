@@ -13,6 +13,7 @@ scripts/run-server.sh                        # server on 127.0.0.1:8080 using th
 scripts/run-client.sh alice                  # desktop client with its own disposable profile
 scripts/build-web.sh                         # the web client (D47) into target/web; run-server.sh then serves it at /web/
 scripts/test-web.sh                          # the web client's browser test (Playwright, test Postgres; see the script)
+gh workflow run mobile                       # the phone apps (D49, mobile/README.md): builds, and runs each on an emulator or simulator; manual
 ```
 
 ## Rules

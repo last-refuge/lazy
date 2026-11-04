@@ -534,9 +534,11 @@ Goal: iOS and Android clients on the shared core that advance with the web clien
   - [ ] Compact call surface
   - [ ] Shared design tokens with adapted layouts
 - [ ] 7.5 iOS delivery
+  - [ ] Shell built (`mobile/ios`, D49)
   - [ ] Build, sign, and distribute test builds
   - [ ] Physical-device verification
 - [ ] 7.6 Android delivery
+  - [X] Shell built (`mobile/android`, D49; the debug APK builds and its native screens were driven on an emulator)
   - [ ] Build, sign, and distribute test builds
   - [ ] Physical-device verification
 - [ ] 7.7 Mobile drop-ins

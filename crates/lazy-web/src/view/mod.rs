@@ -233,7 +233,12 @@ pub(crate) fn header(core: &ClientCore, id: ConversationId) -> String {
     if let Some(drop_in) = &conversation.drop_in {
         push!(
             out,
-            "<span class=\"live\" title=\"Join drop-ins from the Lazy app\"><span class=\"dot online\"></span> Drop-in · {}</span>",
+            "<span class=\"live\" title=\"{}\"><span class=\"dot online\"></span> Drop-in · {}</span>",
+            if html::in_shell() {
+                "Join drop-ins from Lazy on a computer"
+            } else {
+                "Join drop-ins from the Lazy app"
+            },
             drop_in.participants.len()
         );
     }

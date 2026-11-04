@@ -1,0 +1,103 @@
+import XCTest
+
+/// The iOS app on a real server (set `TEST_RUNNER_LAZY_SERVER`): the first-run server screen, then
+/// everyday messaging with iOS's real keyboard. Screenshots go to `TEST_RUNNER_LAZY_SHOTS`, for a
+/// person to read.
+final class ShellTests: XCTestCase {
+    private var server: String { ProcessInfo.processInfo.environment["LAZY_SERVER"] ?? "http://127.0.0.1:18194" }
+
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    private func shot(_ name: String) {
+        guard let folder = ProcessInfo.processInfo.environment["LAZY_SHOTS"] else { return }
+        let data = XCUIScreen.main.screenshot().pngRepresentation
+        try? data.write(to: URL(fileURLWithPath: folder).appendingPathComponent("ios-\(name).png"))
+    }
+
+    private func signIn(_ app: XCUIApplication) {
+        let username = app.webViews.textFields["Username"]
+        XCTAssertTrue(username.waitForExistence(timeout: 60), "the sign-in form appears")
+        username.tap()
+        username.typeText("ada")
+        let password = app.webViews.secureTextFields["Password"]
+        password.tap()
+        password.typeText("correct horse battery\n")
+    }
+
+    func test1_FirstRunAsksForTheServer() {
+        let app = XCUIApplication()
+        // An empty address overrides any saved one, so this is always a first run.
+        app.launchArguments = ["-server", ""]
+        app.launch()
+        let field = app.textFields["Server address"]
+        XCTAssertTrue(field.waitForExistence(timeout: 30), "the server screen appears")
+        shot("1-server")
+        field.tap()
+        field.typeText("not a server\n")
+        XCTAssertTrue(
+            app.staticTexts["Could not reach not a server. Check the address and your connection."]
+                .waitForExistence(timeout: 2)
+                || app.staticTexts["Enter an address like chat.example.com. It has to use HTTPS."]
+                    .waitForExistence(timeout: 20),
+            "a bad address is refused")
+        field.tap()
+        field.clearAndType(server + "\n")
+        XCTAssertTrue(app.webViews.textFields["Username"].waitForExistence(timeout: 60), "the page loads")
+        shot("2-signin")
+    }
+
+    func test2_EverydayMessaging() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-server", server]
+        app.launch()
+        signIn(app)
+
+        let composer = app.webViews.textViews.firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 60), "the conversation opens")
+        shot("3-conversation")
+
+        composer.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 20), "the keyboard opens")
+        sleep(1)
+        XCTAssertLessThanOrEqual(composer.frame.maxY, keyboard.frame.minY, "the composer is above the keyboard")
+        shot("4-keyboard")
+
+        let words = "Hello from the iOS app"
+        composer.typeText(words + "\n")
+        let message = app.webViews.staticTexts[words]
+        XCTAssertTrue(message.waitForExistence(timeout: 30), "the message appears")
+        shot("5-sent")
+
+        // Touchscreens have no hover: a tap on the message shows its actions.
+        message.tap()
+        let react = app.webViews.buttons["Add a reaction"]
+        XCTAssertTrue(react.waitForExistence(timeout: 10), "a tap shows the actions")
+        shot("6-actions")
+
+        // Through a thread and out again.
+        app.webViews.buttons["Reply in thread"].tap()
+        let thread = app.webViews.staticTexts["Thread"]
+        XCTAssertTrue(thread.waitForExistence(timeout: 15), "the thread opens")
+        shot("7-thread")
+        app.webViews.buttons["Close the thread"].tap()
+
+        // Leaving and coming back, as a person does all day.
+        XCUIDevice.shared.press(.home)
+        sleep(3)
+        app.activate()
+        XCTAssertTrue(app.webViews.staticTexts[words].waitForExistence(timeout: 30), "the page survives leaving")
+        shot("8-back")
+    }
+}
+
+extension XCUIElement {
+    fileprivate func clearAndType(_ text: String) {
+        if let current = value as? String, !current.isEmpty {
+            typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))
+        }
+        typeText(text)
+    }
+}

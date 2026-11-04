@@ -200,7 +200,11 @@ pub(crate) fn account_menu(core: &ClientCore) -> String {
     }
     out.push_str("<button type=\"button\" role=\"menuitem\" data-action=\"account\" data-page=\"profile\"><span>Profile…</span><span class=\"muted\">Name and username</span></button>");
     out.push_str("<button type=\"button\" role=\"menuitem\" data-action=\"account\" data-page=\"security\"><span>Password &amp; security…</span><span class=\"muted\">Change your password</span></button>");
-    out.push_str("<hr><button type=\"button\" role=\"menuitem\" data-action=\"sign-out\">Sign out</button></div>");
+    out.push_str("<hr>");
+    if super::html::in_shell() {
+        out.push_str("<button type=\"button\" role=\"menuitem\" data-action=\"change-server\">Change server…</button>");
+    }
+    out.push_str("<button type=\"button\" role=\"menuitem\" data-action=\"sign-out\">Sign out</button></div>");
     out
 }
 

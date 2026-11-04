@@ -1,0 +1,139 @@
+name: mobile
+
+# Manual only, like ci. Builds the phone apps (D49) and runs each on an emulator or simulator against
+# a real server: mobile/android/test/e2e.mjs and mobile/ios/LazyUITests, with the system's real
+# keyboard, saving screenshots. Nothing is signed for release.
+#   gh workflow run mobile
+on:
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Build the app
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mobile-android
+          cache-on-failure: true
+      - name: Build the server and the web client
+        run: |
+          version=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
+          cargo install wasm-bindgen-cli --version "$version" --locked
+          cargo build -p lazy-server --profile fast
+          scripts/build-web.sh --dev target/web
+      - name: Start a real server on a fresh database
+        run: |
+          pg=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)
+          "$pg/initdb" -D "$RUNNER_TEMP/pg" -U lazy --auth=trust --encoding=UTF8 --locale=C.UTF-8 >/dev/null
+          "$pg/pg_ctl" -D "$RUNNER_TEMP/pg" -l "$RUNNER_TEMP/pg.log" -w -o "-p 54330 -k $RUNNER_TEMP" start
+          "$pg/createdb" -h 127.0.0.1 -p 54330 -U lazy lazy_mobile
+          nohup target/fast/lazy-server serve \
+            --database-url postgres://lazy@127.0.0.1:54330/lazy_mobile --listen 127.0.0.1:18194 \
+            --web-dir target/web --attachments-dir "$RUNNER_TEMP/attachments" --open-registration true \
+            >"$RUNNER_TEMP/server.log" 2>&1 &
+          for _ in $(seq 1 100); do curl -sf 127.0.0.1:18194/healthz >/dev/null && break; sleep 0.2; done
+          curl -sf -X POST 127.0.0.1:18194/v1/auth/register -H 'content-type: application/json' \
+            -d '{"username":"ada","display_name":"Ada Tester","password":"correct horse battery"}' >/dev/null
+      # This is what makes the emulator fast enough to run the web view at all.
+      - name: Let the emulator use hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          LAZY_SERVER: http://10.0.2.2:18194
+          LAZY_SHOTS: ${{ runner.temp }}/shots
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          script: |
+            adb install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
+            node mobile/android/test/e2e.mjs
+      - name: Server log on failure
+        if: failure()
+        run: tail -40 "$RUNNER_TEMP/server.log" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-screenshots
+          path: ${{ runner.temp }}/shots
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mobile-ios
+          cache-on-failure: true
+      - name: Build the server and the web client
+        run: |
+          version=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
+          cargo install wasm-bindgen-cli --version "$version" --locked
+          cargo build -p lazy-server --profile fast
+          scripts/build-web.sh --dev target/web
+      - name: Start a real server on a fresh database
+        run: |
+          brew install postgresql@16 xcodegen
+          pg="$(brew --prefix postgresql@16)/bin"
+          "$pg/initdb" -D "$RUNNER_TEMP/pg" -U lazy --auth=trust --encoding=UTF8 --locale=C >/dev/null
+          "$pg/pg_ctl" -D "$RUNNER_TEMP/pg" -l "$RUNNER_TEMP/pg.log" -w -o "-p 54330 -k $RUNNER_TEMP" start
+          "$pg/createdb" -h 127.0.0.1 -p 54330 -U lazy lazy_mobile
+          nohup target/fast/lazy-server serve \
+            --database-url postgres://lazy@127.0.0.1:54330/lazy_mobile --listen 127.0.0.1:18194 \
+            --web-dir target/web --attachments-dir "$RUNNER_TEMP/attachments" --open-registration true \
+            >"$RUNNER_TEMP/server.log" 2>&1 &
+          for _ in $(seq 1 100); do curl -sf 127.0.0.1:18194/healthz >/dev/null && break; sleep 0.2; done
+          curl -sf -X POST 127.0.0.1:18194/v1/auth/register -H 'content-type: application/json' \
+            -d '{"username":"ada","display_name":"Ada Tester","password":"correct horse battery"}' >/dev/null
+      - name: Generate the Xcode project
+        working-directory: mobile/ios
+        run: xcodegen generate
+      - name: Run on a simulator
+        working-directory: mobile/ios
+        run: |
+          mkdir -p "$RUNNER_TEMP/shots"
+          device=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          found = [d["name"] for runtime, ds in json.load(sys.stdin)["devices"].items() if "iOS" in runtime for d in ds if d["name"].startswith("iPhone")]
+          print(found[-1])')
+          echo "Simulator: $device"
+          TEST_RUNNER_LAZY_SERVER=http://127.0.0.1:18194 TEST_RUNNER_LAZY_SHOTS="$RUNNER_TEMP/shots" \
+            xcodebuild test -project Lazy.xcodeproj -scheme Lazy \
+            -destination "platform=iOS Simulator,name=$device" CODE_SIGNING_ALLOWED=NO -resultBundlePath "$RUNNER_TEMP/result.xcresult"
+      - name: Server log on failure
+        if: failure()
+        run: tail -40 "$RUNNER_TEMP/server.log" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-screenshots
+          path: ${{ runner.temp }}/shots

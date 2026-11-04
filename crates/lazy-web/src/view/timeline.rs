@@ -315,7 +315,11 @@ fn notice_row(
         esc(&words)
     );
     if live {
-        out.push_str(" <span class=\"muted\">Join from the Lazy app.</span>");
+        out.push_str(if super::html::in_shell() {
+            " <span class=\"muted\">Join from Lazy on a computer.</span>"
+        } else {
+            " <span class=\"muted\">Join from the Lazy app.</span>"
+        });
     }
     push!(
         out,
