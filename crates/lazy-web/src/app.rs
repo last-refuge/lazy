@@ -1726,40 +1726,6 @@ impl App {
         }
     }
 
-    /// A line break that reached a composer, which is how a phone's Send key can arrive: with iOS's
-    /// predictions showing it is reported as composing, so `on_key` leaves it. It comes out again,
-    /// and the words go.
-    fn on_line_break(self: &Rc<Self>, id: &str) {
-        let Some(area) = textarea(id) else { return };
-        let mut units: Vec<u16> = area.value().encode_utf16().collect();
-        let caret = area
-            .selection_start()
-            .ok()
-            .flatten()
-            .map_or(units.len(), |c| c as usize);
-        let newline = u16::from(b'\n');
-        let at = match caret.checked_sub(1) {
-            Some(before) if units.get(before) == Some(&newline) => before,
-            _ => match units.iter().rposition(|unit| *unit == newline) {
-                Some(last) => last,
-                None => return,
-            },
-        };
-        units.remove(at);
-        area.set_value(&String::from_utf16_lossy(&units));
-        let _ = area.set_selection_range(at as u32, at as u32);
-        self.typed(id);
-        let suggesting = self.ui.borrow().suggest.as_ref().map(|s| s.field);
-        if suggesting == Some(id) && self.suggest_key("Enter") {
-            return;
-        }
-        if id == "draft" {
-            self.send_composer();
-        } else {
-            self.send_reply();
-        }
-    }
-
     /// Keys. `true` when the key was used.
     fn on_key(self: &Rc<Self>, event: &KeyboardEvent, target: Option<&Element>) -> bool {
         let key = event.key();
@@ -2085,11 +2051,6 @@ fn report_window_active() {
     }
 }
 
-thread_local! {
-    /// Whether the last Enter pressed had Shift held, which a line break's event does not say.
-    static SHIFT_ENTER: Cell<bool> = const { Cell::new(false) };
-}
-
 /// Listens to the page: one listener per kind of event, for every element.
 fn listen() {
     let document = document();
@@ -2144,21 +2105,8 @@ fn listen() {
         "input",
         Box::new(|event: Event| {
             let Some(app) = app() else { return };
-            let Some(target) = event.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
-                return;
-            };
-            app.on_input(&target);
-            // Shift+Enter is how a line break is asked for.
-            let asked_for = SHIFT_ENTER.replace(false);
-            let line_break = event.dyn_ref::<web_sys::InputEvent>().is_some_and(|input| {
-                matches!(
-                    input.input_type().as_str(),
-                    "insertLineBreak" | "insertParagraph"
-                ) || (input.input_type() == "insertText" && input.data().as_deref() == Some("\n"))
-            });
-            let id = target.id();
-            if line_break && !asked_for && (id == "draft" || id == "thread-draft") {
-                app.on_line_break(&id);
+            if let Some(target) = event.target().and_then(|t| t.dyn_into::<Element>().ok()) {
+                app.on_input(&target);
             }
         }),
     );
@@ -2181,9 +2129,6 @@ fn listen() {
             let Ok(key) = event.clone().dyn_into::<KeyboardEvent>() else {
                 return;
             };
-            if key.key() == "Enter" {
-                SHIFT_ENTER.set(key.shift_key());
-            }
             let target = event.target().and_then(|t| t.dyn_into::<Element>().ok());
             if app.on_key(&key, target.as_ref()) {
                 event.prevent_default();

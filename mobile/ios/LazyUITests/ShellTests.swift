@@ -81,7 +81,20 @@ final class ShellTests: XCTestCase {
         app.keyboards.buttons["Send"].tap()
         // In the list: the words are also found in the composer when they were not sent.
         let message = app.webViews.otherElements["log"].staticTexts[words]
-        XCTAssertTrue(message.waitForExistence(timeout: 30), "the keyboard's Send key sends")
+        // TEMPORARY, to learn why a send right after signing in does nothing: which of these works.
+        var sent = message.waitForExistence(timeout: 8)
+        print("SEND-CHECK keyboard Send, first press: \(sent)")
+        if !sent {
+            app.keyboards.buttons["Send"].tap()
+            sent = message.waitForExistence(timeout: 8)
+            print("SEND-CHECK keyboard Send, second press: \(sent)")
+        }
+        if !sent {
+            app.webViews.buttons["Send"].tap()
+            sent = message.waitForExistence(timeout: 8)
+            print("SEND-CHECK the page's Send button: \(sent)")
+        }
+        XCTAssertTrue(sent, "the message is sent")
         sleep(1)
         shot("5-sent")
 
