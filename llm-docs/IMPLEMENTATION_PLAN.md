@@ -534,7 +534,7 @@ Goal: iOS and Android clients on the shared core that advance with the web clien
   - [ ] Compact call surface
   - [ ] Shared design tokens with adapted layouts
 - [ ] 7.5 iOS delivery
-  - [ ] Shell built (`mobile/ios`, D49)
+  - [X] Shell built (`mobile/ios`, D49; `scripts/ios.sh test` passed on a simulator, with the keyboard's Send key still open; see VERIFICATION.md)
   - [ ] Build, sign, and distribute test builds
   - [ ] Physical-device verification
 - [ ] 7.6 Android delivery
