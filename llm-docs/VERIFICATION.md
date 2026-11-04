@@ -655,3 +655,22 @@ Built and checked on the Coolify host with a user-local Rust 1.99.0 toolchain an
     - the change goes through, the fields empty, and Ada's other browser session is signed out;
     - only the new password signs in afterwards.
 - *Not checked:* a person changing their password on the deployed server; how a screen reader announces the page list.
+
+## Phone behavior in the web client (D49)
+
+- *Observed (2026-11-03):* the owner used the web client in their phone's browser and it worked well. This was before the changes below; which phone and browser was not recorded.
+- *Measured (2026-11-03, this Linux machine, Chromium emulating a 390x844 touchscreen, real server on the test Postgres, under the real content security policy):* `crates/lazy-web/tests/browser/phone.mjs`, run directly, passed all 23 checks:
+  - no sideways overflow;
+  - a tap shows a message's actions, under its text and inside the list, with 40px buttons and no shift in the text; another tap moves or hides them;
+  - a reaction can be added by touch, with the picker on screen;
+  - with a shorter window, the composer stays on screen, the header at the top, and the list at its newest message; the thread's composer also stays on screen;
+  - emulated safe-area insets reach the header and composer;
+  - the thread and the sidebar fit the screen;
+  - on a desktop-sized window, hover still shows the actions, a click picks nothing, and buttons stay under 40px.
+  - The screenshots were read. They showed the actions covering text, then Chromium's tap highlight, and both were fixed.
+  - `cargo test -p lazy-web`, `cargo clippy -p lazy-web` for both targets, and `cargo fmt --all --check` passed.
+- *Not checked:*
+  - a real phone with these changes: a real keyboard (a shorter window stands in for one), a real notch, and iOS Safari, including its page scrolling and zoom on focus;
+  - `scripts/test-web.sh` as a whole, including `flow.mjs` with these changes and running `phone.mjs` after it;
+  - VoiceOver and TalkBack: a tap on a message may not be reachable with a screen reader;
+  - a native shell of any kind, which is not built.

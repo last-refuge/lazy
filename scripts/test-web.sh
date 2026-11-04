@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Runs the web client's browser test (crates/lazy-web/tests/browser/flow.mjs): two people in
-# headless Chromium against a real server on a fresh database in the *test* Postgres (:54330).
+# Runs the web client's browser tests (crates/lazy-web/tests/browser/): flow.mjs, two people in
+# headless Chromium, then phone.mjs, the same client at phone size with a touchscreen, against a
+# real server on a fresh database in the *test* Postgres (:54330).
 #
 #   scripts/test-web.sh
 #
@@ -48,4 +49,8 @@ open(f"{sys.argv[1]}/notes.txt", "w").write("some notes\n")
 PY
 
 cp crates/lazy-web/tests/browser/flow.mjs "$PW/lazy-web-flow.mjs"
-LAZY_WEB_URL="http://127.0.0.1:$PORT" LAZY_WEB_FILES="$work" node "$PW/lazy-web-flow.mjs"
+cp crates/lazy-web/tests/browser/phone.mjs "$PW/lazy-web-phone.mjs"
+status=0
+LAZY_WEB_URL="http://127.0.0.1:$PORT" LAZY_WEB_FILES="$work" node "$PW/lazy-web-flow.mjs" || status=$?
+LAZY_WEB_URL="http://127.0.0.1:$PORT" node "$PW/lazy-web-phone.mjs" || status=$?
+exit "$status"

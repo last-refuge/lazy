@@ -32,6 +32,7 @@ web-sys = { version = "0.3", features = [
     "Url", "WebSocket", "Window", "Notification", "NotificationOptions", "NotificationPermission",
     "VisibilityState", "ScrollBehavior", "ScrollIntoViewOptions", "ScrollLogicalPosition",
     "DragEvent", "CssStyleDeclaration", "AddEventListenerOptions", "HtmlCollection",
+    "MediaQueryList", "Selection", "VisualViewport",
 ] }
 console_error_panic_hook = "0.1"
 

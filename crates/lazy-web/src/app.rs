@@ -1971,10 +1971,12 @@ fn place_popover(popover: &Element, anchor: Option<&Element>, width: i32, height
         .and_then(|w| w.inner_width().ok())
         .and_then(|v| v.as_f64())
         .unwrap_or(1024.0) as i32;
+    // What can be seen: a phone's keyboard covers the rest of the window.
     let view_h = window
         .as_ref()
-        .and_then(|w| w.inner_height().ok())
-        .and_then(|v| v.as_f64())
+        .and_then(|w| w.visual_viewport())
+        .map(|v| v.height())
+        .or_else(|| window.as_ref()?.inner_height().ok()?.as_f64())
         .unwrap_or(768.0) as i32;
     let (mut left, mut top) = (view_w / 2 - width / 2, view_h / 2 - height / 2);
     if let Some(anchor) = anchor {
@@ -2073,6 +2075,7 @@ fn listen() {
             } else if !in_popover {
                 app.close_popover();
             }
+            pick_message(target.as_ref());
         }),
     );
     on(
@@ -2221,6 +2224,100 @@ fn listen() {
         "visibilitychange",
         Box::new(|_: Event| report_window_active()),
     );
+    if let Some(viewport) = web_sys::window().and_then(|w| w.visual_viewport()) {
+        for kind in ["resize", "scroll"] {
+            on(viewport.as_ref(), kind, Box::new(|_: Event| fit_viewport()));
+        }
+        fit_viewport();
+    }
+}
+
+/// Keeps the page the size of what can be seen. A phone's keyboard covers the page without
+/// resizing it, so the composer would be under the keyboard; `--viewport-height` follows the part
+/// still showing. A list that was at its newest message stays there as it shrinks.
+fn fit_viewport() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Some(viewport) = window.visual_viewport() else {
+        return;
+    };
+    // Zooming in with two fingers also shrinks this viewport; the page must not follow that.
+    if viewport.scale() > 1.01 {
+        return;
+    }
+    // iOS scrolls the whole page to show a focused field, which would push the header off the top.
+    window.scroll_to_with_x_and_y(0.0, 0.0);
+    let Some(root) = document()
+        .document_element()
+        .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+    else {
+        return;
+    };
+    let height = format!("{}px", viewport.height());
+    let style = root.style();
+    if style
+        .get_property_value("--viewport-height")
+        .ok()
+        .as_deref()
+        == Some(height.as_str())
+    {
+        return;
+    }
+    let following: Vec<Element> = ["timeline", "thread-scroll"]
+        .into_iter()
+        .filter_map(by_id)
+        .filter(at_bottom)
+        .collect();
+    let _ = style.set_property("--viewport-height", &height);
+    for scroller in following {
+        scroller.set_scroll_top(scroller.scroll_height());
+    }
+}
+
+/// A touchscreen cannot hover, which is how a message's actions appear: a tap on a message shows
+/// them, and a tap on it again or anywhere else puts them away. Tapping something inside a message
+/// (a link, a reaction, one of the actions) does not count as tapping the message.
+fn pick_message(target: Option<&Element>) {
+    let touch = web_sys::window()
+        .and_then(|w| w.match_media("(hover: none)").ok().flatten())
+        .is_some_and(|query| query.matches());
+    if !touch {
+        return;
+    }
+    let Some(target) = target else { return };
+    let picked = document().query_selector(".msg.picked").ok().flatten();
+    let inside = |selector: &str| target.closest(selector).ok().flatten();
+    if inside("a, button, img, input, textarea").is_some() {
+        if inside(".msg.picked").is_none()
+            && let Some(picked) = picked
+        {
+            let _ = picked.class_list().remove_1("picked");
+        }
+        return;
+    }
+    // Finishing a text selection is not a tap.
+    let selecting = web_sys::window()
+        .and_then(|w| w.get_selection().ok().flatten())
+        .is_some_and(|selection| !selection.is_collapsed());
+    if selecting {
+        return;
+    }
+    let tapped = inside(".msg");
+    if let Some(picked) = &picked {
+        let _ = picked.class_list().remove_1("picked");
+    }
+    if let Some(tapped) = tapped
+        && picked.as_ref() != Some(&tapped)
+    {
+        let _ = tapped.class_list().add_1("picked");
+        // The newest message's actions open below the bottom of the list.
+        if let Ok(Some(actions)) = tapped.query_selector(".msg-actions") {
+            let options = web_sys::ScrollIntoViewOptions::new();
+            options.set_block(web_sys::ScrollLogicalPosition::Nearest);
+            actions.scroll_into_view_with_scroll_into_view_options(&options);
+        }
+    }
 }
 
 /// Scrolling does not bubble: the lists are listened to themselves, once each is on the page.

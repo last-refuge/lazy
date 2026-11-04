@@ -973,3 +973,31 @@ Goal: a person can find what they sign in with, and change their password, witho
 **Changing a password.** `PUT /v1/me/password` (`ChangePasswordRequest`: the current password and the new one; `204`). The server checks the current password (`invalid_credentials` if wrong), applies the registration length rules to the new one (`invalid_request`), stores its hash, and revokes every other session of the person in the same transaction, so a password changed because it leaked ends what the leak opened; the session that asked stays. Realtime connections of revoked sessions end on their next check. The core's `Input::ChangePassword` checks before sending (the current password is given, the new one follows the rules, the confirmation matches, the new one differs), sends once (a repeat after a change that went through would be refused, its current password being the old one), words a wrong current password plainly, and leaves a notice on success. Its `Debug` shows nothing of the passwords. The protocol stays at 14: the route and the request are additions.
 
 **Sign-in is forgiving about the name.** The core trims spaces and a leading `@` from the username before sign-in (case was already ignored), since people write it as it appears in a mention.
+
+## D49. Phone clients: the web client in a native shell
+
+Goal: iOS and Android clients that advance with the web client, so a feature added there reaches phones without being built again. This changes the requirement in `PLAN.md` that phones be native GPUI clients; the owner decided it on 2026-11-03.
+
+**The decision.** A thin native shell per platform, whose web view loads `https://<server>/web/`. Screens and application logic stay in `lazy-web`, which already runs `lazy-client-core`, so a deploy of the web client reaches phones with no store release. The shell holds only what a page cannot do: the server address, the no-connection screen, push registration, sharing, and deep links.
+
+**Why not the others.**
+- *GPUI.* The pinned revision has `gpui_ios` but no Android backend, so Android would be a backend to build and keep up.
+- *SwiftUI and Compose on the core.* The best-feeling option and the fallback if a shell proves not good enough, but every screen is built twice more, which is what this decision exists to avoid. The push work and the core carry over.
+- *React Native.* Suits a TypeScript codebase. Lazy's shared code is Rust, so it needs the same bridge as native, without native's advantage.
+
+**Evidence so far.** The owner used the web client in their phone's browser on 2026-11-03 and it worked well (before the changes below). That says a phone browser is good enough, not yet that a shell is.
+
+**Phone behavior in the web client (done).** All in `lazy-web`. Desktop browsers behave as before: the touch rules apply only under `hover: none`, and the safe-area values are zero there. The one visible change is that reaction chips now use the buttons' square corners everywhere on the web.
+- *The keyboard.* A phone's keyboard covers the page without resizing it, so `--viewport-height` follows the visual viewport. A list at its newest message stays there, and two-finger zoom does not shrink the page.
+- *Safe areas.* `viewport-fit=cover`, with `env(safe-area-inset-*)` on the header, sidebar, composer, and thread.
+- *Message actions.* Nothing hovers on a touchscreen, so a tap on a message shows its actions, under the text so they cover nothing; a tap on it again or elsewhere puts them away.
+- *Sizes.* Controls are at least 40px tall (reactions 32px), and fields are 16px because iOS zooms the page into anything smaller.
+
+**The rule that keeps it true.** Phone behavior goes in `lazy-web`, never in a shell. `crates/lazy-web/tests/browser/phone.mjs`, run by `scripts/test-web.sh`, checks the client at phone size. The shell's native abilities change only with a store release, so the page must check what its shell supports before using one.
+
+**Still open.**
+- *The push relay.* A push worker has to be built (`notification::decide` already says who is notified). Apple and Google credentials belong to whoever publishes the app, and a server someone else runs cannot safely hold them, so servers send through a relay the publisher runs. The push should carry no message content, or only encrypted content, with the phone fetching the message.
+- *Several servers.* The page talks only to the server it was loaded from, so each server needs its own web view.
+- *App Store review.* Apple may reject an app that is mostly a website. Native push and sharing help, but approval is not assured; check the current rules before investing in the iOS shell.
+- *Storage.* The journal of unsent messages is in `localStorage`; test whether the system can clear it in a web view, and suspend and resume.
+- *Drop-ins.* The web client has none, and "join from the Lazy app" means nothing on a phone. They would be a native screen on the all-Rust media crates (D39), and are later work.
