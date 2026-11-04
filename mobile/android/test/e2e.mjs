@@ -1,7 +1,7 @@
 // The Android app on a booted emulator with the debug APK installed, against a real server that has
 // a person `ada`: real taps and the real back button through adb, with the page read over the debug
 // build's DevTools port. Each check prints ok or FAIL; the exit code is the number that failed.
-//   LAZY_SERVER=http://10.0.2.2:18194 node mobile/android/test/e2e.mjs
+//   scripts/android.sh test
 // LAZY_SLOW stretches every wait, for an emulator without hardware acceleration.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -103,16 +103,18 @@ adb("forward", "--remove-all");
 adb("shell", "pm", "clear", app);
 adb("shell", "am", "start", "-n", `${app}/.MainActivity`);
 const field = await native("Server address");
-const button = await native("CONNECT");
 check("first run asks for the server", true);
 tapAt(field.x, field.y);
 await pause(1000);
 adb("shell", "input", "text", "not%sa%sserver");
+// A keyboard opening moves the button, so it is looked for after typing.
+let button = await native("CONNECT");
 tapAt(button.x, button.y);
 await until("a refusal", () => nodes().some((n) => /Could not reach|Enter an address/.test(n.text)), 40);
 check("a bad address is refused", true);
 press("KEYCODE_MOVE_END", ...Array(14).fill("KEYCODE_DEL"));
 adb("shell", "input", "text", server);
+button = await native("CONNECT");
 tapAt(button.x, button.y);
 
 // ----- The page -----

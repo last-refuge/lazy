@@ -19,6 +19,7 @@
     <key>NSAllowsLocalNetworking</key><true/>
   </dict>
   <key>NSCameraUsageDescription</key><string>Lazy uses the camera when you take a picture or video to send.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>Lazy connects to a server on your local network when you give it that address.</string>
   <key>NSMicrophoneUsageDescription</key><string>Lazy uses the microphone when you record a video to send.</string>
   <key>UIApplicationSceneManifest</key>
   <dict>

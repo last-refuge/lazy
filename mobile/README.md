@@ -25,30 +25,27 @@ version in the user agent before relying on one.
 
 ## Android
 
-Needs JDK 17 or later and the Android SDK (`ANDROID_HOME`), API 36.
+On Linux, `scripts/android.sh` installs the JDK, SDK, and emulator it needs under `~/.local/lazy-tools`.
+It uses a plugged-in phone (USB debugging on) or an emulator, which needs hardware acceleration.
 
 ```sh
-cd mobile/android
-./gradlew assembleDebug    # app/build/outputs/apk/debug/app-debug.apk
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+scripts/android.sh test             # the whole test, on its own test server
+scripts/mobile-server.sh            # or a test server to try the app by hand, in one terminal...
+scripts/android.sh try http://127.0.0.1:18194    # ...and the app, in another
 ```
 
-Debug builds also accept plain HTTP and a starting server, for testing against a machine's own
-server (from an emulator, that machine is `10.0.2.2`):
-
-```sh
-adb shell am start -n io.github.last_refuge.lazy/.MainActivity --es server http://10.0.2.2:8080
-```
+Debug builds also accept plain HTTP and a starting server, as above. The script makes the
+computer's port reachable on the device, so `127.0.0.1` means the computer.
 
 ## iOS
 
-Needs a Mac with Xcode and [XcodeGen](https://github.com/yonaskolb/XcodeGen). The Xcode project is
-generated from `ios/project.yml` and is not checked in.
+Needs a Mac with Xcode and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
+The Xcode project is generated from `ios/project.yml` and is not checked in.
 
 ```sh
-cd mobile/ios
-brew install xcodegen && xcodegen generate
-open Lazy.xcodeproj
+scripts/ios.sh test             # the whole test on a simulator, on its own test server
+scripts/ios.sh open             # or generate the project and open it in Xcode
+scripts/mobile-server.sh --lan  # a test server a real iPhone can reach
 ```
 
 To run on a device, choose your team under Signing & Capabilities. Debug builds accept plain HTTP.
