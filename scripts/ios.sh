@@ -25,10 +25,12 @@ case "${1:-}" in
     open mobile/ios/Lazy.xcodeproj
     ;;
   test)
-    device="$(xcrun simctl list devices available -j | python3 -c '
-import json, sys
-found = [d["name"] for runtime, ds in json.load(sys.stdin)["devices"].items() if "iOS" in runtime for d in ds if d["name"].startswith("iPhone")]
-print(found[-1] if found else "")')"
+    # An iPhone on the newest iOS, by id: given only a name, xcodebuild looks on the newest iOS alone.
+    picked="$(xcrun simctl list devices available -j | python3 -c '
+import json, re, sys
+found = [(tuple(map(int, re.findall(r"\d+", runtime))), d["name"], d["udid"]) for runtime, ds in json.load(sys.stdin)["devices"].items() if "iOS" in runtime for d in ds if d["name"].startswith("iPhone")]
+print("|".join(max(found, key=lambda f: f[0])[1:]) if found else "")')"
+    device="${picked%%|*}"
     [[ -n "$device" ]] || { echo "No iPhone simulator is installed. Add one in Xcode: Settings, Components (or run: xcodebuild -downloadPlatform iOS)." >&2; exit 1; }
     scripts/mobile-server.sh &
     server_pid=$!
@@ -46,7 +48,7 @@ print(found[-1] if found else "")')"
     echo "== Testing on: $device"
     (cd mobile/ios && TEST_RUNNER_LAZY_SERVER="http://127.0.0.1:$PORT" TEST_RUNNER_LAZY_SHOTS="$shots" \
       xcodebuild test -project Lazy.xcodeproj -scheme Lazy \
-      -destination "platform=iOS Simulator,name=$device" CODE_SIGNING_ALLOWED=NO)
+      -destination "platform=iOS Simulator,id=${picked##*|}" CODE_SIGNING_ALLOWED=NO)
     echo "Screenshots: $shots"
     ;;
   *)
