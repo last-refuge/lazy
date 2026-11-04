@@ -75,6 +75,8 @@ start_emulator() { # with a window ("window") or without
     echo "Fix it with: sudo usermod -aG kvm \"\$USER\", then log in again. Or plug in a phone with USB debugging on." >&2
     exit 1
   fi
+  # Without this folder, avdmanager succeeds but puts the device where the emulator will not look.
+  mkdir -p "$ANDROID_AVD_HOME"
   avdmanager list avd 2>/dev/null | grep -q "Name: $AVD\$" ||
     echo no | avdmanager create avd -n "$AVD" -k "$IMAGE" -d pixel_6 --force >/dev/null
   local flags=(-avd "$AVD" -no-audio -no-boot-anim -no-snapshot)
