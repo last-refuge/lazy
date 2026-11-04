@@ -43,9 +43,21 @@ function nodes() {
   });
 }
 const tapAt = (x, y) => adb("shell", "input", "tap", String(Math.round(x)), String(Math.round(y)));
-const native = (text) => until(`"${text}" on screen`, () => nodes().find((n) => n.text === text || n.desc === text));
+// Ignores case: the system theme decides whether a button's label is in capitals, so it varies by device.
+const native = (text) => until(`"${text}" on screen`, () => nodes().find((n) => [n.text, n.desc].some((t) => t.toLowerCase() === text.toLowerCase())));
 const appOnTop = () => (adb("shell", "dumpsys", "activity", "activities").match(/topResumedActivity=.*/)?.[0] ?? "").includes(app);
 const press = (...keys) => adb("shell", "input", "keyevent", ...keys);
+
+// A stopped run says what was on the device, which goes away with the emulator.
+process.on("uncaughtException", (error) => {
+  try {
+    console.log("On screen:", nodes().map((n) => n.text || n.desc).filter(Boolean).join(" | "));
+    writeFileSync(`${shots}/android-stopped.png`, execFileSync("adb", ["exec-out", "screencap", "-p"], { timeout: 30000, maxBuffer: 1 << 26, stdio: ["ignore", "pipe", "ignore"] }));
+    console.log(`Screenshot: ${shots}/android-stopped.png`);
+  } catch {}
+  console.error(error);
+  process.exit(1);
+});
 
 // ----- The page, over the debug port (Playwright cannot attach to a web view this way) -----
 async function connect() {
@@ -108,13 +120,13 @@ tapAt(field.x, field.y);
 await pause(1000);
 adb("shell", "input", "text", "not%sa%sserver");
 // A keyboard opening moves the button, so it is looked for after typing.
-let button = await native("CONNECT");
+let button = await native("Connect");
 tapAt(button.x, button.y);
 await until("a refusal", () => nodes().some((n) => /Could not reach|Enter an address/.test(n.text)), 40);
 check("a bad address is refused", true);
 press("KEYCODE_MOVE_END", ...Array(14).fill("KEYCODE_DEL"));
 adb("shell", "input", "text", server);
-button = await native("CONNECT");
+button = await native("Connect");
 tapAt(button.x, button.y);
 
 // ----- The page -----
