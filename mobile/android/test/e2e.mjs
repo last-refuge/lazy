@@ -184,8 +184,11 @@ check("a real tap on a message shows its actions", await finds("the actions", ()
 await page.save("3-actions");
 
 // ----- The back button -----
+const beforeThread = await page.run("innerHeight");
 await page.tap(".msg.picked [data-action=open-thread]", top);
 await until("the thread", () => page.shows("#thread-draft"), 40);
+await pause(1000);
+check("opening a thread leaves the keyboard closed", (await page.run("innerHeight")) >= beforeThread - 1);
 await page.save("4-thread");
 press("KEYCODE_BACK");
 check("the back button closes the thread", (await finds("the thread to close", async () => !(await page.shows("#thread-draft")), 40)) && appOnTop());

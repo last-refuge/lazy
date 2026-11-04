@@ -560,7 +560,10 @@ impl App {
             if let Some(draft) = textarea("thread-draft") {
                 draft.set_value(core.thread_draft(root));
                 autosize(&draft);
-                let _ = draft.focus();
+                // On a phone this would raise the keyboard over the thread just opened to read.
+                if !is_narrow() {
+                    let _ = draft.focus();
+                }
             }
         } else if let Some(draft) = textarea("thread-draft")
             && draft.value() != core.thread_draft(root)

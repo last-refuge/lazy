@@ -96,6 +96,7 @@ if (insets) {
 await last.locator(".msg-text").tap();
 await last.locator(".msg-actions [data-action=open-thread]").tap();
 await p.waitForSelector("#thread-draft");
+check("opening a thread does not raise the keyboard", (await p.evaluate(() => document.activeElement?.id)) !== "thread-draft");
 const th = await p.locator(".thread").boundingBox();
 check("thread covers the screen", th.x === 0 && th.width === 390 && th.height === 844, JSON.stringify(th));
 await p.screenshot({ path: `${out}/phone-6-thread.png` });
