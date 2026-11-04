@@ -166,6 +166,8 @@ if (adb("shell", "ime", "list", "-s").trim()) {
   await page.save("2b-keyboard");
   adb("shell", "input", "text", "typed%son%sthe%skeyboard");
   check("the keyboard types into the composer", await finds("the text", () => page.run(`document.querySelector("#draft").value === "typed on the keyboard"`), 30));
+  press("KEYCODE_ENTER");
+  check("the Enter key sends", await finds("the typed message", () => page.run(`[...document.querySelectorAll("#rows .msg")].some((m) => m.textContent.includes("typed on the keyboard")) && document.querySelector("#draft").value === ""`), 30));
   press("KEYCODE_BACK");
   await finds("the keyboard to close", () => page.run(`innerHeight >= ${tall} - 1`), 30);
   check("the back button closes the keyboard, not the app", appOnTop());

@@ -78,8 +78,10 @@ final class ShellTests: XCTestCase {
 
         let words = "Hello from the iOS app"
         composer.typeText(words + "\n")
-        let message = app.webViews.staticTexts[words]
-        XCTAssertTrue(message.waitForExistence(timeout: 30), "the message appears")
+        // In the list: the words are also found in the composer when they were not sent.
+        let message = app.webViews.otherElements["log"].staticTexts[words]
+        XCTAssertTrue(message.waitForExistence(timeout: 30), "the keyboard's Send key sends")
+        sleep(1)
         shot("5-sent")
 
         // Touchscreens have no hover: a tap on the message shows its actions.
@@ -99,7 +101,7 @@ final class ShellTests: XCTestCase {
         XCUIDevice.shared.press(.home)
         sleep(3)
         app.activate()
-        XCTAssertTrue(app.webViews.staticTexts[words].waitForExistence(timeout: 30), "the page survives leaving")
+        XCTAssertTrue(message.waitForExistence(timeout: 30), "the page survives leaving")
         shot("8-back")
     }
 }

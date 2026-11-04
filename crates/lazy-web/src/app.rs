@@ -1726,6 +1726,24 @@ impl App {
         }
     }
 
+    /// A line break about to go into a composer, which is how a phone's Send key arrives: iOS can
+    /// report Return with the code for composing, so `on_key` leaves it. `true` when it was used.
+    fn on_line_break(self: &Rc<Self>, id: &str) -> bool {
+        if id != "draft" && id != "thread-draft" {
+            return false;
+        }
+        let suggesting = self.ui.borrow().suggest.as_ref().map(|s| s.field);
+        if suggesting == Some(id) && self.suggest_key("Enter") {
+            return true;
+        }
+        if id == "draft" {
+            self.send_composer();
+        } else {
+            self.send_reply();
+        }
+        true
+    }
+
     /// Keys. `true` when the key was used.
     fn on_key(self: &Rc<Self>, event: &KeyboardEvent, target: Option<&Element>) -> bool {
         let key = event.key();
@@ -2051,6 +2069,11 @@ fn report_window_active() {
     }
 }
 
+thread_local! {
+    /// Whether the last Enter pressed had Shift held, which a line break's event does not say.
+    static SHIFT_ENTER: Cell<bool> = const { Cell::new(false) };
+}
+
 /// Listens to the page: one listener per kind of event, for every element.
 fn listen() {
     let document = document();
@@ -2129,8 +2152,38 @@ fn listen() {
             let Ok(key) = event.clone().dyn_into::<KeyboardEvent>() else {
                 return;
             };
+            if key.key() == "Enter" {
+                SHIFT_ENTER.set(key.shift_key());
+            }
             let target = event.target().and_then(|t| t.dyn_into::<Element>().ok());
             if app.on_key(&key, target.as_ref()) {
+                event.prevent_default();
+            }
+        }),
+    );
+    on(
+        document.as_ref(),
+        "beforeinput",
+        Box::new(|event: Event| {
+            let Some(app) = app() else { return };
+            let Ok(input) = event.clone().dyn_into::<web_sys::InputEvent>() else {
+                return;
+            };
+            // Shift+Enter is how a line break is asked for.
+            let asked_for = SHIFT_ENTER.replace(false);
+            let line_break = matches!(
+                input.input_type().as_str(),
+                "insertLineBreak" | "insertParagraph"
+            );
+            if !line_break || asked_for || input.is_composing() {
+                return;
+            }
+            let id = event
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .map(|t| t.id())
+                .unwrap_or_default();
+            if app.on_line_break(&id) {
                 event.prevent_default();
             }
         }),

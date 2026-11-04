@@ -36,6 +36,13 @@ check("--viewport-height set under the real CSP", (await p.evaluate(() => docume
 const sent = await p.locator("#rows .msg").count();
 for (let i = 1; i <= 24; i++) { await p.fill("#draft", `Message number ${i} with enough words to look like a real line of chat on a phone screen`); await p.keyboard.press("Enter"); await p.waitForFunction((n) => document.querySelectorAll("#rows .msg").length >= n, sent + i); }
 await p.locator("#rows .msg:not(.pending)").last().waitFor();
+// A phone's Send key: iOS can report Return with the code for composing, so the line break is what sends.
+const lineBreak = (extra) => p.evaluate((extra) => !document.querySelector("#draft").dispatchEvent(new InputEvent("beforeinput", { inputType: "insertLineBreak", bubbles: true, cancelable: true, ...extra })), extra);
+await p.fill("#draft", "Sent with the Send key");
+check("mid-composition a line break does not send", !(await lineBreak({ isComposing: true })) && (await p.inputValue("#draft")) === "Sent with the Send key");
+check("the keyboard's Send key takes the line break", await lineBreak({}));
+await p.locator("#rows .msg:not(.pending)", { hasText: "Sent with the Send key" }).waitFor({ timeout: 10000 });
+check("the keyboard's Send key sends and empties the box", (await p.inputValue("#draft")) === "");
 await p.evaluate(() => { const t = document.getElementById("timeline"); t.scrollTop = t.scrollHeight; });
 await p.waitForTimeout(200);
 const metrics = () => p.evaluate(() => { const t = document.getElementById("timeline"); const r = (s) => document.querySelector(s)?.getBoundingClientRect(); return { vw: innerWidth, sw: document.documentElement.scrollWidth, scrollY, bottomGap: t.scrollHeight - t.scrollTop - t.clientHeight, composerBottom: r(".composer-wrap")?.bottom, headerTop: r(".header")?.top }; });
@@ -190,6 +197,12 @@ await d.fill("input[name=username]", "pat");
 await d.fill("input[name=password]", password);
 await d.click("#signin-submit");
 await d.waitForSelector("#rows .msg", { timeout: 15000 });
+await d.fill("#draft", "Two lines");
+await d.locator("#draft").press("Shift+Enter");
+check("desktop: Shift+Enter makes a line break", (await d.inputValue("#draft")) === "Two lines\n");
+await d.locator("#draft").press("Enter");
+await d.locator("#rows .msg:not(.pending)", { hasText: "Two lines" }).waitFor({ timeout: 10000 });
+check("desktop: Enter sends", (await d.inputValue("#draft")) === "");
 const row = d.locator("#rows .msg").last();
 await row.hover();
 check("desktop: hover shows actions", await row.locator(".msg-actions").isVisible());
