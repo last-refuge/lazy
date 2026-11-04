@@ -25,6 +25,8 @@ p.on("pageerror", (e) => check("page error", false, e.message));
 p.on("console", (m) => { if (/Content Security|violat/i.test(m.text())) check("CSP", false, m.text()); });
 p.on("dialog", (d) => d.accept());
 await p.goto(base + "/");
+await p.waitForSelector("input[name=username]");
+check("the username field is named only by its label", (await p.getByRole("textbox", { name: "Username", exact: true }).count()) === 1);
 await p.fill("input[name=username]", "pia");
 await p.fill("input[name=password]", password);
 await p.tap("#signin-submit");

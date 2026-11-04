@@ -38,7 +38,8 @@ pub(crate) fn form(core: &ClientCore, registering: bool) -> String {
         out.push_str("<p class=\"switch\">Have an account? <button type=\"button\" class=\"link\" data-action=\"show-sign-in\">Sign in</button></p>");
     } else {
         out.push_str("<h1>Sign in</h1><form id=\"signin-form\" autocomplete=\"on\">");
-        out.push_str("<label>Username<input name=\"username\" autocomplete=\"username\" required autocapitalize=\"none\" spellcheck=\"false\" autofocus aria-describedby=\"username-hint\"><span class=\"field-hint\" id=\"username-hint\">The name you chose when you joined. In the Lazy app, click your name at the bottom left: it is under Profile.</span></label>");
+        // The hint stays outside the label, or it becomes part of the field's name for screen readers.
+        out.push_str("<div class=\"field\"><label>Username<input name=\"username\" autocomplete=\"username\" required autocapitalize=\"none\" spellcheck=\"false\" autofocus aria-describedby=\"username-hint\"></label><span class=\"field-hint\" id=\"username-hint\">The name you chose when you joined. In the Lazy app, click your name at the bottom left: it is under Profile.</span></div>");
         out.push_str("<label>Password<input name=\"password\" type=\"password\" autocomplete=\"current-password\" required></label>");
         out.push_str("<div id=\"signin-status\" class=\"form-status\" role=\"status\"></div>");
         out.push_str("<button type=\"submit\" class=\"primary wide\" id=\"signin-submit\">Sign in</button></form>");

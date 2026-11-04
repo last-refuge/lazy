@@ -16,6 +16,17 @@ final class ShellTests: XCTestCase {
         try? data.write(to: URL(fileURLWithPath: folder).appendingPathComponent("ios-\(name).png"))
     }
 
+    // A failed run says what was on screen, which goes away with the simulator.
+    private var reporting = false
+    override func record(_ issue: XCTIssue) {
+        if !reporting {
+            reporting = true
+            print("On screen:\n\(XCUIApplication().debugDescription)")
+            shot("stopped-" + (name.contains("test1") ? "first-run" : "messaging"))
+        }
+        super.record(issue)
+    }
+
     private func signIn(_ app: XCUIApplication) {
         let username = app.webViews.textFields["Username"]
         XCTAssertTrue(username.waitForExistence(timeout: 60), "the sign-in form appears")

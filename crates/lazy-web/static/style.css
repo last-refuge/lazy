@@ -84,7 +84,7 @@ button.small, .dlg-buttons button:not(.primary) {
 .signin .brand { text-align: center; margin-bottom: 4px; }
 .signin h1 { font-size: 20px; text-align: center; margin: 0 0 18px; }
 .signin form, .stack { display: flex; flex-direction: column; gap: 12px; }
-.signin label, .stack label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 13px; }
+.signin label, .stack label, .field { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 13px; }
 .signin input, .stack input:not([type=checkbox]), .dialog input[type=search] {
   border: 1px solid var(--border-strong); border-radius: var(--radius-small); padding: 9px 10px;
   background: var(--surface); font-weight: 400; font-size: 15px; width: 100%;
