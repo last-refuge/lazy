@@ -157,7 +157,7 @@ fn row(
         return notice_row(core, clock, conversation, item, notice, author);
     }
 
-    let mut classes = vec!["row"];
+    let mut classes = vec!["msg"];
     if grouped {
         classes.push("grouped");
     }
@@ -188,11 +188,11 @@ fn row(
             avatar(core, item.author_id, "")
         );
     }
-    out.push_str("<div class=\"body\">");
+    out.push_str("<div class=\"msg-body\">");
     if !grouped {
         push!(
             out,
-            "<div class=\"meta\"><span class=\"author\">{}</span>",
+            "<div class=\"msg-meta\"><span class=\"msg-author\">{}</span>",
             esc(author)
         );
         if core.member(item.author_id).is_some_and(|user| user.is_bot) {
@@ -208,7 +208,7 @@ fn row(
     }
 
     if item.deleted {
-        out.push_str("<div class=\"content deleted\">This message was deleted.</div>");
+        out.push_str("<div class=\"msg-text deleted\">This message was deleted.</div>");
     } else if !item.document.has_no_content() {
         let mut content = document::document(&ctx, &item.document);
         if item.is_edited() {
@@ -219,7 +219,7 @@ fn row(
                 None => content.push_str(mark),
             }
         }
-        push!(out, "<div class=\"content\">{content}</div>");
+        push!(out, "<div class=\"msg-text\">{content}</div>");
     }
     if item.in_channel && place == Place::Conversation && item.thread_root.is_some() {
         out.push_str("<div class=\"replied\">Replied to a thread</div>");
@@ -304,7 +304,7 @@ fn notice_row(
     let live = notice.as_drop_in().is_some_and(|d| d.is_live());
     push!(
         out,
-        "<div class=\"row notice{}\"><span class=\"notice-mark\">{}</span><div class=\"body\"><span class=\"author\">{}</span> {}",
+        "<div class=\"msg notice{}\"><span class=\"notice-mark\">{}</span><div class=\"msg-body\"><span class=\"msg-author\">{}</span> {}",
         if live { " live" } else { "" },
         if notice.as_drop_in().is_some() {
             "<span class=\"dot online\"></span>"
@@ -330,7 +330,7 @@ fn files(item: &TimelineItem) -> String {
         return String::new();
     }
     let confirmed = item.is_confirmed();
-    let mut out = String::from("<div class=\"files\">");
+    let mut out = String::from("<div class=\"msg-files\">");
     for file in &item.attachments {
         let url = paths::attachment(file.id);
         if confirmed && file.has_thumbnail && file.media_type.starts_with("image/") {
@@ -475,7 +475,7 @@ fn reactions(
         return String::new();
     }
     let can_react = core.can_react_message(conversation, message);
-    let mut out = String::from("<div class=\"reactions\">");
+    let mut out = String::from("<div class=\"msg-reactions\">");
     for reaction in &item.reactions {
         if reaction.users.is_empty() {
             continue;
@@ -537,7 +537,7 @@ fn actions(
             ("msg", &message.to_string()),
         ])
     };
-    let mut out = String::from("<div class=\"actions\">");
+    let mut out = String::from("<div class=\"msg-actions\">");
     if core.can_react_message(conversation, message) {
         push!(
             out,
@@ -667,7 +667,7 @@ mod tests {
         assert!(!all.contains("<b>again"));
         let grouped = html
             .iter()
-            .filter(|row| row.contains("row grouped"))
+            .filter(|row| row.contains("msg grouped"))
             .count();
         assert_eq!(
             grouped, 1,

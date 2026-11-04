@@ -43,19 +43,19 @@ await step("Ada sends; Bob sees it live", async () => {
   await rows(bob).getByText("ship the web client").waitFor({ timeout: 8000 });
 });
 await step("Bob reacts with the picker; Ada sees it", async () => {
-  const row = bob.locator(".row", { hasText: "ship the web client" });
+  const row = bob.locator(".msg", { hasText: "ship the web client" });
   await row.hover();
-  await row.locator(".actions [data-action=react]").click();
+  await row.locator(".msg-actions [data-action=react]").click();
   await bob.fill("#picker-q", "thumbs up");
   await bob.locator("#picker-body .pick").first().click();
-  await ada.locator(".row", { hasText: "ship the web client" }).locator(".reaction").first().waitFor({ timeout: 8000 });
-  const text = await ada.locator(".row", { hasText: "ship the web client" }).locator(".reaction").first().textContent();
+  await ada.locator(".msg", { hasText: "ship the web client" }).locator(".reaction").first().waitFor({ timeout: 8000 });
+  const text = await ada.locator(".msg", { hasText: "ship the web client" }).locator(".reaction").first().textContent();
   if (!text.includes("1")) throw new Error("reaction count: " + text);
 });
 await step("Ada replies in a thread; Bob sees the reply count", async () => {
-  const row = ada.locator(".row", { hasText: "ship the web client" });
+  const row = ada.locator(".msg", { hasText: "ship the web client" });
   await row.hover();
-  await row.locator(".actions [data-action=open-thread]").click();
+  await row.locator(".msg-actions [data-action=open-thread]").click();
   await ada.waitForSelector("#thread:not([hidden])");
   await ada.fill("#thread-draft", "first step: the server serves it");
   await ada.keyboard.press("Enter");
@@ -65,13 +65,13 @@ await step("Ada replies in a thread; Bob sees the reply count", async () => {
   await ada.click("[data-action=close-thread]");
 });
 await step("Ada edits her message; Bob sees (edited)", async () => {
-  const row = ada.locator("#rows .row", { hasText: "ship the web client" });
+  const row = ada.locator("#rows .msg", { hasText: "ship the web client" });
   await row.hover();
-  await row.locator(".actions [data-action=edit]").click();
+  await row.locator(".msg-actions [data-action=edit]").click();
   await ada.waitForFunction(() => document.querySelector("#draft").value.includes("ship the web client"));
   await ada.fill("#draft", "Plan for **today**: ship the web client, then test it");
   await ada.keyboard.press("Enter");
-  await bob.locator("#rows .row", { hasText: "then test it" }).locator(".edited").waitFor({ timeout: 8000 });
+  await bob.locator("#rows .msg", { hasText: "then test it" }).locator(".edited").waitFor({ timeout: 8000 });
 });
 await step("Bob starts a DM with Ada; Ada sees it with a presence dot", async () => {
   await bob.click("[data-action=new-message]");
@@ -97,9 +97,9 @@ await step("Ada sends an image and a file; Bob sees the thumbnail and the file",
   await ada.fill("#draft", "two files");
   await ada.keyboard.press("Enter");
   await bob.locator("#sidebar .conv", { hasText: "general" }).click();
-  await bob.locator(".row", { hasText: "two files" }).locator(".files img").waitFor({ timeout: 10000 });
-  await bob.locator(".row", { hasText: "two files" }).locator("a.file", { hasText: "notes.txt" }).waitFor();
-  const loaded = await bob.locator(".row", { hasText: "two files" }).locator(".files img").evaluate((img) => img.complete && img.naturalWidth > 0);
+  await bob.locator(".msg", { hasText: "two files" }).locator(".msg-files img").waitFor({ timeout: 10000 });
+  await bob.locator(".msg", { hasText: "two files" }).locator("a.file", { hasText: "notes.txt" }).waitFor();
+  const loaded = await bob.locator(".msg", { hasText: "two files" }).locator(".msg-files img").evaluate((img) => img.complete && img.naturalWidth > 0);
   if (!loaded) throw new Error("thumbnail did not load");
   await bob.screenshot({ path: `${shots}/12-files.png` });
 });
@@ -147,7 +147,7 @@ await step("Suggestions: @mention and :emoji complete in the composer", async ()
   if (value !== "hey @bob nice 🎉") throw new Error("composer holds: " + JSON.stringify(value));
   await ada.keyboard.press("Enter");
   await bob.locator("#sidebar .conv", { hasText: "general" }).click();
-  await bob.locator("#rows .row.mentioned", { hasText: "nice 🎉" }).waitFor({ timeout: 8000 });
+  await bob.locator("#rows .msg.mentioned", { hasText: "nice 🎉" }).waitFor({ timeout: 8000 });
 });
 await step("Bob sets the topic of #plans from the channel menu", async () => {
   await bob.locator("#sidebar .conv", { hasText: "plans" }).click();
@@ -174,9 +174,9 @@ await step("Notifications: offered only without permission, and Turn on asks the
 });
 await step("Ada deletes a message; Bob no longer sees it", async () => {
   await ada.locator("#sidebar .conv", { hasText: "plans" }).click();
-  const row = ada.locator(".row", { hasText: "welcome to plans" });
+  const row = ada.locator(".msg", { hasText: "welcome to plans" });
   await row.hover();
-  await row.locator(".actions [data-action=delete]").click();
+  await row.locator(".msg-actions [data-action=delete]").click();
   await rows(bob).getByText("welcome to plans").waitFor({ state: "detached", timeout: 8000 });
 });
 await step("Unread: Bob's message to #general shows in Ada's sidebar", async () => {
@@ -187,7 +187,7 @@ await step("Unread: Bob's message to #general shows in Ada's sidebar", async () 
   await ada.locator("#sidebar .conv", { hasText: "general" }).locator(".badge").waitFor({ timeout: 8000 });
   await ada.screenshot({ path: `${shots}/14-unread.png` });
   await ada.locator("#sidebar .conv", { hasText: "general" }).click();
-  await ada.locator(".row.mentioned", { hasText: "are you there" }).waitFor({ timeout: 8000 });
+  await ada.locator(".msg.mentioned", { hasText: "are you there" }).waitFor({ timeout: 8000 });
   await ada.locator("#sidebar .conv.unread", { hasText: "general" }).waitFor({ state: "detached", timeout: 8000 });
 });
 await step("Account: the name opens a menu with the username, profile, and password", async () => {
