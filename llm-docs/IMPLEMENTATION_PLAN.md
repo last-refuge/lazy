@@ -530,7 +530,7 @@ Goal: iOS and Android clients on the shared core that advance with the web clien
   - [ ] Decide push payload content with privacy in mind
 - [ ] 7.4 Mobile UI
   - [ ] Navigation from conversation list to timeline to thread
-  - [ ] Touch-sized controls, safe areas, and keyboard avoidance (built and checked in phone-sized Chromium, D49; not yet on a device with a real keyboard or notch)
+  - [ ] Touch-sized controls, safe areas, and keyboard avoidance (built and checked in phone-sized Chromium, D49; the real keyboard passed on an Android emulator; not yet on a real phone, iOS, or a device with a notch)
   - [ ] Compact call surface
   - [ ] Shared design tokens with adapted layouts
 - [ ] 7.5 iOS delivery
@@ -538,7 +538,7 @@ Goal: iOS and Android clients on the shared core that advance with the web clien
   - [ ] Build, sign, and distribute test builds
   - [ ] Physical-device verification
 - [ ] 7.6 Android delivery
-  - [X] Shell built (`mobile/android`, D49; the debug APK builds and its native screens were driven on an emulator)
+  - [X] Shell built (`mobile/android`, D49; `scripts/android.sh test` passed end to end on an accelerated emulator; see VERIFICATION.md)
   - [ ] Build, sign, and distribute test builds
   - [ ] Physical-device verification
 - [ ] 7.7 Mobile drop-ins
