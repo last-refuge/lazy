@@ -454,6 +454,9 @@ mark { background: var(--highlight); color: inherit; border-radius: 3px; padding
    focused. */
 @media (hover: none) {
   html { -webkit-tap-highlight-color: transparent; }
+  /* iOS sends a tap on a plain element to the page's listener only if the element looks clickable.
+     A touchscreen shows no cursor, so this changes nothing else. */
+  #app, .lightbox { cursor: pointer; }
   button:active:not(:disabled) { background-color: var(--hover); }
   .primary:active:not(:disabled) { background-color: var(--accent-hover); }
   input, textarea { font-size: 16px; }
