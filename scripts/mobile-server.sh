@@ -21,7 +21,8 @@ LISTEN="127.0.0.1"
 
 command -v cargo >/dev/null || { echo "Rust is not installed: see https://rustup.rs" >&2; exit 1; }
 pg_bin=""
-if command -v initdb >/dev/null; then
+# Only a folder with the server itself: Homebrew's libpq, for one, has an initdb without it.
+if command -v initdb >/dev/null && [[ -x "$(dirname "$(command -v initdb)")/postgres" ]]; then
   pg_bin="$(dirname "$(command -v initdb)")"
 elif command -v brew >/dev/null && [[ -x "$(brew --prefix postgresql@16 2>/dev/null)/bin/initdb" ]]; then
   pg_bin="$(brew --prefix postgresql@16)/bin"
