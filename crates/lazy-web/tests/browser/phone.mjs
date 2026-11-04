@@ -36,13 +36,20 @@ check("--viewport-height set under the real CSP", (await p.evaluate(() => docume
 const sent = await p.locator("#rows .msg").count();
 for (let i = 1; i <= 24; i++) { await p.fill("#draft", `Message number ${i} with enough words to look like a real line of chat on a phone screen`); await p.keyboard.press("Enter"); await p.waitForFunction((n) => document.querySelectorAll("#rows .msg").length >= n, sent + i); }
 await p.locator("#rows .msg:not(.pending)").last().waitFor();
-// A phone's Send key: iOS can report Return with the code for composing, so the line break is what sends.
-const lineBreak = (extra) => p.evaluate((extra) => !document.querySelector("#draft").dispatchEvent(new InputEvent("beforeinput", { inputType: "insertLineBreak", bubbles: true, cancelable: true, ...extra })), extra);
-await p.fill("#draft", "Sent with the Send key");
-check("mid-composition a line break does not send", !(await lineBreak({ isComposing: true })) && (await p.inputValue("#draft")) === "Sent with the Send key");
-check("the keyboard's Send key takes the line break", await lineBreak({}));
-await p.locator("#rows .msg:not(.pending)", { hasText: "Sent with the Send key" }).waitFor({ timeout: 10000 });
-check("the keyboard's Send key sends and empties the box", (await p.inputValue("#draft")) === "");
+// A phone's Send key can arrive as a line break already in the box, even reported as composing.
+const lineBreak = (words, extra) => p.evaluate(([words, extra]) => {
+  const e = document.querySelector("#draft");
+  e.value = words + "\n";
+  e.dispatchEvent(new InputEvent("input", { inputType: "insertLineBreak", bubbles: true, ...extra }));
+}, [words, extra]);
+for (const [words, extra] of [["Sent with the Send key", {}], ["Sent while composing", { isComposing: true }], ["Sent as text", { inputType: "insertText", data: "\n" }]]) {
+  await lineBreak(words, extra);
+  await p.locator("#rows .msg:not(.pending)", { hasText: words }).waitFor({ timeout: 10000 });
+  check(`a line break sends and empties the box: ${words}`, (await p.inputValue("#draft")) === "");
+}
+await p.fill("#draft", "Pasted\nacross lines");
+check("a line break among other text does not send", (await p.inputValue("#draft")) === "Pasted\nacross lines");
+await p.fill("#draft", "");
 await p.evaluate(() => { const t = document.getElementById("timeline"); t.scrollTop = t.scrollHeight; });
 await p.waitForTimeout(200);
 const metrics = () => p.evaluate(() => { const t = document.getElementById("timeline"); const r = (s) => document.querySelector(s)?.getBoundingClientRect(); return { vw: innerWidth, sw: document.documentElement.scrollWidth, scrollY, bottomGap: t.scrollHeight - t.scrollTop - t.clientHeight, composerBottom: r(".composer-wrap")?.bottom, headerTop: r(".header")?.top }; });

@@ -77,7 +77,8 @@ final class ShellTests: XCTestCase {
         shot("4-keyboard")
 
         let words = "Hello from the iOS app"
-        composer.typeText(words + "\n")
+        composer.typeText(words)
+        app.keyboards.buttons["Send"].tap()
         // In the list: the words are also found in the composer when they were not sent.
         let message = app.webViews.otherElements["log"].staticTexts[words]
         XCTAssertTrue(message.waitForExistence(timeout: 30), "the keyboard's Send key sends")

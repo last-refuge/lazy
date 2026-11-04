@@ -1726,22 +1726,38 @@ impl App {
         }
     }
 
-    /// A line break about to go into a composer, which is how a phone's Send key arrives: iOS can
-    /// report Return with the code for composing, so `on_key` leaves it. `true` when it was used.
-    fn on_line_break(self: &Rc<Self>, id: &str) -> bool {
-        if id != "draft" && id != "thread-draft" {
-            return false;
-        }
+    /// A line break that reached a composer, which is how a phone's Send key can arrive: with iOS's
+    /// predictions showing it is reported as composing, so `on_key` leaves it. It comes out again,
+    /// and the words go.
+    fn on_line_break(self: &Rc<Self>, id: &str) {
+        let Some(area) = textarea(id) else { return };
+        let mut units: Vec<u16> = area.value().encode_utf16().collect();
+        let caret = area
+            .selection_start()
+            .ok()
+            .flatten()
+            .map_or(units.len(), |c| c as usize);
+        let newline = u16::from(b'\n');
+        let at = match caret.checked_sub(1) {
+            Some(before) if units.get(before) == Some(&newline) => before,
+            _ => match units.iter().rposition(|unit| *unit == newline) {
+                Some(last) => last,
+                None => return,
+            },
+        };
+        units.remove(at);
+        area.set_value(&String::from_utf16_lossy(&units));
+        let _ = area.set_selection_range(at as u32, at as u32);
+        self.typed(id);
         let suggesting = self.ui.borrow().suggest.as_ref().map(|s| s.field);
         if suggesting == Some(id) && self.suggest_key("Enter") {
-            return true;
+            return;
         }
         if id == "draft" {
             self.send_composer();
         } else {
             self.send_reply();
         }
-        true
     }
 
     /// Keys. `true` when the key was used.
@@ -2128,8 +2144,21 @@ fn listen() {
         "input",
         Box::new(|event: Event| {
             let Some(app) = app() else { return };
-            if let Some(target) = event.target().and_then(|t| t.dyn_into::<Element>().ok()) {
-                app.on_input(&target);
+            let Some(target) = event.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+                return;
+            };
+            app.on_input(&target);
+            // Shift+Enter is how a line break is asked for.
+            let asked_for = SHIFT_ENTER.replace(false);
+            let line_break = event.dyn_ref::<web_sys::InputEvent>().is_some_and(|input| {
+                matches!(
+                    input.input_type().as_str(),
+                    "insertLineBreak" | "insertParagraph"
+                ) || (input.input_type() == "insertText" && input.data().as_deref() == Some("\n"))
+            });
+            let id = target.id();
+            if line_break && !asked_for && (id == "draft" || id == "thread-draft") {
+                app.on_line_break(&id);
             }
         }),
     );
@@ -2157,33 +2186,6 @@ fn listen() {
             }
             let target = event.target().and_then(|t| t.dyn_into::<Element>().ok());
             if app.on_key(&key, target.as_ref()) {
-                event.prevent_default();
-            }
-        }),
-    );
-    on(
-        document.as_ref(),
-        "beforeinput",
-        Box::new(|event: Event| {
-            let Some(app) = app() else { return };
-            let Ok(input) = event.clone().dyn_into::<web_sys::InputEvent>() else {
-                return;
-            };
-            // Shift+Enter is how a line break is asked for.
-            let asked_for = SHIFT_ENTER.replace(false);
-            let line_break = matches!(
-                input.input_type().as_str(),
-                "insertLineBreak" | "insertParagraph"
-            );
-            if !line_break || asked_for || input.is_composing() {
-                return;
-            }
-            let id = event
-                .target()
-                .and_then(|t| t.dyn_into::<Element>().ok())
-                .map(|t| t.id())
-                .unwrap_or_default();
-            if app.on_line_break(&id) {
                 event.prevent_default();
             }
         }),
