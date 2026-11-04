@@ -1000,7 +1000,7 @@ Goal: iOS and Android clients that advance with the web client, so a feature add
 - *What the page does differently in a shell.* A picture opens over the page instead of replacing it, the account menu and sign-in offer Change server, and drop-ins say to use a computer.
 - *Links.* Pages of the app stay in the web view, the server's other addresses are downloads, and other sites open in the person's browser. A certificate that fails is never let through. Release builds accept only HTTPS.
 - *A dying page.* The page's process restarts once; if it dies again within a minute the app shows the no-connection screen, because reloading would only repeat it forever.
-- *Testing.* A web view does not run on an emulator without hardware acceleration: its process traps even on a plain page, on both Android 14 and 15. `gh workflow run mobile` therefore runs both apps on GitHub's runners.
+- *Testing.* A web view did not run on an emulator without hardware acceleration: its process traps even on a plain page, on both Android 14 and 15, for a reason not found (VERIFICATION.md). `gh workflow run mobile` therefore runs both apps on GitHub's runners, which have acceleration.
 
 **Still open.**
 - *The push relay.* A push worker has to be built (`notification::decide` already says who is notified). Apple and Google credentials belong to whoever publishes the app, and a server someone else runs cannot safely hold them, so servers send through a relay the publisher runs. The push should carry no message content, or only encrypted content, with the phone fetching the message.
