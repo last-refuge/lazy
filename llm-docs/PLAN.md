@@ -221,6 +221,8 @@ Validate iOS and Android compilation of the shared core immediately. Evaluate GP
 
 Android platform support is a feasibility gate. If a suitable GPUI backend is unavailable, maintaining one becomes a separate project that must be estimated explicitly. The shared Rust architecture reduces application duplication, but cannot remove that platform work. Replacing GPUI with another mobile UI framework would be a product decision requiring a change to the stated requirement.
 
+**Decided (D49, 2026-11-03):** the owner made that change. The phone clients are the web client in a thin native shell, so the web client and the phones advance together; GPUI stays the desktop's interface.
+
 ## Delivery milestones
 
 | Milestone | Deliverable | Exit criteria |

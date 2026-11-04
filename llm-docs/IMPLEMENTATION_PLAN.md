@@ -70,9 +70,9 @@ Goal: a compiling, CI-checked workspace that launches a native desktop window an
 - [ ] 0.8 Mobile feasibility
   - [X] Confirm the shared crates compile for iOS and Android, and keep that check in CI
   - [ ] Run a minimal GPUI screen on the iOS backend and note rendering, input, accessibility, lifecycle, and power findings
-  - [ ] Check Android backend status at the pinned revision
-  - [ ] If no suitable Android backend exists, estimate the cost of maintaining one
-  - [ ] Document the Android path and the decision it requires
+  - [X] Check Android backend status at the pinned revision (none: `gpui_ios` exists at `e5bdd01`, no `gpui_android`, and `gpui_platform` has no Android arm)
+  - [ ] If no suitable Android backend exists, estimate the cost of maintaining one (not needed while D49 stands: phones do not use GPUI)
+  - [X] Document the Android path and the decision it requires (D49)
 - [ ] 0.9 Drop-in media spike (now DROP_INS.md milestone M0: all-Rust on str0m, as a reusable library, D39)
   - [ ] Inventory the native libraries, codecs, and OS APIs needed by media adapters, with packaging and licensing notes
   - [ ] Evaluate str0m for the SFU and webrtc-rs for the client transport at candidate versions
@@ -86,7 +86,7 @@ Goal: a compiling, CI-checked workspace that launches a native desktop window an
 - [ ] 0.11 Phase gate
   - [X] Native launch on every desktop target
   - [X] Shared-core mobile builds pass in CI
-  - [ ] Android path documented
+  - [X] Android path documented (D49)
   - [ ] Two-client audio proof recorded
   - [ ] CI is green and verification outcomes are recorded
 
@@ -512,12 +512,12 @@ Goal: a signed, supportable desktop release.
 
 Source: PLAN.md "Native phone preparation".
 
-Goal: native iOS and Android clients on the shared core. Estimate the calendar after Phase 0 establishes the media and Android costs.
+Goal: iOS and Android clients on the shared core that advance with the web client: the web client in a thin native shell (D49). Estimate the calendar after Phase 0 establishes the media costs.
 
 - [ ] 7.1 Platform decisions
-  - [ ] Resolve the Android feasibility gate from Phase 0 against the current GPUI state
-  - [ ] If no suitable backend exists, estimate and approve the maintenance work as its own project
-  - [ ] Any proposal to replace GPUI goes back to the product owner as a requirement change
+  - [X] Resolve the Android feasibility gate from Phase 0 against the current GPUI state (no backend at the pinned revision; D49)
+  - [X] Any proposal to replace GPUI goes back to the product owner as a requirement change (the owner decided, D49)
+  - [ ] Who runs the push relay, and what a push carries (D49)
 - [ ] 7.2 Platform interface implementations
   - [ ] Secure credential storage
   - [ ] Notifications and push registration
@@ -530,7 +530,7 @@ Goal: native iOS and Android clients on the shared core. Estimate the calendar a
   - [ ] Decide push payload content with privacy in mind
 - [ ] 7.4 Mobile UI
   - [ ] Navigation from conversation list to timeline to thread
-  - [ ] Touch-sized controls, safe areas, and keyboard avoidance
+  - [ ] Touch-sized controls, safe areas, and keyboard avoidance (built and checked in phone-sized Chromium, D49; not yet on a device with a real keyboard or notch)
   - [ ] Compact call surface
   - [ ] Shared design tokens with adapted layouts
 - [ ] 7.5 iOS delivery
@@ -574,7 +574,7 @@ Resolve each by the task that needs it and record the answer in `llm-docs/`.
 | Decision | Needed by |
 | --- | --- |
 | Desktop OS targets and minimum versions | 0.2 |
-| Android path (use, maintain, or revisit a backend) | 0.8, 7.1 |
+| Android path (decided, D49: the web client in a shell, no GPUI on phones) | 0.8, 7.1 |
 | Media stack: str0m, webrtc-rs, and TURN implementation | 0.9, 5.4 |
 | Reference hardware, network conditions, and region | 0.10 |
 | Sign-in method | 1.1 |
