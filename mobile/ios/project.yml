@@ -1,0 +1,42 @@
+# The Xcode project is generated from this file: `brew install xcodegen && xcodegen generate`.
+name: Lazy
+options:
+  bundleIdPrefix: io.github.last-refuge
+  deploymentTarget:
+    iOS: "16.4"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Lazy:
+    type: application
+    platform: iOS
+    sources: [Lazy]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.last-refuge.lazy
+        PRODUCT_NAME: Lazy
+        INFOPLIST_FILE: Lazy/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+  LazyUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [LazyUITests]
+    dependencies:
+      - target: Lazy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.last-refuge.lazy.uitests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Lazy:
+    build:
+      targets:
+        Lazy: all
+        LazyUITests: [test]
+    test:
+      targets: [LazyUITests]

@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>A native, Slack-familiar workplace chat app, written in Rust.</strong><br>
-  A desktop client, a server you run yourself, and a shared core for future phone apps.
+  A desktop client, a web client, phone apps built on it (`mobile/`), and a server you run yourself.
 </p>
 
 <p align="center">

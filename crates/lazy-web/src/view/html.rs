@@ -118,3 +118,17 @@ mod tests {
         assert!(tint("x") < 8);
     }
 }
+
+thread_local! {
+    static IN_SHELL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the page runs in a phone app's shell (D49), which says so in its user agent.
+pub(crate) fn in_shell() -> bool {
+    IN_SHELL.with(std::cell::Cell::get)
+}
+
+/// Set once, when the page starts.
+pub(crate) fn set_in_shell(shell: bool) {
+    IN_SHELL.with(|cell| cell.set(shell));
+}
